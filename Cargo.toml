@@ -16,6 +16,11 @@ publish = false
 [profile.dev.package.argon2]
 opt-level = 3
 
+# Full debug info for our crates only: with the dependencies' too, each
+# binary weighed ~450 MB and linking it took most of a rebuild.
+[profile.dev.package."*"]
+debug = false
+
 [patch.crates-io]
 # saturating-time 0.5.0 (pulled in by tor-netdoc) never returns on Windows: it
 # halves a step down to 1 ns while Windows counts in 100 ns, so the last steps
