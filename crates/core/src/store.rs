@@ -28,6 +28,9 @@ use crate::dbkey::Unlock;
 
 type Result<T> = std::result::Result<T, SignalProtocolError>;
 
+/// The database layout this build reads and writes.
+const SCHEMA: u32 = 1;
+
 pub struct Store {
     db: Connection,
 }
@@ -60,13 +63,36 @@ impl Store {
         db.execute_batch("PRAGMA cipher_log_level = NONE")?;
         db.execute_batch(&pragma)?;
         // The first statement that reads the file is where a wrong key shows.
+        // The schema version is checked before anything else is read: a
+        // newer Nightpost's database is left alone, not half understood.
+        let version: u32 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS kv (
                 kind TEXT NOT NULL,
                 key TEXT NOT NULL,
                 value BLOB NOT NULL,
                 PRIMARY KEY (kind, key)
-            ) WITHOUT ROWID;",
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS messages (
+                account BLOB NOT NULL,
+                id BLOB NOT NULL,
+                outgoing INTEGER NOT NULL,
+                time INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                delivered INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (account, id)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS outbox (
+                account BLOB NOT NULL,
+                device INTEGER NOT NULL,
+                id BLOB NOT NULL,
+                envelope BLOB NOT NULL,
+                UNIQUE (account, device, id)
+            );
+            PRAGMA user_version = 1;",
         )?;
 
         let store = Store { db };
@@ -99,7 +125,7 @@ impl Store {
         Ok(u32::from_le_bytes(bytes))
     }
 
-    fn get(&self, kind: &str, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    pub(crate) fn get(&self, kind: &str, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
         self.db
             .query_row(
                 "SELECT value FROM kv WHERE kind = ?1 AND key = ?2",
@@ -109,7 +135,7 @@ impl Store {
             .optional()
     }
 
-    fn put(&self, kind: &str, key: &str, value: &[u8]) -> rusqlite::Result<()> {
+    pub(crate) fn put(&self, kind: &str, key: &str, value: &[u8]) -> rusqlite::Result<()> {
         self.db.execute(
             "INSERT OR REPLACE INTO kv (kind, key, value) VALUES (?1, ?2, ?3)",
             params![kind, key, value],
@@ -117,12 +143,81 @@ impl Store {
         Ok(())
     }
 
-    fn remove(&self, kind: &str, key: &str) -> rusqlite::Result<()> {
+    pub(crate) fn remove(&self, kind: &str, key: &str) -> rusqlite::Result<()> {
         self.db.execute(
             "DELETE FROM kv WHERE kind = ?1 AND key = ?2",
             params![kind, key],
         )?;
         Ok(())
+    }
+
+    pub(crate) fn list(&self, kind: &str) -> rusqlite::Result<Vec<(String, Vec<u8>)>> {
+        let mut stmt = self.db.prepare("SELECT key, value FROM kv WHERE kind = ?1")?;
+        stmt.query_map(params![kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    }
+
+    /// Runs `f` in one transaction: all of its writes or none.
+    pub(crate) fn atomically<R>(&self, f: impl FnOnce() -> rusqlite::Result<R>) -> rusqlite::Result<R> {
+        let tx = self.db.unchecked_transaction()?;
+        let result = f()?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Records a message; false if this id is already there from `account`,
+    /// which is how a message sent twice shows up once.
+    pub(crate) fn add_message(&self, account: &[u8], id: &[u8; 16], outgoing: bool, time: u64, text: &str) -> rusqlite::Result<bool> {
+        let added = self.db.execute(
+            "INSERT OR IGNORE INTO messages (account, id, outgoing, time, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![account, id, outgoing, time as i64, text],
+        )?;
+        Ok(added == 1)
+    }
+
+    pub(crate) fn queue(&self, account: &[u8], device: u8, id: &[u8; 16], envelope: &[u8]) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT OR IGNORE INTO outbox (account, device, id, envelope) VALUES (?1, ?2, ?3, ?4)",
+            params![account, device, id, envelope],
+        )?;
+        Ok(())
+    }
+
+    /// What still waits for `account`'s `device`, oldest first.
+    pub(crate) fn queued(&self, account: &[u8], device: u8) -> rusqlite::Result<Vec<([u8; 16], Vec<u8>)>> {
+        let mut stmt = self.db.prepare(
+            "SELECT id, envelope FROM outbox WHERE account = ?1 AND device = ?2 ORDER BY rowid",
+        )?;
+        stmt.query_map(params![account, device], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    }
+
+    /// Every (account, device) something waits for.
+    pub(crate) fn queued_for(&self) -> rusqlite::Result<Vec<(Vec<u8>, u8)>> {
+        let mut stmt = self.db.prepare("SELECT DISTINCT account, device FROM outbox")?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
+    }
+
+    /// `device` acknowledged `id`. True if that was the last device waiting
+    /// for it, so the message is delivered.
+    pub(crate) fn acked(&self, account: &[u8], device: u8, id: &[u8; 16]) -> rusqlite::Result<bool> {
+        let removed = self.db.execute(
+            "DELETE FROM outbox WHERE account = ?1 AND device = ?2 AND id = ?3",
+            params![account, device, id],
+        )?;
+        let left: u32 = self.db.query_row(
+            "SELECT COUNT(*) FROM outbox WHERE account = ?1 AND id = ?2",
+            params![account, id],
+            |row| row.get(0),
+        )?;
+        if removed == 1 && left == 0 {
+            self.db.execute(
+                "UPDATE messages SET delivered = 1 WHERE account = ?1 AND id = ?2",
+                params![account, id],
+            )?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Reads a record that must be there: libsignal asks for a prekey by the id

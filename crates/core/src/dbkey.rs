@@ -69,6 +69,10 @@ fn stretch(passphrase: &[u8], salt: &[u8; 16]) -> Secret {
 /// An error means there is no usable keychain (no Secret Service on a headless
 /// Linux, for one): the caller then needs a passphrase.
 pub fn keychain_secret(label: &str) -> keyring::Result<Secret> {
+    // The real reason, rather than the "no default store" it turns into.
+    if let Err(e) = keyring::Entry::store_status() {
+        return Err(keyring::Error::Invalid("keychain".into(), e.to_string()));
+    }
     let entry = keyring::Entry::new("nightpost", label)?;
     match entry.get_secret() {
         Ok(bytes) => {

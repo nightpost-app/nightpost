@@ -15,7 +15,7 @@ use tor_config::ExplicitOrAuto;
 use tor_hscrypto::pk::{HsClientDescEncKey, HsClientDescEncSecretKey, HsId, HsIdKeypair};
 use tor_hsservice::config::OnionServiceConfigBuilder;
 use tor_hsservice::config::restricted_discovery::HsClientNickname;
-use tor_hsservice::{HsNickname, OnionServiceConfig, RunningOnionService, StreamRequest, handle_rend_requests};
+use tor_hsservice::{HsNickname, OnionServiceConfig, RunningOnionService, handle_rend_requests};
 use tor_keymgr::config::ArtiKeystoreKind;
 use tor_llcrypto::pk::{curve25519, ed25519};
 use tor_rtcompat::PreferredRuntime;
@@ -34,7 +34,6 @@ pub struct TorService {
     service: Arc<RunningOnionService>,
     nickname: HsNickname,
     onion: Onion,
-    incoming: Pin<Box<dyn Stream<Item = StreamRequest> + Send>>,
 }
 
 impl TorTransport {
@@ -83,8 +82,9 @@ impl TorTransport {
 impl super::Transport for TorTransport {
     type Stream = DataStream;
     type Service = TorService;
+    type Incoming = Pin<Box<dyn Stream<Item = DataStream> + Send>>;
 
-    async fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> Result<TorService> {
+    async fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> Result<(TorService, Self::Incoming)> {
         let onion = onion(seed);
         let nickname: HsNickname = slug(&onion)
             .try_into()
@@ -105,7 +105,18 @@ impl super::Transport for TorTransport {
         if service.onion_address().map(<[u8; 32]>::from) != Some(onion) {
             return Err(TransportError("arti published a different address than our key".into()));
         }
-        Ok(TorService { service, nickname, onion, incoming: Box::pin(handle_rend_requests(requests)) })
+        // A stream that fails to open is skipped: one bad rendezvous must not
+        // take the service down.
+        let incoming = handle_rend_requests(requests).filter_map(|request| async move {
+            match request.accept(Connected::new_empty()).await {
+                Ok(stream) => Some(stream),
+                Err(e) => {
+                    tracing::warn!("accepting an incoming stream failed: {e}");
+                    None
+                }
+            }
+        });
+        Ok((TorService { service, nickname, onion }, Box::pin(incoming)))
     }
 
     fn present(&self, onion: Onion, secret: &Secret) -> Result<()> {
@@ -130,8 +141,6 @@ impl super::Transport for TorTransport {
 }
 
 impl super::Service for TorService {
-    type Stream = DataStream;
-
     fn onion(&self) -> Onion {
         self.onion
     }
@@ -140,18 +149,6 @@ impl super::Service for TorService {
         self.service
             .reconfigure(service_config(&self.nickname, authorized)?, Reconfigure::AllOrNothing)
             .map_err(|e| TransportError(format!("updating the authorized keys: {e}")))
-    }
-
-    /// A stream that fails to open is skipped: one bad rendezvous must not
-    /// take the service down.
-    async fn accept(&mut self) -> Option<DataStream> {
-        while let Some(request) = self.incoming.next().await {
-            match request.accept(Connected::new_empty()).await {
-                Ok(stream) => return Some(stream),
-                Err(e) => tracing::warn!("accepting an incoming stream failed: {e}"),
-            }
-        }
-        None
     }
 }
 
@@ -263,13 +260,13 @@ mod tests {
         let (bob, carol) = (boot("bob").await, boot("carol").await);
 
         let (alice_seed, bob_key, carol_key) = (Secret::new([1; 32]), Secret::new([2; 32]), Secret::new([3; 32]));
-        let mut service = alice.serve(&alice_seed, &[discovery_key(&bob_key)]).await.unwrap();
+        let (service, mut incoming) = alice.serve(&alice_seed, &[discovery_key(&bob_key)]).await.unwrap();
         let address = service.onion();
         bob.present(address, &bob_key).unwrap();
         carol.present(address, &carol_key).unwrap();
 
         let server = tokio::spawn(async move {
-            let mut stream = service.accept().await.unwrap();
+            let mut stream = incoming.next().await.unwrap();
             let mut buf = [0; 5];
             stream.read_exact(&mut buf).await.unwrap();
             stream.write_all(b"world").await.unwrap();

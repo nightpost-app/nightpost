@@ -1,0 +1,707 @@
+//! The daemon owns the database and the transport. It keeps the onion
+//! service up for exactly the keys that may discover it, delivers the
+//! outbox, and tells the interfaces what happens.
+//!
+//! Everything runs on one thread (a tokio `LocalSet`): the database has a
+//! single writer by construction, and libsignal's futures, which are not
+//! `Send`, can be awaited anywhere.
+//!
+//! Each received message is handled on its own: one that does not decrypt
+//! or parse is logged, acknowledged and dropped, and the link goes on.
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context as _, Result, bail, ensure};
+use futures::StreamExt as _;
+use libsignal_protocol::{
+    CiphertextMessage, CiphertextMessageType, DeviceId, IdentityKey, IdentityKeyPair, KeyPair, PreKeySignalMessage,
+    PrivateKey, ProtocolAddress, SignalMessage,
+};
+use rand::{Rng as _, TryRngCore, rngs::OsRng};
+use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt as _;
+use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
+use tokio::task::spawn_local;
+use tokio::time::{sleep, timeout};
+
+use crate::api::{ContactInfo, Event, hex};
+use crate::dbkey::Secret;
+use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
+use crate::invite::Invite;
+use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_TEXT, Me, Peer, Proof, Service};
+use crate::session::{self, WireBundle};
+use crate::store::Store;
+use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_key, onion};
+
+/// v1 has one device per account.
+const DEVICE: u8 = 1;
+/// A handshake step that takes longer than this is abandoned.
+const STEP: Duration = Duration::from_secs(60);
+/// A link with nothing to say for this long is closed.
+const IDLE: Duration = Duration::from_secs(60);
+/// How long accepting an invitation keeps trying: a new descriptor can take
+/// minutes to reach the directories.
+const ACCEPT_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(300) };
+const MAX_NAME: usize = 32;
+/// First wait after a failed dial; it doubles up to 10 minutes.
+const RETRY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(10) };
+
+pub struct Daemon<T: Transport> {
+    store: Store,
+    net: T,
+    identity: IdentityKeyPair,
+    own: Own,
+    /// `own.key`, parsed.
+    signing: PrivateKey,
+    events: broadcast::Sender<Event>,
+    service: RefCell<Option<T::Service>>,
+    /// Held while the service is started, stopped or re-authorized.
+    refreshing: Mutex<()>,
+    /// Devices a link is open (or being opened) to, with a way to wake it
+    /// when something new is queued for them.
+    links: RefCell<HashMap<Target, Option<mpsc::UnboundedSender<()>>>>,
+    /// Failed attempts in a row, and when to try again.
+    backoff: RefCell<HashMap<Target, (u32, Instant)>>,
+    wake: Notify,
+    stopping: watch::Sender<bool>,
+}
+
+type Target = (Vec<u8>, u8);
+
+/// This device's own keys, created with the database.
+#[derive(Serialize, Deserialize)]
+struct Own {
+    /// Signs link handshakes; listed in the device list.
+    key: Vec<u8>,
+    /// The onion service's key.
+    seed: [u8; 32],
+    /// The account's discovery key: contacts authorize its public half.
+    discovery: [u8; 32],
+    devices: SignedDeviceList,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Contact {
+    name: String,
+    identity: Vec<u8>,
+    devices: SignedDeviceList,
+    discovery: DiscoveryKey,
+}
+
+/// An invitation not used yet.
+#[derive(Serialize, Deserialize)]
+struct Pending {
+    name: String,
+    throwaway: [u8; 32],
+    expires: u64,
+}
+
+impl<T: Transport + 'static> Daemon<T> {
+    pub fn open(store: Store, net: T) -> Result<Rc<Self>> {
+        let identity = store.identity()?;
+        let own = match store.get("self", "own")? {
+            Some(bytes) => postcard::from_bytes(&bytes)?,
+            None => {
+                let mut rng = OsRng.unwrap_err();
+                let key = KeyPair::generate(&mut rng);
+                let seed: [u8; 32] = rng.random();
+                let list = DeviceList::first(vec![Device {
+                    id: DEVICE,
+                    onion: onion(&Secret::new(seed)),
+                    key: key.public_key.serialize().into_vec(),
+                    role: Role::Normal,
+                }]);
+                let own = Own {
+                    key: key.private_key.serialize().to_vec(),
+                    seed,
+                    discovery: rng.random(),
+                    devices: SignedDeviceList::sign(&list, &identity).map_err(|e| anyhow::anyhow!("{e:?}"))?,
+                };
+                store.put("self", "own", &postcard::to_stdvec(&own)?)?;
+                own
+            }
+        };
+        let signing = PrivateKey::deserialize(&own.key)?;
+        Ok(Rc::new(Daemon {
+            store,
+            net,
+            identity,
+            own,
+            signing,
+            events: broadcast::channel(256).0,
+            service: RefCell::default(),
+            refreshing: Mutex::default(),
+            links: RefCell::default(),
+            backoff: RefCell::default(),
+            wake: Notify::new(),
+            stopping: watch::channel(false).0,
+        }))
+    }
+
+    /// Brings the service up for the current contacts and starts delivering.
+    /// Must run inside a `LocalSet`.
+    pub async fn start(self: &Rc<Self>) -> Result<()> {
+        for contact in self.contacts_raw()? {
+            self.present_to(&contact)?;
+        }
+        self.refresh_service().await?;
+        spawn_local(self.clone().deliver());
+        Ok(())
+    }
+
+    /// Takes the service down, closes every link, and returns once nothing
+    /// else holds the daemon: dropping it then closes the database.
+    pub async fn stop(self: &Rc<Self>) {
+        self.stopping.send_replace(true);
+        self.service.borrow_mut().take();
+        while Rc::strong_count(self) > 1 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn stopped(&self) {
+        let _ = self.stopping.subscribe().wait_for(|stop| *stop).await;
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
+    }
+
+    /// A one-time link for someone who will be known here as `name`.
+    pub async fn invite(self: &Rc<Self>, name: &str) -> Result<String> {
+        self.check_name(name)?;
+        let throwaway: [u8; 32] = OsRng.unwrap_err().random();
+        let (invite, link) =
+            Invite::create(&self.identity, onion(&self.seed()), throwaway, now_secs());
+        let pending = Pending { name: name.into(), throwaway, expires: invite.expires };
+        self.store.put("invite", &hex(&invite.token), &postcard::to_stdvec(&pending)?)?;
+        self.refresh_service().await?;
+        Ok(link)
+    }
+
+    /// Uses `link` to become the inviter's contact, known here as `name`.
+    pub async fn accept(self: &Rc<Self>, link: &str, name: &str) -> Result<()> {
+        self.check_name(name)?;
+        let invite = Invite::parse(link, now_secs()).map_err(|e| anyhow::anyhow!("invitation: {e:?}"))?;
+        ensure!(self.contact(&invite.identity.serialize())?.is_none(), "already a contact");
+        self.net.present(invite.onion, &Secret::new(invite.discovery))?;
+
+        let started = Instant::now();
+        let mut stream = loop {
+            match timeout(STEP * 2, self.net.dial(invite.onion)).await {
+                Ok(Ok(stream)) => break stream,
+                Ok(Err(e)) if started.elapsed() < ACCEPT_DEADLINE => tracing::info!("inviter not reachable yet: {e}"),
+                Err(_) if started.elapsed() < ACCEPT_DEADLINE => tracing::info!("inviter not reachable yet: timeout"),
+                Ok(Err(e)) => bail!("the inviter stayed unreachable: {e}"),
+                Err(_) => bail!("the inviter stayed unreachable"),
+            }
+            sleep(RETRY).await;
+        };
+
+        let me = self.me();
+        let caller = Caller::new(&me, invite.onion, Some(invite.token));
+        proto::send(&mut stream, caller.hello()).await?;
+        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let (proof, peer) = caller.on_challenge(&me, &challenge, &invite.identity, None).map_err(handshake)?;
+        proto::send(&mut stream, &proof).await?;
+        let contact = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
+        self.refresh_service().await?;
+        spawn_local(self.clone().link(stream, contact, peer.device));
+        Ok(())
+    }
+
+    /// Queues `text` for every device of `to`; returns the message id.
+    pub fn send(&self, to: &str, text: &str) -> Result<[u8; 16]> {
+        ensure!(!text.is_empty() && text.len() <= MAX_TEXT, "a message is 1 to {MAX_TEXT} bytes");
+        let contact = self.contacts_raw()?.into_iter().find(|c| c.name == to).context("no such contact")?;
+        let devices = self.devices_of(&contact)?;
+        let id: [u8; 16] = OsRng.unwrap_err().random();
+        let time = now_millis();
+        let envelope = postcard::to_stdvec(&Envelope { id, time, body: Body::Text(text.into()) })?;
+        self.store.atomically(|| {
+            self.store.add_message(&contact.identity, &id, true, time, text)?;
+            for device in devices.devices.iter().filter(|d| d.role == Role::Normal) {
+                self.store.queue(&contact.identity, device.id, &id, &envelope)?;
+            }
+            Ok(())
+        })?;
+        for device in &devices.devices {
+            if let Some(Some(link)) = self.links.borrow().get(&(contact.identity.clone(), device.id)) {
+                let _ = link.send(());
+            }
+        }
+        self.wake.notify_one();
+        Ok(id)
+    }
+
+    pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
+        self.contacts_raw()?
+            .into_iter()
+            .map(|c| {
+                let theirs = IdentityKey::decode(&c.identity)?;
+                let number = safety_number(self.identity.identity_key(), &theirs).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                Ok(ContactInfo { name: c.name, safety_number: number })
+            })
+            .collect()
+    }
+
+    // --- the service -------------------------------------------------------
+
+    /// Authorizes exactly the contacts and the pending invitations, starting
+    /// or stopping the service as that list becomes non-empty or empty.
+    async fn refresh_service(self: &Rc<Self>) -> Result<()> {
+        let _guard = self.refreshing.lock().await;
+        let mut keys = Vec::new();
+        for (token, bytes) in self.store.list("invite")? {
+            let pending: Pending = postcard::from_bytes(&bytes)?;
+            if pending.expires <= now_secs() {
+                self.store.remove("invite", &token)?;
+            } else {
+                keys.push(discovery_key(&Secret::new(pending.throwaway)));
+            }
+        }
+        keys.extend(self.contacts_raw()?.iter().map(|c| c.discovery));
+
+        if keys.is_empty() {
+            self.service.borrow_mut().take();
+            return Ok(());
+        }
+        if let Some(service) = self.service.borrow().as_ref() {
+            return Ok(service.authorize(&keys)?);
+        }
+        let (service, incoming) = self.net.serve(&self.seed(), &keys).await?;
+        *self.service.borrow_mut() = Some(service);
+        let daemon = self.clone();
+        spawn_local(async move {
+            let mut incoming = incoming;
+            loop {
+                tokio::select! {
+                    Some(stream) = incoming.next() => { spawn_local(daemon.clone().answer(stream)); }
+                    _ = daemon.stopped() => break,
+                    else => break,
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn answer(self: Rc<Self>, stream: T::Stream) {
+        if let Err(e) = self.try_answer(stream).await {
+            tracing::info!("incoming link refused: {e:#}");
+        }
+    }
+
+    async fn try_answer(self: &Rc<Self>, mut stream: T::Stream) -> Result<()> {
+        let me = self.me();
+        let hello: Hello = timeout(STEP, proto::receive(&mut stream)).await??;
+        let (service, challenge) = Service::on_hello(&me, onion(&self.seed()), hello).map_err(handshake)?;
+        let contact = self.contact(&service.hello().account)?;
+        let token = match (&contact, service.hello().token) {
+            (Some(_), _) => None,
+            (None, Some(token)) => Some(token),
+            (None, None) => bail!("not a contact"),
+        };
+        proto::send(&mut stream, &challenge).await?;
+        let proof: Proof = timeout(STEP, proto::receive(&mut stream)).await??;
+        let peer = service.on_proof(&proof, contact.as_ref().map(|c| &c.devices)).map_err(handshake)?;
+
+        let contact = match (contact, token) {
+            (Some(mut contact), _) => {
+                self.update_devices(&mut contact, &service.hello().devices)?;
+                contact
+            }
+            (None, Some(token)) => {
+                // One use, even if what follows fails: whoever got here holds
+                // the link, and it is spent.
+                let key = hex(&token);
+                let pending: Pending = postcard::from_bytes(
+                    &self.store.get("invite", &key)?.context("unknown or used invitation")?,
+                )?;
+                self.store.remove("invite", &key)?;
+                ensure!(pending.expires > now_secs(), "expired invitation");
+                let contact = self.exchange_cards(&mut stream, &peer, &service.hello().devices, &pending.name).await?;
+                self.refresh_service().await?;
+                contact
+            }
+            (None, None) => unreachable!(),
+        };
+        self.clone().link(stream, contact, peer.device).await;
+        Ok(())
+    }
+
+    /// Both sides of an invitation: send our card, read theirs, start a
+    /// session from their bundle, and record them.
+    async fn exchange_cards(
+        self: &Rc<Self>,
+        stream: &mut T::Stream,
+        peer: &Peer,
+        devices: &SignedDeviceList,
+        name: &str,
+    ) -> Result<Contact> {
+        self.check_name(name)?;
+        let bundle = WireBundle::new(&session::bundle(&self.store, device_id(DEVICE)?).await?)?;
+        proto::send(stream, &Frame::Card { discovery: discovery_key(&self.discovery()), bundle }).await?;
+        let Frame::Card { discovery, bundle } = timeout(STEP, proto::receive(stream)).await?? else {
+            bail!("expected a contact card");
+        };
+        let bundle = bundle.bundle()?;
+        // A bundle for any other identity than the one just authenticated
+        // would start a session with someone else.
+        ensure!(*bundle.identity_key()? == peer.account, "the bundle is not from the identity that signed in");
+        ensure!(u8::from(bundle.device_id()?) == peer.device, "the bundle is for another device");
+
+        let contact = Contact { name: name.into(), identity: peer.account.serialize().into_vec(), devices: devices.clone(), discovery };
+        session::start(&self.store, &self.address(), &address(&contact.identity, peer.device)?, &bundle).await?;
+        self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(&contact)?)?;
+        self.present_to(&contact)?;
+        let _ = self.events.send(Event::ContactAdded { name: contact.name.clone() });
+        Ok(contact)
+    }
+
+    // --- delivery ----------------------------------------------------------
+
+    /// Opens a link to every device something is queued for, backing off
+    /// after failures.
+    async fn deliver(self: Rc<Self>) {
+        loop {
+            match self.store.queued_for() {
+                Ok(targets) => {
+                    for target in targets {
+                        let due = self.backoff.borrow().get(&target).is_none_or(|(_, at)| *at <= Instant::now());
+                        if due && !self.links.borrow().contains_key(&target) {
+                            self.links.borrow_mut().insert(target.clone(), None);
+                            spawn_local(self.clone().dial(target));
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("reading the outbox: {e}"),
+            }
+            tokio::select! {
+                _ = self.wake.notified() => {}
+                _ = sleep(Duration::from_secs(5)) => {}
+                _ = self.stopped() => return,
+            }
+        }
+    }
+
+    async fn dial(self: Rc<Self>, target: Target) {
+        match self.try_dial(&target).await {
+            Ok((stream, contact)) => {
+                self.backoff.borrow_mut().remove(&target);
+                self.clone().link(stream, contact, target.1).await;
+            }
+            Err(e) => {
+                tracing::info!("no link to a contact: {e:#}");
+                self.links.borrow_mut().remove(&target);
+                let mut backoff = self.backoff.borrow_mut();
+                let failures = backoff.get(&target).map_or(0, |(n, _)| *n) + 1;
+                let wait = (RETRY * (1 << failures.min(6))).min(Duration::from_secs(600));
+                backoff.insert(target, (failures, Instant::now() + wait));
+            }
+        }
+    }
+
+    async fn try_dial(self: &Rc<Self>, (account, device): &Target) -> Result<(T::Stream, Contact)> {
+        let mut contact = self.contact(account)?.context("no longer a contact")?;
+        let to: Onion = self.devices_of(&contact)?.device(*device).context("device no longer listed")?.onion;
+        let mut stream = timeout(STEP * 2, self.net.dial(to)).await.context("dial timed out")??;
+        let me = self.me();
+        let caller = Caller::new(&me, to, None);
+        proto::send(&mut stream, caller.hello()).await?;
+        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let expected = IdentityKey::decode(account)?;
+        let (proof, _) = caller.on_challenge(&me, &challenge, &expected, Some(&contact.devices)).map_err(handshake)?;
+        proto::send(&mut stream, &proof).await?;
+        self.update_devices(&mut contact, &challenge.devices)?;
+        Ok((stream, contact))
+    }
+
+    /// Runs an authenticated link: sends what is queued for that device,
+    /// stores and acknowledges what comes in, until it goes quiet or breaks.
+    async fn link(self: Rc<Self>, stream: T::Stream, contact: Contact, device: u8) {
+        let target = (contact.identity.clone(), device);
+        let (wake, mut woken) = mpsc::unbounded_channel();
+        self.links.borrow_mut().insert(target.clone(), Some(wake));
+        if let Err(e) = self.run_link(stream, &contact, device, &mut woken).await {
+            tracing::info!("link to {} closed: {e:#}", contact.name);
+        }
+        self.links.borrow_mut().remove(&target);
+        // Whatever was in flight goes again on the next link.
+        self.wake.notify_one();
+    }
+
+    async fn run_link(
+        &self,
+        stream: T::Stream,
+        contact: &Contact,
+        device: u8,
+        woken: &mut mpsc::UnboundedReceiver<()>,
+    ) -> Result<()> {
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        let (frames_in, mut frames) = mpsc::unbounded_channel();
+        // Reading a frame is not cancel-safe, so it gets its own task and the
+        // loop below only ever waits on channels.
+        let reading = spawn_local(async move {
+            while let Ok(frame) = proto::receive::<Frame>(&mut reader).await {
+                if frames_in.send(frame).is_err() {
+                    break;
+                }
+            }
+        });
+        let result = async {
+            let (me, them) = (self.address(), address(&contact.identity, device)?);
+            let mut in_flight = HashSet::new();
+            loop {
+                for (id, envelope) in self.store.queued(&contact.identity, device)? {
+                    if in_flight.insert(id) {
+                        let message = session::encrypt(&self.store, &me, &them, &envelope).await?;
+                        let frame = Frame::Message { id, kind: message.message_type() as u8, body: message.serialize().to_vec() };
+                        proto::send(&mut writer, &frame).await?;
+                    }
+                }
+                tokio::select! {
+                    frame = frames.recv() => match frame {
+                        None => return Ok(()),
+                        Some(Frame::Message { id, kind, body }) => {
+                            match self.receive(contact, &them, id, kind, &body).await {
+                                Ok(Some(event)) => { let _ = self.events.send(event); }
+                                Ok(None) => {}
+                                Err(e) => tracing::warn!("dropped a message from {}: {e:#}", contact.name),
+                            }
+                            proto::send(&mut writer, &Frame::Ack { id }).await?;
+                        }
+                        Some(Frame::Ack { id }) => {
+                            in_flight.remove(&id);
+                            if self.store.acked(&contact.identity, device, &id)? {
+                                let _ = self.events.send(Event::Delivered { to: contact.name.clone(), id: hex(&id) });
+                            }
+                        }
+                        Some(Frame::Card { .. }) => bail!("a contact card outside an invitation"),
+                    },
+                    Some(()) = woken.recv() => {}
+                    _ = sleep(IDLE) => return Ok(()),
+                    _ = self.stopped() => return Ok(()),
+                }
+            }
+        }
+        .await;
+        reading.abort();
+        let _ = writer.shutdown().await;
+        result
+    }
+
+    /// Decrypts and stores one message. `None` for one already received.
+    async fn receive(&self, contact: &Contact, them: &ProtocolAddress, id: [u8; 16], kind: u8, body: &[u8]) -> Result<Option<Event>> {
+        let message = if kind == CiphertextMessageType::PreKey as u8 {
+            CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::try_from(body)?)
+        } else if kind == CiphertextMessageType::Whisper as u8 {
+            CiphertextMessage::SignalMessage(SignalMessage::try_from(body)?)
+        } else {
+            bail!("unknown message kind {kind}");
+        };
+        let plain = session::decrypt(&self.store, &self.address(), them, &message).await?;
+        let envelope: Envelope = postcard::from_bytes(&plain)?;
+        ensure!(envelope.id == id, "the envelope id does not match the frame");
+        let Body::Text(text) = envelope.body;
+        ensure!(text.len() <= MAX_TEXT, "message too long");
+        // The sender's clock, unless it claims a time more than a day ahead.
+        let now = now_millis();
+        let time = if envelope.time > now + 86_400_000 { now } else { envelope.time };
+        if !self.store.add_message(&contact.identity, &id, false, time, &text)? {
+            return Ok(None);
+        }
+        Ok(Some(Event::Message { from: contact.name.clone(), id: hex(&id), time, text }))
+    }
+
+    // --- helpers -----------------------------------------------------------
+
+    fn me(&self) -> Me<'_> {
+        Me { account: self.identity.identity_key(), device: DEVICE, key: &self.signing, devices: &self.own.devices }
+    }
+
+    fn seed(&self) -> Secret {
+        Secret::new(self.own.seed)
+    }
+
+    fn discovery(&self) -> Secret {
+        Secret::new(self.own.discovery)
+    }
+
+    fn address(&self) -> ProtocolAddress {
+        address(&self.identity.identity_key().serialize(), DEVICE).expect("valid own address")
+    }
+
+    fn contact(&self, account: &[u8]) -> Result<Option<Contact>> {
+        Ok(match self.store.get("contact", &hex(account))? {
+            Some(bytes) => Some(postcard::from_bytes(&bytes)?),
+            None => None,
+        })
+    }
+
+    fn contacts_raw(&self) -> Result<Vec<Contact>> {
+        self.store.list("contact")?.into_iter().map(|(_, bytes)| Ok(postcard::from_bytes(&bytes)?)).collect()
+    }
+
+    fn devices_of(&self, contact: &Contact) -> Result<DeviceList> {
+        contact.devices.verify(&IdentityKey::decode(&contact.identity)?, None).map_err(|e| anyhow::anyhow!("{e:?}"))
+    }
+
+    /// Records a newer device list the contact presented, already verified
+    /// as the successor of the one we had by the handshake.
+    fn update_devices(&self, contact: &mut Contact, devices: &SignedDeviceList) -> Result<()> {
+        if contact.devices != *devices {
+            contact.devices = devices.clone();
+            self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(&*contact)?)?;
+            self.present_to(contact)?;
+        }
+        Ok(())
+    }
+
+    /// Files our discovery key for each of the contact's devices.
+    fn present_to(&self, contact: &Contact) -> Result<()> {
+        for device in self.devices_of(contact)?.devices {
+            self.net.present(device.onion, &self.discovery())?;
+        }
+        Ok(())
+    }
+
+    fn check_name(&self, name: &str) -> Result<()> {
+        ensure!(
+            !name.trim().is_empty() && name.chars().count() <= MAX_NAME && !name.chars().any(char::is_control),
+            "a name is 1 to {MAX_NAME} characters, without control characters"
+        );
+        ensure!(self.contacts_raw()?.iter().all(|c| c.name != name), "{name} is already a contact");
+        Ok(())
+    }
+}
+
+fn address(account: &[u8], device: u8) -> Result<ProtocolAddress> {
+    Ok(ProtocolAddress::new(hex(account), device_id(device)?))
+}
+
+fn device_id(id: u8) -> Result<DeviceId> {
+    DeviceId::try_from(id).map_err(|_| anyhow::anyhow!("device id {id}"))
+}
+
+fn handshake(e: proto::HandshakeError) -> anyhow::Error {
+    anyhow::anyhow!("handshake: {e:?}")
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).expect("clock after 1970").as_secs()
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).expect("clock after 1970").as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dbkey::Unlock;
+    use crate::transport::memory::{MemoryTransport, Network};
+    use std::path::Path;
+    use tokio::task::LocalSet;
+
+    fn open(dir: &Path, name: &str, net: &Network) -> Rc<Daemon<MemoryTransport>> {
+        let secret = Secret::new([name.len() as u8; 32]);
+        let store = Store::open(&dir.join(name), &Unlock::new(Some(secret), None).unwrap()).unwrap();
+        Daemon::open(store, net.node()).unwrap()
+    }
+
+    async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
+        timeout(Duration::from_secs(10), events.recv()).await.expect("no event within 10 s").unwrap()
+    }
+
+    fn message(from: &str, id: [u8; 16], text: &str) -> impl Fn(&Event) -> bool {
+        let (from, id, text) = (from.to_string(), hex(&id), text.to_string());
+        move |e| matches!(e, Event::Message { from: f, id: i, text: t, .. } if *f == from && *i == id && *t == text)
+    }
+
+    /// Invitation, a message each way, then one sent while Bob is off
+    /// arrives when he comes back.
+    #[tokio::test]
+    async fn invite_talk_and_deliver_after_a_restart() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let alice = open(dir.path(), "alice", &net);
+                let bob = open(dir.path(), "bob-device", &net);
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::ContactAdded { name: "alice".into() });
+                assert_eq!(next(&mut alice_events).await, Event::ContactAdded { name: "bob".into() });
+                assert_eq!(alice.contacts().unwrap()[0].safety_number, bob.contacts().unwrap()[0].safety_number);
+
+                // The link is spent: someone else holding it gets nowhere.
+                let carol = open(dir.path(), "carol", &net);
+                carol.start().await.unwrap();
+                assert!(carol.accept(&link, "alice").await.is_err());
+                assert!(carol.contacts().unwrap().is_empty());
+
+                let id = bob.send("alice", "bonjour").unwrap();
+                assert!(message("bob", id, "bonjour")(&next(&mut alice_events).await));
+                assert_eq!(next(&mut bob_events).await, Event::Delivered { to: "alice".into(), id: hex(&id) });
+                let id = alice.send("bob", "salut").unwrap();
+                assert!(message("alice", id, "salut")(&next(&mut bob_events).await));
+                assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
+
+                bob.stop().await;
+                drop(bob);
+                let id = alice.send("bob", "tu es là ?").unwrap();
+                sleep(Duration::from_millis(200)).await;
+
+                let bob = open(dir.path(), "bob-device", &net);
+                let mut bob_events = bob.subscribe();
+                bob.start().await.unwrap();
+                assert!(message("alice", id, "tu es là ?")(&next(&mut bob_events).await));
+                assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
+            })
+            .await;
+    }
+
+    /// A message sent again (the link broke before its ack came back) is
+    /// stored and announced once, and stays queued until acknowledged.
+    #[tokio::test]
+    async fn a_message_sent_twice_shows_up_once() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let mut bob_events = bob.subscribe();
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                // Links closed, so nothing is delivered behind the test's back.
+                alice.stop().await;
+                let alice = { drop(alice); open(dir.path(), "alice", &net) };
+
+                let id = alice.send("bob", "une fois").unwrap();
+                let bob_contact = &alice.contacts_raw().unwrap()[0];
+                let alice_contact = &bob.contacts_raw().unwrap()[0];
+                let (envelope_id, envelope) = alice.store.queued(&bob_contact.identity, DEVICE).unwrap().remove(0);
+                assert_eq!(envelope_id, id);
+                let (a, b) = (alice.address(), address(&bob_contact.identity, DEVICE).unwrap());
+                for (attempt, expect_new) in [(1, true), (2, false)] {
+                    let sent = session::encrypt(&alice.store, &a, &b, &envelope).await.unwrap();
+                    let got = bob.receive(alice_contact, &a, id, sent.message_type() as u8, sent.serialize()).await.unwrap();
+                    assert_eq!(got.is_some(), expect_new, "attempt {attempt}");
+                }
+                assert_eq!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().len(), 1);
+                assert!(alice.store.acked(&bob_contact.identity, DEVICE, &id).unwrap());
+                assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
+            })
+            .await;
+    }
+}

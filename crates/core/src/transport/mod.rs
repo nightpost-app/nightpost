@@ -40,11 +40,17 @@ pub type Result<T> = std::result::Result<T, TransportError>;
 
 pub trait Transport: Send + Sync {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
-    type Service: Service<Stream = Self::Stream>;
+    type Service: Service;
+    /// Incoming streams, until the service is dropped.
+    type Incoming: futures::Stream<Item = Self::Stream> + Unpin + Send + 'static;
 
     /// Publishes the service whose key is `seed`. At least one key must be
     /// authorized: a service nobody may discover has no reason to run.
-    fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> impl Future<Output = Result<Self::Service>> + Send;
+    fn serve(
+        &self,
+        seed: &Secret,
+        authorized: &[DiscoveryKey],
+    ) -> impl Future<Output = Result<(Self::Service, Self::Incoming)>> + Send;
 
     /// Files `secret` as the discovery key to use for `onion`, replacing any
     /// earlier one (an invitation's throwaway key gives way to the real one).
@@ -55,17 +61,12 @@ pub trait Transport: Send + Sync {
 
 /// A running onion service. Dropping it takes it down.
 pub trait Service: Send {
-    type Stream;
-
     fn onion(&self) -> Onion;
 
     /// Replaces the set of keys that may discover the service. Takes effect
     /// once the new descriptor is published, about a minute on Tor; already
     /// open streams are not cut.
     fn authorize(&self, authorized: &[DiscoveryKey]) -> Result<()>;
-
-    /// The next incoming stream; `None` once the service is down.
-    fn accept(&mut self) -> impl Future<Output = Option<Self::Stream>> + Send;
 }
 
 /// The address of the service published with `seed`.

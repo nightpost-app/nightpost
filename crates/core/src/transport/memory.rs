@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use futures::StreamExt as _;
 use futures::channel::mpsc;
 use tokio::io::DuplexStream;
 
@@ -37,14 +36,14 @@ pub struct MemoryTransport {
 pub struct MemoryService {
     net: Network,
     onion: Onion,
-    incoming: mpsc::UnboundedReceiver<DuplexStream>,
 }
 
 impl super::Transport for MemoryTransport {
     type Stream = DuplexStream;
     type Service = MemoryService;
+    type Incoming = mpsc::UnboundedReceiver<DuplexStream>;
 
-    async fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> Result<MemoryService> {
+    async fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> Result<(MemoryService, Self::Incoming)> {
         if authorized.is_empty() {
             return Err(none_authorized());
         }
@@ -55,7 +54,7 @@ impl super::Transport for MemoryTransport {
             return Err(TransportError("this service is already running".into()));
         }
         net.insert(onion, Listing { authorized: authorized.to_vec(), incoming: tx });
-        Ok(MemoryService { net: self.net.clone(), onion, incoming: rx })
+        Ok((MemoryService { net: self.net.clone(), onion }, rx))
     }
 
     fn present(&self, onion: Onion, secret: &Secret) -> Result<()> {
@@ -80,8 +79,6 @@ impl super::Transport for MemoryTransport {
 }
 
 impl super::Service for MemoryService {
-    type Stream = DuplexStream;
-
     fn onion(&self) -> Onion {
         self.onion
     }
@@ -95,10 +92,6 @@ impl super::Service for MemoryService {
         }
         Ok(())
     }
-
-    async fn accept(&mut self) -> Option<DuplexStream> {
-        self.incoming.next().await
-    }
 }
 
 impl Drop for MemoryService {
@@ -111,6 +104,7 @@ impl Drop for MemoryService {
 mod tests {
     use super::*;
     use crate::transport::{Service as _, Transport as _};
+    use futures::StreamExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     fn secret(n: u8) -> Secret {
@@ -121,7 +115,7 @@ mod tests {
     async fn only_authorized_keys_reach_a_service() {
         let net = Network::default();
         let (alice, bob, carol) = (net.node(), net.node(), net.node());
-        let mut service = alice.serve(&secret(1), &[discovery_key(&secret(2))]).await.unwrap();
+        let (service, mut incoming) = alice.serve(&secret(1), &[discovery_key(&secret(2))]).await.unwrap();
         let address = service.onion();
 
         // Carol has no key, then the wrong one: both look like nothing there.
@@ -131,7 +125,7 @@ mod tests {
 
         bob.present(address, &secret(2)).unwrap();
         let mut stream = bob.dial(address).await.unwrap();
-        let mut accepted = service.accept().await.unwrap();
+        let mut accepted = incoming.next().await.unwrap();
         stream.write_all(b"hi").await.unwrap();
         let mut buf = [0; 2];
         accepted.read_exact(&mut buf).await.unwrap();
@@ -144,5 +138,8 @@ mod tests {
 
         drop(service);
         assert!(carol.dial(address).await.is_err());
+        // Carol's stream was still queued; after it, the end.
+        assert!(incoming.next().await.is_some());
+        assert!(incoming.next().await.is_none());
     }
 }

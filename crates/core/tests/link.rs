@@ -18,6 +18,7 @@ use nightpost_core::session;
 use nightpost_core::store::Store;
 use nightpost_core::transport::memory::Network;
 use nightpost_core::transport::{Service as _, Transport as _, discovery_key, onion};
+use futures::StreamExt as _;
 use rand::{TryRngCore, rngs::OsRng};
 
 struct Device1 {
@@ -76,7 +77,7 @@ async fn invite_link_then_a_message_each_way() {
 
     // Alice: a throwaway discovery key, authorized on her service, goes in the link.
     let throwaway = random();
-    let mut service = alice_net.serve(&alice.seed, &[discovery_key(&throwaway)]).await.unwrap();
+    let (service, mut incoming) = alice_net.serve(&alice.seed, &[discovery_key(&throwaway)]).await.unwrap();
     let alice_onion = service.onion();
     let (sent, link) = Invite::create(&alice.identity(), alice_onion, *throwaway, now);
     let alice_bundle = session::bundle(&alice.store, DeviceId::new(1).unwrap()).await.unwrap();
@@ -85,7 +86,7 @@ async fn invite_link_then_a_message_each_way() {
     let invite = Invite::parse(&link, now).unwrap();
     bob_net.present(invite.onion, &Secret::new(invite.discovery)).unwrap();
     let mut to_alice = bob_net.dial(invite.onion).await.unwrap();
-    let mut from_bob = service.accept().await.unwrap();
+    let mut from_bob = incoming.next().await.unwrap();
 
     let alice_identity = alice.identity();
     let bob_identity = bob.identity();

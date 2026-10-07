@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::PROTOCOL_VERSION;
 use crate::identity::{DeviceList, DeviceListError, SignedDeviceList};
+use crate::session::WireBundle;
+use crate::transport::DiscoveryKey;
 
 pub const MAX_FRAME: usize = 1 << 20;
 const PAD: usize = 512;
@@ -102,6 +104,36 @@ pub async fn receive<T: DeserializeOwned>(io: &mut (impl AsyncRead + Unpin)) -> 
 fn invalid(e: FrameError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}"))
 }
+
+/// What travels on a link once the handshake is done.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Frame {
+    /// Sent by both sides right after an invitation's handshake: what the
+    /// other needs to find us and to start writing to us.
+    Card { discovery: DiscoveryKey, bundle: WireBundle },
+    /// A libsignal message. `id` is the envelope's, in the clear so that a
+    /// message which does not decrypt can still be acknowledged and dropped.
+    Message { id: [u8; 16], kind: u8, body: Vec<u8> },
+    /// Received and stored (or dropped for good): do not send it again.
+    Ack { id: [u8; 16] },
+}
+
+/// What a libsignal message holds.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Envelope {
+    pub id: [u8; 16],
+    /// Milliseconds since 1970, as the sender's clock had it.
+    pub time: u64,
+    pub body: Body,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Body {
+    Text(String),
+}
+
+/// Longest text message, in bytes.
+pub const MAX_TEXT: usize = 64 * 1024;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Hello {

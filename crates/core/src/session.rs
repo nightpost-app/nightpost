@@ -7,12 +7,13 @@
 use std::time::SystemTime;
 
 use libsignal_protocol::{
-    CiphertextMessage, DeviceId, GenericSignedPreKey, IdentityKeyStore, KeyPair,
+    CiphertextMessage, DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyStore, KeyPair, PublicKey,
     KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyRecord, PreKeyStore,
     ProtocolAddress, SignalProtocolError, SignedPreKeyRecord, SignedPreKeyStore, Timestamp, kem,
     message_decrypt, message_encrypt, process_prekey_bundle,
 };
 use rand::{Rng, TryRngCore, rngs::OsRng};
+use serde::{Deserialize, Serialize};
 
 use crate::store::{Db, Store};
 
@@ -70,6 +71,59 @@ pub async fn bundle(store: &Store, device: DeviceId) -> Result<PreKeyBundle> {
         kyber_signature.to_vec(),
         *identity.identity_key(),
     )
+}
+
+/// A bundle as it travels: libsignal gives it no wire form of its own.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WireBundle {
+    registration_id: u32,
+    device: u8,
+    pre_key: (u32, Vec<u8>),
+    signed: (u32, Vec<u8>, Vec<u8>),
+    kyber: (u32, Vec<u8>, Vec<u8>),
+    identity: Vec<u8>,
+}
+
+impl WireBundle {
+    pub fn new(bundle: &PreKeyBundle) -> Result<WireBundle> {
+        let (pre_key_id, pre_key) = match (bundle.pre_key_id()?, bundle.pre_key_public()?) {
+            (Some(id), Some(key)) => (id, key),
+            _ => return Err(SignalProtocolError::InvalidArgument("bundle without a one-time prekey".into())),
+        };
+        Ok(WireBundle {
+            registration_id: bundle.registration_id()?,
+            device: bundle.device_id()?.into(),
+            pre_key: (pre_key_id.into(), pre_key.serialize().into_vec()),
+            signed: (
+                bundle.signed_pre_key_id()?.into(),
+                bundle.signed_pre_key_public()?.serialize().into_vec(),
+                bundle.signed_pre_key_signature()?.to_vec(),
+            ),
+            kyber: (
+                bundle.kyber_pre_key_id()?.into(),
+                bundle.kyber_pre_key_public()?.serialize().into_vec(),
+                bundle.kyber_pre_key_signature()?.to_vec(),
+            ),
+            identity: bundle.identity_key()?.serialize().into_vec(),
+        })
+    }
+
+    /// The bundle, if every key in it parses. Its signatures are checked
+    /// when a session starts from it.
+    pub fn bundle(&self) -> Result<PreKeyBundle> {
+        PreKeyBundle::new(
+            self.registration_id,
+            DeviceId::try_from(self.device).map_err(|_| SignalProtocolError::InvalidArgument("device id".into()))?,
+            Some((self.pre_key.0.into(), PublicKey::deserialize(&self.pre_key.1)?)),
+            self.signed.0.into(),
+            PublicKey::deserialize(&self.signed.1)?,
+            self.signed.2.clone(),
+            self.kyber.0.into(),
+            kem::PublicKey::deserialize(&self.kyber.1)?,
+            self.kyber.2.clone(),
+            IdentityKey::decode(&self.identity)?,
+        )
+    }
 }
 
 /// Starts a session with `them` from the bundle they sent. The next
@@ -166,8 +220,10 @@ mod tests {
             let bob_path = dir.path().join("bob.db");
             let bob = Store::open(&bob_path, &unlock(2, Some("bob pass"))).unwrap();
 
-            let bundle = bundle(&bob, DeviceId::new(1).unwrap()).await.unwrap();
-            start(&alice, &a, &b, &bundle).await.unwrap();
+            // Through its wire form, as it travels.
+            let wire = WireBundle::new(&bundle(&bob, DeviceId::new(1).unwrap()).await.unwrap()).unwrap();
+            let wire: WireBundle = postcard::from_bytes(&postcard::to_stdvec(&wire).unwrap()).unwrap();
+            start(&alice, &a, &b, &wire.bundle().unwrap()).await.unwrap();
 
             let first = encrypt(&alice, &a, &b, b"bonjour bob").await.unwrap();
             assert_eq!(first.message_type(), CiphertextMessageType::PreKey);
