@@ -1,0 +1,11 @@
+[package]
+name = "nightpost"
+description = "Nightpost daemon, command line and terminal interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+nightpost-core = { path = "../core" }
