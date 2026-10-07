@@ -30,6 +30,13 @@ pub enum Request {
     Listen,
     Invite { name: String },
     Accept { link: String, name: String },
+    /// A 12-digit code to read out, valid 10 minutes.
+    InviteCode { name: String },
+    /// Waits until the inviter confirms (up to 10 minutes).
+    AcceptCode { code: String, name: String },
+    /// Keep (or turn down) the person who used our code, after comparing
+    /// the safety number of their [`Event::Fingerprint`].
+    Confirm { name: String, keep: bool },
     Contacts,
     Verify { name: String },
 }
@@ -39,7 +46,9 @@ pub enum Request {
 pub enum Reply {
     Sent { id: String },
     Invite { link: String },
+    Code { code: String },
     Added { name: String },
+    Done,
     Contacts { contacts: Vec<ContactInfo> },
     SafetyNumber { name: String, number: String },
     Listening,
@@ -52,6 +61,9 @@ pub enum Event {
     Message { from: String, id: String, time: u64, text: String },
     Delivered { to: String, id: String },
     ContactAdded { name: String },
+    /// Someone used an oral code: the two people compare this number before
+    /// the inviter confirms.
+    Fingerprint { name: String, safety_number: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -123,6 +135,15 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
         Request::Accept { link, name } => {
             daemon.accept(&link, &name).await?;
             Reply::Added { name }
+        }
+        Request::InviteCode { name } => Reply::Code { code: daemon.invite_code(&name).await? },
+        Request::AcceptCode { code, name } => {
+            daemon.accept_code(&code, &name).await?;
+            Reply::Added { name }
+        }
+        Request::Confirm { name, keep } => {
+            daemon.confirm(&name, keep)?;
+            Reply::Done
         }
         Request::Contacts => Reply::Contacts { contacts: daemon.contacts()? },
         Request::Verify { name } => {

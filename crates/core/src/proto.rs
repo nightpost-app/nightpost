@@ -116,6 +116,8 @@ pub enum Frame {
     Message { id: [u8; 16], kind: u8, body: Vec<u8> },
     /// Received and stored (or dropped for good): do not send it again.
     Ack { id: [u8; 16] },
+    /// After an oral code: the inviter compared safety numbers and kept us.
+    Welcome,
 }
 
 /// What a libsignal message holds.
@@ -226,6 +228,18 @@ impl Caller {
         if challenge.account != expected.serialize().as_ref() {
             return Err(HandshakeError::WrongAccount);
         }
+        self.answer(me, challenge, previous)
+    }
+
+    /// Answers whoever holds the service, for an oral code only: there is
+    /// no identity to expect yet, and the onion itself came from the code.
+    /// The two people then compare safety numbers before anything is kept.
+    pub fn on_challenge_by_code(&self, me: &Me, challenge: &Challenge) -> Result<(Proof, Peer), HandshakeError> {
+        check_version(challenge.version)?;
+        self.answer(me, challenge, None)
+    }
+
+    fn answer(&self, me: &Me, challenge: &Challenge, previous: Option<&SignedDeviceList>) -> Result<(Proof, Peer), HandshakeError> {
         let peer = authenticate(
             &challenge.account,
             challenge.device,

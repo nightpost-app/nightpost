@@ -4,7 +4,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use nightpost_core::api::{Client, Reply, Request};
+use nightpost_core::api::{Client, Event, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
@@ -15,7 +15,10 @@ const USAGE: &str = "\
 usage:
   nightpost daemon                 run the daemon (Tor) in the foreground
   nightpost invite <name>          print a one-time link for <name>
+  nightpost invite --code <name>   a 12-digit code to read out (10 minutes)
   nightpost accept <link> <name>   use a link; the inviter becomes <name>
+  nightpost accept-code <code> <name>
+                                   use a code read out by the inviter
   nightpost send <name> [text]     send text (read from stdin without it)
   nightpost listen                 print events as JSON lines
   nightpost contacts               list contacts and safety numbers
@@ -41,6 +44,8 @@ async fn run(args: Vec<String>) -> Result<()> {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
             return Ok(());
         }
+        ["invite", "--code", name] => return invite_code(&dir, name).await,
+        ["accept-code", code, name] => return accept_code(&dir, code, name).await,
         ["invite", name] => Request::Invite { name: name.to_string() },
         ["accept", link, name] => Request::Accept { link: link.to_string(), name: name.to_string() },
         ["send", to] | ["send", to, "-"] => {
@@ -63,24 +68,91 @@ async fn run(args: Vec<String>) -> Result<()> {
         Reply::Error { message } => bail!("{message}"),
         Reply::Sent { id } => println!("{id}"),
         Reply::Invite { link } => println!("{link}"),
+        Reply::Code { code } => println!("{code}"),
         Reply::Added { name } => println!("{name} added"),
+        Reply::Done => {}
         Reply::Contacts { contacts } => {
             for c in contacts {
-                println!("{}\t{}", c.name, c.safety_number);
+                println!("{}\t{}", c.name, groups(&c.safety_number));
             }
         }
-        Reply::SafetyNumber { number, .. } => {
-            // Twelve groups of five, the way people read it out.
-            let groups: Vec<&str> = number.as_bytes().chunks(5).map(|c| std::str::from_utf8(c).unwrap_or("")).collect();
-            println!("{}", groups.join(" "));
-        }
+        Reply::SafetyNumber { number, .. } => println!("{}", groups(&number)),
         Reply::Listening => {
             while let Some(event) = client.event().await? {
-                println!("{}", serde_json_line(&event)?);
+                println!("{}", serde_json::to_string(&event)?);
             }
         }
     }
     Ok(())
+}
+
+/// Prints the code, waits for someone to use it, and asks whether they read
+/// out the same safety number.
+async fn invite_code(dir: &Path, name: &str) -> Result<()> {
+    let mut events = listen(dir).await?;
+    let mut client = Client::connect(dir).await?;
+    let code = match client.call(&Request::InviteCode { name: name.into() }).await? {
+        Reply::Code { code } => code,
+        Reply::Error { message } => bail!("{message}"),
+        other => bail!("unexpected reply {other:?}"),
+    };
+    println!("Read this to {name} (valid 10 minutes):\n\n    {code}\n\nWaiting for {name}…");
+    let number = loop {
+        match events.event().await? {
+            Some(Event::Fingerprint { name: n, safety_number }) if n == name => break safety_number,
+            Some(_) => {}
+            None => bail!("the daemon stopped"),
+        }
+    };
+    println!("\nSomeone used the code. Ask {name} to read their safety number:\n\n    {}\n", groups(&number));
+    print!("Is it the same? [y/N] ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    let keep = answer.trim().eq_ignore_ascii_case("y");
+    match client.call(&Request::Confirm { name: name.into(), keep }).await? {
+        Reply::Error { message } => bail!("{message}"),
+        _ if keep => println!("{name} added"),
+        _ => println!("turned down"),
+    }
+    Ok(())
+}
+
+async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
+    let mut events = listen(dir).await?;
+    let name_owned = name.to_string();
+    let shown = tokio::spawn(async move {
+        while let Ok(Some(event)) = events.event().await {
+            if let Event::Fingerprint { name: n, safety_number } = event
+                && n == name_owned
+            {
+                println!("Read this safety number to {n}:\n\n    {}\n\nWaiting for {n} to confirm…", groups(&safety_number));
+            }
+        }
+    });
+    let mut client = Client::connect(dir).await?;
+    eprintln!("Looking for {name} (up to a few minutes)…");
+    let reply = client.call(&Request::AcceptCode { code: code.into(), name: name.into() }).await?;
+    shown.abort();
+    match reply {
+        Reply::Added { name } => println!("{name} added"),
+        Reply::Error { message } => bail!("{message}"),
+        other => bail!("unexpected reply {other:?}"),
+    }
+    Ok(())
+}
+
+async fn listen(dir: &Path) -> Result<Client> {
+    let mut client = Client::connect(dir).await.context("is `nightpost daemon` running?")?;
+    match client.call(&Request::Listen).await? {
+        Reply::Listening => Ok(client),
+        other => bail!("unexpected reply {other:?}"),
+    }
+}
+
+/// Twelve groups of five, the way people read it out.
+fn groups(number: &str) -> String {
+    number.as_bytes().chunks(5).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
 }
 
 async fn daemon(dir: &Path) -> Result<()> {
@@ -159,8 +231,4 @@ fn data_dir() -> Result<PathBuf> {
     // Absolute, so the socket and keychain label do not depend on where the
     // command runs from.
     Ok(std::fs::canonicalize(&dir)?)
-}
-
-fn serde_json_line(event: &nightpost_core::api::Event) -> Result<String> {
-    Ok(serde_json::to_string(event)?)
 }

@@ -17,20 +17,20 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result, bail, ensure};
 use futures::StreamExt as _;
 use libsignal_protocol::{
-    CiphertextMessage, CiphertextMessageType, DeviceId, IdentityKey, IdentityKeyPair, KeyPair, PreKeySignalMessage,
+    CiphertextMessage, CiphertextMessageType, DeviceId, IdentityKey, IdentityKeyPair, KeyPair, PreKeyBundle, PreKeySignalMessage,
     PrivateKey, ProtocolAddress, SignalMessage,
 };
 use rand::{Rng as _, TryRngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt as _;
-use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
 
 use crate::api::{ContactInfo, Event, hex};
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
-use crate::invite::Invite;
+use crate::invite::{self, Code, CodeError, Invite};
 use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_TEXT, Me, Peer, Proof, Service};
 use crate::session::{self, WireBundle};
 use crate::store::Store;
@@ -46,6 +46,8 @@ const IDLE: Duration = Duration::from_secs(60);
 /// minutes to reach the directories.
 const ACCEPT_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(300) };
 const MAX_NAME: usize = 32;
+/// An oral code, and the wait for its confirmation.
+const CODE_LIFETIME: Duration = Duration::from_secs(600);
 /// First wait after a failed dial; it doubles up to 10 minutes.
 const RETRY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(10) };
 
@@ -67,6 +69,8 @@ pub struct Daemon<T: Transport> {
     backoff: RefCell<HashMap<Target, (u32, Instant)>>,
     wake: Notify,
     stopping: watch::Sender<bool>,
+    /// Oral codes used by someone, waiting for us to compare numbers.
+    confirming: RefCell<HashMap<String, oneshot::Sender<bool>>>,
 }
 
 type Target = (Vec<u8>, u8);
@@ -138,6 +142,7 @@ impl<T: Transport + 'static> Daemon<T> {
             backoff: RefCell::default(),
             wake: Notify::new(),
             stopping: watch::channel(false).0,
+            confirming: RefCell::default(),
         }))
     }
 
@@ -189,28 +194,128 @@ impl<T: Transport + 'static> Daemon<T> {
         ensure!(self.contact(&invite.identity.serialize())?.is_none(), "already a contact");
         self.net.present(invite.onion, &Secret::new(invite.discovery))?;
 
-        let started = Instant::now();
-        let mut stream = loop {
-            match timeout(STEP * 2, self.net.dial(invite.onion)).await {
-                Ok(Ok(stream)) => break stream,
-                Ok(Err(e)) if started.elapsed() < ACCEPT_DEADLINE => tracing::info!("inviter not reachable yet: {e}"),
-                Err(_) if started.elapsed() < ACCEPT_DEADLINE => tracing::info!("inviter not reachable yet: timeout"),
-                Ok(Err(e)) => bail!("the inviter stayed unreachable: {e}"),
-                Err(_) => bail!("the inviter stayed unreachable"),
-            }
-            sleep(RETRY).await;
-        };
-
+        let (mut stream, _) = self.dial_until(&[invite.onion]).await?;
         let me = self.me();
         let caller = Caller::new(&me, invite.onion, Some(invite.token));
         proto::send(&mut stream, caller.hello()).await?;
         let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
         let (proof, peer) = caller.on_challenge(&me, &challenge, &invite.identity, None).map_err(handshake)?;
         proto::send(&mut stream, &proof).await?;
-        let contact = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
-        self.refresh_service().await?;
+        let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
+        self.add_contact(&contact, &bundle, peer.device).await?;
         spawn_local(self.clone().link(stream, contact, peer.device));
         Ok(())
+    }
+
+    /// A 12-digit code for someone who will be known here as `name`. Whoever
+    /// uses it is kept only once [`Daemon::confirm`]ed.
+    pub async fn invite_code(self: &Rc<Self>, name: &str) -> Result<String> {
+        self.check_name(name)?;
+        ensure!(!self.confirming.borrow().contains_key(name), "a code for {name} is already waiting");
+        let code = Code::generate();
+        let window = invite::window(now_secs());
+        let derive = code.clone();
+        let keys = tokio::task::spawn_blocking(move || derive.derive(window)).await?;
+        let (service, incoming) = self.net.serve(&keys.onion, &[discovery_key(&keys.discovery)]).await?;
+        let (daemon, name, temp) = (self.clone(), name.to_string(), onion(&keys.onion));
+        spawn_local(async move {
+            let _service = service;
+            let mut incoming = incoming;
+            let expiry = sleep(CODE_LIFETIME);
+            tokio::pin!(expiry);
+            loop {
+                tokio::select! {
+                    Some(stream) = incoming.next() => match daemon.answer_code(stream, temp, &name).await {
+                        Ok(()) => break,
+                        Err(e) => tracing::info!("code invitation for {name}: {e:#}"),
+                    },
+                    _ = &mut expiry => break,
+                    _ = daemon.stopped() => break,
+                }
+            }
+        });
+        Ok(code.to_string())
+    }
+
+    async fn answer_code(self: &Rc<Self>, mut stream: T::Stream, temp: Onion, name: &str) -> Result<()> {
+        let me = self.me();
+        let hello: Hello = timeout(STEP, proto::receive(&mut stream)).await??;
+        let (service, challenge) = Service::on_hello(&me, temp, hello).map_err(handshake)?;
+        ensure!(self.contact(&service.hello().account)?.is_none(), "already a contact");
+        proto::send(&mut stream, &challenge).await?;
+        let proof: Proof = timeout(STEP, proto::receive(&mut stream)).await??;
+        let peer = service.on_proof(&proof, None).map_err(handshake)?;
+        let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &service.hello().devices, name).await?;
+
+        let (keep, kept) = oneshot::channel();
+        self.confirming.borrow_mut().insert(name.to_string(), keep);
+        let _ = self.events.send(Event::Fingerprint { name: name.into(), safety_number: self.safety_number(&contact)? });
+        let kept = timeout(CODE_LIFETIME, kept).await;
+        self.confirming.borrow_mut().remove(name);
+        ensure!(matches!(kept, Ok(Ok(true))), "not confirmed");
+
+        self.add_contact(&contact, &bundle, peer.device).await?;
+        proto::send(&mut stream, &Frame::Welcome).await?;
+        spawn_local(self.clone().link(stream, contact, peer.device));
+        Ok(())
+    }
+
+    /// Keeps, or turns down, whoever used the code given to `name`.
+    pub fn confirm(&self, name: &str, keep: bool) -> Result<()> {
+        let waiting = self.confirming.borrow_mut().remove(name).context("nobody is waiting under that name")?;
+        let _ = waiting.send(keep);
+        Ok(())
+    }
+
+    /// Uses a code read out by the inviter, known here as `name`. Returns
+    /// once the inviter has confirmed.
+    pub async fn accept_code(self: &Rc<Self>, code: &str, name: &str) -> Result<()> {
+        self.check_name(name)?;
+        let code = Code::parse(code).map_err(|e| match e {
+            CodeError::Length => anyhow::anyhow!("a code is 12 digits"),
+            CodeError::Typo => anyhow::anyhow!("this code has a typo: one digit is wrong or two are swapped"),
+        })?;
+        let windows = invite::windows(now_secs());
+        let keys = tokio::task::spawn_blocking(move || windows.map(|w| code.derive(w))).await?;
+        let onions = keys.each_ref().map(|k| onion(&k.onion));
+        for (k, o) in keys.iter().zip(onions) {
+            self.net.present(o, &k.discovery)?;
+        }
+        let (mut stream, temp) = self.dial_until(&onions).await?;
+
+        let me = self.me();
+        let caller = Caller::new(&me, temp, None);
+        proto::send(&mut stream, caller.hello()).await?;
+        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let (proof, peer) = caller.on_challenge_by_code(&me, &challenge).map_err(handshake)?;
+        ensure!(self.contact(&peer.account.serialize())?.is_none(), "already a contact");
+        proto::send(&mut stream, &proof).await?;
+        let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
+        let _ = self.events.send(Event::Fingerprint { name: name.into(), safety_number: self.safety_number(&contact)? });
+        match timeout(CODE_LIFETIME, proto::receive::<Frame>(&mut stream)).await {
+            Ok(Ok(Frame::Welcome)) => {}
+            _ => bail!("{name} did not confirm"),
+        }
+        self.add_contact(&contact, &bundle, peer.device).await?;
+        spawn_local(self.clone().link(stream, contact, peer.device));
+        Ok(())
+    }
+
+    /// Dials the first of `onions` that answers, retrying until the deadline:
+    /// a new descriptor can take minutes to reach the directories.
+    async fn dial_until(&self, onions: &[Onion]) -> Result<(T::Stream, Onion)> {
+        let started = Instant::now();
+        loop {
+            for &to in onions {
+                match timeout(STEP * 2, self.net.dial(to)).await {
+                    Ok(Ok(stream)) => return Ok((stream, to)),
+                    Ok(Err(e)) => tracing::info!("not reachable yet: {e}"),
+                    Err(_) => tracing::info!("not reachable yet: timeout"),
+                }
+            }
+            ensure!(started.elapsed() < ACCEPT_DEADLINE, "the inviter stayed unreachable");
+            sleep(RETRY).await;
+        }
     }
 
     /// Queues `text` for every device of `to`; returns the message id.
@@ -240,11 +345,7 @@ impl<T: Transport + 'static> Daemon<T> {
     pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
         self.contacts_raw()?
             .into_iter()
-            .map(|c| {
-                let theirs = IdentityKey::decode(&c.identity)?;
-                let number = safety_number(self.identity.identity_key(), &theirs).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                Ok(ContactInfo { name: c.name, safety_number: number })
-            })
+            .map(|c| Ok(ContactInfo { safety_number: self.safety_number(&c)?, name: c.name }))
             .collect()
     }
 
@@ -322,8 +423,8 @@ impl<T: Transport + 'static> Daemon<T> {
                 )?;
                 self.store.remove("invite", &key)?;
                 ensure!(pending.expires > now_secs(), "expired invitation");
-                let contact = self.exchange_cards(&mut stream, &peer, &service.hello().devices, &pending.name).await?;
-                self.refresh_service().await?;
+                let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &service.hello().devices, &pending.name).await?;
+                self.add_contact(&contact, &bundle, peer.device).await?;
                 contact
             }
             (None, None) => unreachable!(),
@@ -332,15 +433,15 @@ impl<T: Transport + 'static> Daemon<T> {
         Ok(())
     }
 
-    /// Both sides of an invitation: send our card, read theirs, start a
-    /// session from their bundle, and record them.
+    /// Both sides of an invitation: send our card and read theirs. Nothing
+    /// is kept until [`Daemon::add_contact`].
     async fn exchange_cards(
         self: &Rc<Self>,
         stream: &mut T::Stream,
         peer: &Peer,
         devices: &SignedDeviceList,
         name: &str,
-    ) -> Result<Contact> {
+    ) -> Result<(Contact, PreKeyBundle)> {
         self.check_name(name)?;
         let bundle = WireBundle::new(&session::bundle(&self.store, device_id(DEVICE)?).await?)?;
         proto::send(stream, &Frame::Card { discovery: discovery_key(&self.discovery()), bundle }).await?;
@@ -354,11 +455,18 @@ impl<T: Transport + 'static> Daemon<T> {
         ensure!(u8::from(bundle.device_id()?) == peer.device, "the bundle is for another device");
 
         let contact = Contact { name: name.into(), identity: peer.account.serialize().into_vec(), devices: devices.clone(), discovery };
-        session::start(&self.store, &self.address(), &address(&contact.identity, peer.device)?, &bundle).await?;
-        self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(&contact)?)?;
-        self.present_to(&contact)?;
+        Ok((contact, bundle))
+    }
+
+    /// Starts the session from their bundle and keeps the contact.
+    async fn add_contact(self: &Rc<Self>, contact: &Contact, bundle: &PreKeyBundle, device: u8) -> Result<()> {
+        self.check_name(&contact.name)?;
+        session::start(&self.store, &self.address(), &address(&contact.identity, device)?, bundle).await?;
+        self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(contact)?)?;
+        self.present_to(contact)?;
+        self.refresh_service().await?;
         let _ = self.events.send(Event::ContactAdded { name: contact.name.clone() });
-        Ok(contact)
+        Ok(())
     }
 
     // --- delivery ----------------------------------------------------------
@@ -479,7 +587,7 @@ impl<T: Transport + 'static> Daemon<T> {
                                 let _ = self.events.send(Event::Delivered { to: contact.name.clone(), id: hex(&id) });
                             }
                         }
-                        Some(Frame::Card { .. }) => bail!("a contact card outside an invitation"),
+                        Some(Frame::Card { .. } | Frame::Welcome) => bail!("an invitation frame on a contact link"),
                     },
                     Some(()) = woken.recv() => {}
                     _ = sleep(IDLE) => return Ok(()),
@@ -520,6 +628,10 @@ impl<T: Transport + 'static> Daemon<T> {
 
     fn me(&self) -> Me<'_> {
         Me { account: self.identity.identity_key(), device: DEVICE, key: &self.signing, devices: &self.own.devices }
+    }
+
+    fn safety_number(&self, contact: &Contact) -> Result<String> {
+        safety_number(self.identity.identity_key(), &IdentityKey::decode(&contact.identity)?).map_err(|e| anyhow::anyhow!("{e:?}"))
     }
 
     fn seed(&self) -> Secret {
@@ -701,6 +813,63 @@ mod tests {
                 assert_eq!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().len(), 1);
                 assert!(alice.store.acked(&bob_contact.identity, DEVICE, &id).unwrap());
                 assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
+            })
+            .await;
+    }
+
+    /// A code is checked for typos at once, and whoever uses it is kept
+    /// only once the inviter confirms, after comparing safety numbers.
+    #[tokio::test]
+    async fn an_oral_code_waits_for_the_inviters_confirmation() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob, carol) =
+                    (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net), open(dir.path(), "carol", &net));
+                for d in [&alice, &bob, &carol] {
+                    d.start().await.unwrap();
+                }
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+
+                let code = alice.invite_code("bob").await.unwrap();
+                let last = code.chars().last().unwrap().to_digit(10).unwrap();
+                let typo = format!("{}{}", &code[..code.len() - 1], (last + 1) % 10);
+                let err = bob.accept_code(&typo, "alice").await.unwrap_err();
+                assert!(err.to_string().contains("typo"), "{err}");
+
+                let accepting = spawn_local({
+                    let (bob, code) = (bob.clone(), code.clone());
+                    async move { bob.accept_code(&code, "alice").await }
+                });
+                let Event::Fingerprint { name, safety_number } = next(&mut alice_events).await else { panic!() };
+                assert_eq!(name, "bob");
+                let Event::Fingerprint { safety_number: bobs, .. } = next(&mut bob_events).await else { panic!() };
+                assert_eq!(safety_number, bobs);
+                assert!(bob.contacts().unwrap().is_empty() && alice.contacts().unwrap().is_empty());
+                alice.confirm("bob", true).unwrap();
+                accepting.await.unwrap().unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::ContactAdded { name: "alice".into() });
+                assert_eq!(next(&mut alice_events).await, Event::ContactAdded { name: "bob".into() });
+                let id = bob.send("alice", "trouvée par code").unwrap();
+                assert!(message("bob", id, "trouvée par code")(&next(&mut alice_events).await));
+
+                // Turned down: neither side keeps the other.
+                let code = alice.invite_code("carol").await.unwrap();
+                let accepting = spawn_local({
+                    let carol = carol.clone();
+                    async move { carol.accept_code(&code, "alice").await }
+                });
+                loop {
+                    if let Event::Fingerprint { name, .. } = next(&mut alice_events).await {
+                        assert_eq!(name, "carol");
+                        break;
+                    }
+                }
+                alice.confirm("carol", false).unwrap();
+                assert!(accepting.await.unwrap().is_err());
+                assert!(carol.contacts().unwrap().is_empty());
+                assert_eq!(alice.contacts().unwrap().len(), 1);
             })
             .await;
     }
