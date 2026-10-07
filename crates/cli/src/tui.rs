@@ -14,16 +14,30 @@ use crossterm::event::{
 use futures::StreamExt as _;
 use nightpost_core::api::{Client, Event, HistoryItem, Reply, Request};
 use ratatui::DefaultTerminal;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthChar as _;
 
-/// The one accent, kept for what needs attention: unread, unconfirmed, danger.
-const ACCENT: Color = Color::Rgb(0xb0, 0x26, 0x26);
-const DIM: Style = Style::new().fg(Color::DarkGray);
+// Night post, as in the graphical interface: a desk at night, their
+// messages on onionskin paper, yours as blue carbon copies, post-box red
+// only for what needs you (unread, comparing numbers).
+const NIGHT: Color = Color::Rgb(0x16, 0x1b, 0x2b);
+const NIGHT_DEEP: Color = Color::Rgb(0x10, 0x14, 0x1f);
+const RAISED: Color = Color::Rgb(0x23, 0x2a, 0x40);
+const ONIONSKIN: Color = Color::Rgb(0xe7, 0xe5, 0xda);
+const INK: Color = Color::Rgb(0x1d, 0x21, 0x30);
+const INK_SOFT: Color = Color::Rgb(0x4a, 0x4f, 0x5e);
+const CARBON: Color = Color::Rgb(0x2c, 0x3a, 0x63);
+const CARBON_INK: Color = Color::Rgb(0xe3, 0xe8, 0xf6);
+const LAMP: Color = Color::Rgb(0x8e, 0x96, 0xad);
+const POST: Color = Color::Rgb(0xc8, 0x46, 0x3d);
+const POST_ON_PAPER: Color = Color::Rgb(0xa8, 0x35, 0x2d);
+const DIM: Style = Style::new().fg(LAMP);
+const PAPER: Style = Style::new().fg(INK).bg(ONIONSKIN);
+const SIDEBAR: u16 = 28;
 const HISTORY: u32 = 200;
 const HELP: &str = "\
 Enter            send
@@ -273,13 +287,13 @@ impl App {
                 };
                 self.codes.push(name.to_string());
                 self.overlay = Some(Overlay::Text {
-                    title: format!("Code for {name}"),
+                    title: format!("Read this code to {name}"),
                     body: vec![
-                        format!("Read this to {name}, valid 10 minutes:"),
+                        "On a call or in person. It works for 10 minutes.".into(),
                         String::new(),
-                        format!("        {code}"),
+                        format!("    {}", code.replace('-', "  ")),
                         String::new(),
-                        "You will be asked to compare a safety number before anything is kept.".into(),
+                        format!("When {name} types it in, you will both compare a safety number before anything is kept."),
                     ],
                 });
             }
@@ -294,11 +308,11 @@ impl App {
                 };
                 self.overlay = Some(Overlay::Text {
                     title: format!("Safety number with {name}"),
-                    body: vec![
-                        "Read it to each other, on a call or in person. Same digits: nobody is in between.".into(),
-                        String::new(),
-                        format!("    {}", groups(&number)),
-                    ],
+                    body: [
+                        vec!["Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between.".into(), String::new()],
+                        number_lines(&number),
+                    ]
+                    .concat(),
                 });
             }
             _ => bail!("unknown command: /help lists them"),
@@ -373,7 +387,7 @@ impl App {
                 } else {
                     Overlay::Text {
                         title: format!("Waiting for {name} to confirm"),
-                        body: vec![format!("Read this safety number to {name}:"), String::new(), format!("    {}", groups(&safety_number))],
+                        body: [vec![format!("Read this safety number to {name}. They check that it matches theirs:"), String::new()], number_lines(&safety_number)].concat(),
                     }
                 });
             }
@@ -388,7 +402,13 @@ impl App {
         };
         for c in contacts {
             if !self.conversations.iter().any(|known| known.name == c.name) {
-                self.conversations.push(Conversation { name: c.name, unread: 0, messages: Vec::new(), loaded: false });
+                // Loaded now: the list shows each one's last message.
+                let messages = match requests.call(&Request::History { name: c.name.clone(), limit: HISTORY }).await? {
+                    Reply::History { messages } => messages,
+                    Reply::Error { message } => bail!("{message}"),
+                    other => bail!("unexpected reply {other:?}"),
+                };
+                self.conversations.push(Conversation { name: c.name, unread: 0, messages, loaded: true });
             }
         }
         Ok(())
@@ -416,127 +436,195 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut ratatui::Frame) {
-        let width = frame.area().width.saturating_sub(24).max(10);
-        let input_lines = wrap(&self.input, width.saturating_sub(2) as usize).len().clamp(1, 6) as u16;
-        let [main, input, status] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(input_lines + 2), Constraint::Length(1)]).areas(frame.area());
-        let [list, thread] = Layout::horizontal([Constraint::Length(24), Constraint::Min(10)]).areas(main);
+        let area = frame.area();
+        frame.render_widget(Block::new().style(Style::new().fg(ONIONSKIN).bg(NIGHT)), area);
+        let [list, right] = Layout::horizontal([Constraint::Length(SIDEBAR), Constraint::Min(16)]).areas(area);
+        // The box: 2 columns of margin and 1 of padding on each side.
+        let text_width = right.width.saturating_sub(6).max(1);
+        let input_lines = wrap(&self.input, text_width as usize).len().clamp(1, 6) as u16;
+        let [_, header, _, thread, _, composer, status] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(input_lines + 2),
+            Constraint::Length(1),
+        ])
+        .areas(right);
 
-        let items: Vec<ListItem> = self
-            .conversations
-            .iter()
-            .map(|c| {
-                if c.unread > 0 {
-                    ListItem::new(Line::from(vec![
-                        Span::raw(c.name.clone()),
-                        Span::styled(format!(" {}", c.unread), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                    ]))
-                } else {
-                    ListItem::new(c.name.clone())
-                }
-            })
-            .collect();
-        let mut state = ListState::default().with_selected((!self.conversations.is_empty()).then_some(self.selected));
-        frame.render_stateful_widget(
-            List::new(items).block(Block::bordered().title(" Nightpost ")).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
-            list,
-            &mut state,
-        );
+        self.draw_list(frame, list);
 
         let current = self.conversations.get(self.selected);
-        let mut lines: Vec<Line> = Vec::new();
-        for m in current.map(|c| c.messages.as_slice()).unwrap_or_default() {
-            let who = if m.outgoing { "me".to_string() } else { current.map_or(String::new(), |c| c.name.clone()) };
-            let mut header = vec![Span::styled(format!("{} ", clock(m.time)), DIM), Span::styled(who, Style::new().add_modifier(Modifier::BOLD))];
-            if m.outgoing && !m.delivered {
-                header.push(Span::styled("  not delivered yet", DIM));
-            }
-            lines.push(Line::from(header));
-            lines.extend(m.text.lines().map(|l| Line::from(l.to_string())));
-            lines.push(Line::default());
+        let margin = |r: Rect| Rect { x: r.x + 2, width: r.width.saturating_sub(4), ..r };
+        let title = current.map_or(String::new(), |c| c.name.clone());
+        frame.render_widget(Paragraph::new(Span::styled(title, Style::new().add_modifier(Modifier::BOLD))), margin(header));
+
+        let thread = margin(thread);
+        let mut lines = slips(current.map(|c| c.messages.as_slice()).unwrap_or_default(), thread.width as usize);
+        let height = thread.height as usize;
+        self.scroll = self.scroll.min(lines.len().saturating_sub(height));
+        // Few messages sit at the bottom, by the box, as in any conversation.
+        if lines.len() < height {
+            lines.splice(0..0, std::iter::repeat_n(Line::default(), height - lines.len()));
         }
-        let title = current.map_or(" no conversation ".to_string(), |c| format!(" {} ", c.name));
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-        let inner_height = thread.height.saturating_sub(2) as usize;
-        let total = paragraph.line_count(thread.width.saturating_sub(2));
-        self.scroll = self.scroll.min(total.saturating_sub(inner_height));
-        let top = total.saturating_sub(inner_height + self.scroll);
-        frame.render_widget(paragraph.block(Block::bordered().title(title)).scroll((top as u16, 0)), thread);
+        let top = lines.len().saturating_sub(height + self.scroll);
+        frame.render_widget(Paragraph::new(lines).scroll((top as u16, 0)), thread);
 
         // The box wraps by characters, the same way the cursor is placed.
-        let rows = wrap(&self.input, input.width.saturating_sub(2) as usize);
-        let (row, col) = cursor_at(&self.input, self.cursor, input.width.saturating_sub(2) as usize);
+        let field = margin(composer);
+        frame.render_widget(Block::new().style(Style::new().bg(RAISED)), field);
+        let text = Rect { x: field.x + 1, y: field.y + 1, width: field.width.saturating_sub(2), height: input_lines };
+        let (row, col) = cursor_at(&self.input, self.cursor, text_width as usize);
         let first = row.saturating_sub(input_lines as usize - 1);
-        let visible: Vec<Line> = rows.into_iter().skip(first).map(Line::from).collect();
-        let hint = current.map_or(" type /help ".to_string(), |c| format!(" to {} — Enter sends, Alt+Enter new line ", c.name));
-        frame.render_widget(Paragraph::new(visible).block(Block::bordered().title(hint)), input);
-        if self.overlay.is_none() {
-            frame.set_cursor_position(Position::new(input.x + 1 + col as u16, input.y + 1 + (row - first) as u16));
+        if self.input.is_empty() {
+            let hint = current.map_or("Type /help".to_string(), |c| format!("Write to {}", c.name));
+            frame.render_widget(Paragraph::new(Span::styled(hint, DIM)), text);
+        } else {
+            let visible: Vec<Line> = wrap(&self.input, text_width as usize).into_iter().skip(first).map(Line::from).collect();
+            frame.render_widget(Paragraph::new(visible), text);
         }
-        frame.render_widget(Paragraph::new(self.status.as_str()).style(DIM), status);
+        if self.overlay.is_none() {
+            frame.set_cursor_position(Position::new(text.x + col as u16, text.y + (row - first) as u16));
+        }
+        let status_text = if self.status.is_empty() { "Enter sends, Alt+Enter starts a new line, Tab changes conversation" } else { self.status.as_str() };
+        frame.render_widget(Paragraph::new(Span::styled(status_text, DIM)), margin(status));
 
         match &self.overlay {
-            Some(Overlay::Text { title, body }) => popup(frame, title, body.iter().map(|l| Line::from(l.as_str())).collect(), Style::new()),
+            Some(Overlay::Text { title, body }) => popup(frame, title, body.iter().map(|l| Line::from(l.as_str())).collect()),
             Some(Overlay::Invite { name, link, qr }) => {
-                let area = frame.area();
                 let qr_width = qr.first().map_or(0, |l| l.chars().count());
-                let mut lines: Vec<Line> = if qr.len() + 8 <= area.height as usize && qr_width + 4 <= area.width as usize {
+                let mut lines: Vec<Line> = if qr.len() + 10 <= area.height as usize && qr_width + 6 <= area.width as usize {
                     qr.iter().map(|l| Line::from(l.as_str())).collect()
                 } else {
                     vec![Line::styled(
-                        format!("The QR code needs a {}×{} terminal: enlarge it, or copy the link.", qr_width + 4, qr.len() + 8),
-                        DIM,
+                        format!("The QR code needs a {}×{} terminal: enlarge it, or copy the link.", qr_width + 6, qr.len() + 10),
+                        Style::new().fg(INK_SOFT),
                     )]
                 };
                 lines.extend([
                     Line::default(),
                     Line::from(link.as_str()),
                     Line::default(),
-                    Line::from(format!("For {name} only: one use, 7 days. c copies the link.")),
+                    Line::styled(format!("Give it to {name} only. It works once, for 7 days. c copies the link."), Style::new().fg(INK_SOFT)),
                 ]);
-                popup(frame, &format!("Invitation for {name}"), lines, Style::new());
+                popup(frame, &format!("An invitation for {name}"), lines);
             }
-            Some(Overlay::Confirm { name, number }) => popup(
-                frame,
-                &format!("{name} used your code"),
-                vec![
-                    Line::from(format!("Ask {name} to read their safety number. Yours:")),
+            Some(Overlay::Confirm { name, number }) => {
+                let mut lines = vec![Line::from("Ask them to read their safety number aloud. Yours is:"), Line::default()];
+                lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, Style::new().add_modifier(Modifier::BOLD))));
+                lines.extend([
                     Line::default(),
-                    Line::from(format!("    {}", groups(number))),
+                    Line::styled(format!("Keep them only if every digit matches. Otherwise it is not {name}."), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
                     Line::default(),
-                    Line::from(vec![
-                        Span::styled("Same digits? ", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                        Span::raw("y keeps them, n turns them down"),
-                    ]),
-                ],
-                Style::new(),
-            ),
+                    Line::from("y  the digits match, keep them"),
+                    Line::from("n  they differ, turn down"),
+                ]);
+                popup(frame, &format!("Someone used your code for {name}"), lines);
+            }
             None => {}
         }
     }
+
+    /// The people, each on two rows: name and time of the last message,
+    /// then that message.
+    fn draw_list(&self, frame: &mut ratatui::Frame, area: Rect) {
+        frame.render_widget(Block::new().style(Style::new().bg(NIGHT_DEEP)), area);
+        let inner = (area.width as usize).saturating_sub(4);
+        let mut lines = vec![Line::default(), Line::styled("  Nightpost", Style::new().add_modifier(Modifier::BOLD)), Line::default()];
+        for (i, c) in self.conversations.iter().enumerate() {
+            let row = Style::new().bg(if i == self.selected { RAISED } else { NIGHT_DEEP });
+            let last = c.messages.last();
+            let when = last.map(|m| short_time(m.time)).unwrap_or_default();
+            let name = fit(&c.name, inner.saturating_sub(cols(&when) + 1));
+            let name_style = if c.unread > 0 { row.add_modifier(Modifier::BOLD).fg(Color::White) } else { row.add_modifier(Modifier::BOLD) };
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(" ", row),
+                Span::styled(name, name_style),
+                Span::styled(format!(" {when} "), row.fg(LAMP)),
+            ]));
+            let preview = match last {
+                Some(m) if m.outgoing => format!("You: {}", m.text.lines().next().unwrap_or_default()),
+                Some(m) => m.text.lines().next().unwrap_or_default().to_string(),
+                None => "No messages yet".into(),
+            };
+            let count = if c.unread > 0 { format!(" {} ", c.unread) } else { String::new() };
+            let preview_style = if c.unread > 0 { row.fg(ONIONSKIN) } else { row.fg(LAMP) };
+            let mut second = vec![Span::raw(" "), Span::styled(" ", row)];
+            if count.is_empty() {
+                second.push(Span::styled(fit(&preview, inner), preview_style));
+            } else {
+                second.push(Span::styled(fit(&preview, inner.saturating_sub(cols(&count) + 1)), preview_style));
+                second.push(Span::styled(" ", row));
+                second.push(Span::styled(count, Style::new().fg(Color::White).bg(POST).add_modifier(Modifier::BOLD)));
+            }
+            second.push(Span::styled(" ", row));
+            lines.push(Line::from(second));
+            lines.push(Line::default());
+        }
+        // Keep the selected one in view.
+        let bottom = 3 + (self.selected + 1) * 3;
+        let skip = bottom.saturating_sub(area.height as usize);
+        frame.render_widget(Paragraph::new(lines).scroll((skip as u16, 0)), area);
+    }
 }
 
-/// A bordered box in the middle of the screen, as small as its content and
-/// never wider than the screen: long lines wrap.
-fn popup(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line>, style: Style) {
+/// The conversation as slips of paper: theirs on the left on onionskin,
+/// yours on the right in carbon, half a row of margin above and below each
+/// (the half blocks), the time under the last of a run, the day between
+/// days.
+fn slips(messages: &[HistoryItem], width: usize) -> Vec<Line<'static>> {
+    let widest = (width * 3 / 4).clamp(8, 72);
+    let mut lines = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
+        let day = date(m.time);
+        if i == 0 || date(messages[i - 1].time) != day {
+            lines.extend([Line::default(), Line::styled(day_label(m.time), DIM).alignment(Alignment::Center), Line::default()]);
+        }
+        let (paper, align) = if m.outgoing { (CARBON, Alignment::Right) } else { (ONIONSKIN, Alignment::Left) };
+        let text = Style::new().bg(paper).fg(if m.outgoing { CARBON_INK } else { INK });
+        let rows = wrap_words(&m.text, widest - 2);
+        let inside = rows.iter().map(|r| cols(r)).max().unwrap_or(0);
+        lines.push(Line::styled("▄".repeat(inside + 2), Style::new().fg(paper)).alignment(align));
+        for r in rows {
+            let pad = " ".repeat(inside - cols(&r));
+            lines.push(Line::from(Span::styled(format!(" {r}{pad} "), text)).alignment(align));
+        }
+        lines.push(Line::styled("▀".repeat(inside + 2), Style::new().fg(paper)).alignment(align));
+        let pending = m.outgoing && !m.delivered;
+        let run_ends = messages.get(i + 1).is_none_or(|n| n.outgoing != m.outgoing || n.time.saturating_sub(m.time) > 5 * 60_000 || date(n.time) != day);
+        if run_ends || pending {
+            let meta = if pending { format!("{}, not delivered yet", clock(m.time)) } else { clock(m.time) };
+            lines.push(Line::styled(meta, DIM).alignment(align));
+            lines.push(Line::default());
+        }
+    }
+    lines
+}
+
+/// A sheet of paper in the middle of the screen, as small as its content
+/// and never wider than the screen: long lines wrap.
+fn popup(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line>) {
     let area = frame.area();
-    let width = (lines.iter().map(Line::width).max().unwrap_or(0).max(title.len() + 4) as u16 + 4).min(area.width);
-    let paragraph = Paragraph::new(lines).style(style).wrap(Wrap { trim: false });
-    let height = (paragraph.line_count(width.saturating_sub(4)) as u16 + 2).min(area.height);
+    let mut all = vec![Line::styled(title.to_string(), Style::new().add_modifier(Modifier::BOLD)), Line::default()];
+    all.extend(lines);
+    all.extend([Line::default(), Line::styled("Esc closes", Style::new().fg(INK_SOFT))]);
+    let width = (all.iter().map(Line::width).max().unwrap_or(0) as u16 + 6).min(area.width);
+    let paragraph = Paragraph::new(all).wrap(Wrap { trim: false });
+    let height = (paragraph.line_count(width.saturating_sub(6)) as u16 + 2).min(area.height);
     let rect = Rect { x: (area.width - width) / 2, y: (area.height - height) / 2, width, height };
     frame.render_widget(Clear, rect);
-    let block = Block::bordered().title(format!(" {title} ")).title_bottom(" Esc ").padding(ratatui::widgets::Padding::horizontal(1));
-    frame.render_widget(paragraph.block(block), rect);
+    frame.render_widget(paragraph.block(Block::new().style(PAPER).padding(ratatui::widgets::Padding::new(3, 3, 1, 1))), rect);
 }
 
-/// The link as a QR code, two modules per character cell, light on dark.
+/// The link as a QR code, two modules per character cell, ink on the paper
+/// of the popup: not every phone reads one inverted.
 fn qr(link: &str) -> Vec<String> {
     use qrcode::render::unicode::Dense1x2;
     match qrcode::QrCode::new(link.as_bytes()) {
         Ok(code) => code
             .render::<Dense1x2>()
-            .dark_color(Dense1x2::Light)
-            .light_color(Dense1x2::Dark)
             .quiet_zone(true)
             .build()
             .lines()
@@ -602,11 +690,96 @@ fn next_boundary(s: &str, i: usize) -> usize {
     s[i..].chars().next().map_or(i, |c| i + c.len_utf8())
 }
 
+/// Display columns.
+fn cols(s: &str) -> usize {
+    s.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// Exactly `width` columns: padded, or cut with an ellipsis.
+fn fit(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    if cols(text) <= width {
+        out.push_str(text);
+    } else {
+        for c in text.chars() {
+            if cols(&out) + c.width().unwrap_or(0) + 1 > width {
+                break;
+            }
+            out.push(c);
+        }
+        out.push('…');
+    }
+    let pad = width.saturating_sub(cols(&out));
+    out + &" ".repeat(pad)
+}
+
+/// Lines cut between words to fit `width` columns; a longer word is cut
+/// by character, as [`wrap`] does.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    for line in text.split('\n') {
+        let mut row = String::new();
+        for word in line.split(' ') {
+            if !row.is_empty() && cols(&row) + 1 + cols(word) > width {
+                rows.push(std::mem::take(&mut row));
+            } else if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+            if cols(&row) > width {
+                let mut pieces = wrap(&row, width);
+                row = pieces.pop().unwrap_or_default();
+                rows.extend(pieces);
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+fn zoned(millis: u64) -> Option<jiff::Zoned> {
+    Some(jiff::Timestamp::from_millisecond(millis as i64).ok()?.to_zoned(jiff::tz::TimeZone::system()))
+}
+
+fn date(millis: u64) -> Option<jiff::civil::Date> {
+    zoned(millis).map(|z| z.date())
+}
+
 fn clock(millis: u64) -> String {
-    let Ok(ts) = jiff::Timestamp::from_millisecond(millis as i64) else { return "--:--".into() };
-    let zone = jiff::tz::TimeZone::system();
-    let (then, now) = (ts.to_zoned(zone.clone()), jiff::Timestamp::now().to_zoned(zone));
-    if then.date() == now.date() { then.strftime("%H:%M").to_string() } else { then.strftime("%d/%m %H:%M").to_string() }
+    zoned(millis).map_or("--:--".into(), |z| z.strftime("%H:%M").to_string())
+}
+
+fn today() -> Option<jiff::Zoned> {
+    zoned(jiff::Timestamp::now().as_millisecond() as u64)
+}
+
+/// "Today", "Yesterday", "Monday 5 October", "5 October 2025".
+fn day_label(millis: u64) -> String {
+    let (Some(then), Some(today)) = (zoned(millis), today()) else { return String::new() };
+    match (today.date() - then.date()).get_days() {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ if then.year() == today.year() => then.strftime("%A %-d %B").to_string(),
+        _ => then.strftime("%-d %B %Y").to_string(),
+    }
+}
+
+/// For the list: the time today, then "Yesterday", the weekday, the date.
+fn short_time(millis: u64) -> String {
+    let (Some(then), Some(today)) = (zoned(millis), today()) else { return String::new() };
+    match (today.date() - then.date()).get_days() {
+        0 => then.strftime("%H:%M").to_string(),
+        1 => "Yesterday".into(),
+        2..=6 => then.strftime("%a").to_string(),
+        _ => then.strftime("%-d %b").to_string(),
+    }
+}
+
+/// The 60 digits as 3 rows of 4 groups, the way they are read out.
+fn number_lines(number: &str) -> Vec<String> {
+    let groups: Vec<String> = number.as_bytes().chunks(5).map(|c| String::from_utf8_lossy(c).into_owned()).collect();
+    groups.chunks(4).map(|row| format!("    {}", row.join("  "))).collect()
 }
 
 pub fn groups(number: &str) -> String {
@@ -616,6 +789,15 @@ pub fn groups(number: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_break_between_words_and_long_words_by_character() {
+        assert_eq!(wrap_words("un deux trois", 8), ["un deux", "trois"]);
+        assert_eq!(wrap_words("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap_words("a\n\nb", 4), ["a", "", "b"]);
+        assert_eq!(fit("bonjour", 5), "bonj…");
+        assert_eq!(fit("日本", 5), "日本 ");
+    }
 
     #[test]
     fn wide_characters_wrap_and_place_the_cursor_by_columns() {

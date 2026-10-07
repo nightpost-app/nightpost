@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -16,7 +16,19 @@ use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, Reply, Request};
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
-const CSS: &str = include_str!("style.css");
+/// The typefaces travel inside the program: a Tor messenger fetches nothing
+/// from a font server. Both are under the SIL Open Font License (`fonts/`).
+static STYLE: LazyLock<String> = LazyLock::new(|| {
+    let face = |family: &str, weights: &str, bytes: &[u8]| {
+        format!(
+            "@font-face {{ font-family: \"{family}\"; font-weight: {weights}; src: url(data:font/ttf;base64,{}) format(\"truetype\"); }}\n",
+            data_encoding::BASE64.encode(bytes)
+        )
+    };
+    face("Literata", "200 900", include_bytes!("../fonts/Literata.ttf"))
+        + &face("Atkinson Hyperlegible Next", "200 800", include_bytes!("../fonts/AtkinsonHyperlegibleNext.ttf"))
+        + include_str!("style.css")
+});
 const HISTORY: u32 = 200;
 
 fn main() {
@@ -29,7 +41,7 @@ fn main() {
     };
     DIR.set(dir).expect("set once");
     let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(1040.0, 700.0));
-    let config = Config::new().with_window(window).with_menu(None).with_background_color((11, 11, 11, 255));
+    let config = Config::new().with_window(window).with_menu(None).with_background_color((22, 27, 43, 255));
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
 
@@ -86,19 +98,33 @@ impl State {
         }
     }
 
+    /// The contacts, and the history of those not loaded yet: the list
+    /// shows each one's last message.
     async fn reload_contacts(mut self) {
-        match call(Request::Contacts).await {
-            Ok(Reply::Contacts { contacts }) => {
-                let names: Vec<String> = contacts.into_iter().map(|c| c.name).collect();
-                let first = names.first().cloned();
-                self.contacts.set(names);
-                if self.selected.read().is_none()
-                    && let Some(first) = first
-                {
-                    self.select(first);
-                }
+        let names: Vec<String> = match call(Request::Contacts).await {
+            Ok(Reply::Contacts { contacts }) => contacts.into_iter().map(|c| c.name).collect(),
+            other => return self.fail(other),
+        };
+        for name in &names {
+            if self.messages.read().contains_key(name) {
+                continue;
             }
-            other => self.fail(other),
+            match call(Request::History { name: name.clone(), limit: HISTORY }).await {
+                Ok(Reply::History { messages }) => {
+                    self.messages.write().insert(name.clone(), messages);
+                }
+                other => self.fail(other),
+            }
+        }
+        let latest = {
+            let messages = self.messages.read();
+            names.iter().max_by_key(|n| messages.get(*n).and_then(|m| m.last()).map(|m| m.time)).cloned()
+        };
+        self.contacts.set(names);
+        if self.selected.read().is_none()
+            && let Some(latest) = latest
+        {
+            self.select(latest);
         }
     }
 
@@ -180,14 +206,14 @@ fn App() -> Element {
         while let Ok(Some(event)) = events.event().await {
             state.on_event(event);
         }
-        state.phase.set(Phase::Failed("The daemon stopped.".into()));
+        state.phase.set(Phase::Failed("The daemon stopped. Reopen Nightpost to start it again.".into()));
     });
 
     rsx! {
-        style { {CSS} }
+        style { {STYLE.as_str()} }
         match state.phase.read().clone() {
-            Phase::Connecting(what) => rsx! { div { class: "splash", p { class: "brand", "Nightpost" } p { class: "dim", "{what}" } } },
-            Phase::Failed(why) => rsx! { div { class: "splash", p { class: "brand", "Nightpost" } p { class: "danger-text", "{why}" } } },
+            Phase::Connecting(what) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { "{what}" } } },
+            Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
             Phase::Ready => rsx! {
                 div { class: "app",
                     Sidebar {}
@@ -202,28 +228,64 @@ fn App() -> Element {
 #[component]
 fn Sidebar() -> Element {
     let mut state = use_context::<State>();
-    let contacts = state.contacts.read().clone();
     let selected = state.selected.read().clone();
+    // Most recent conversation first, then those not started yet.
+    let mut rows: Vec<(String, Option<HistoryItem>)> = {
+        let messages = state.messages.read();
+        state.contacts.read().iter().map(|n| (n.clone(), messages.get(n).and_then(|m| m.last().cloned()))).collect()
+    };
+    rows.sort_by(|a, b| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time)).then_with(|| a.0.cmp(&b.0)));
     rsx! {
         aside {
-            h1 { "Nightpost" }
+            p { class: "wordmark", "Nightpost" }
             nav {
-                for name in contacts {
-                    div {
-                        key: "{name}",
-                        class: if selected.as_deref() == Some(name.as_str()) { "contact selected" } else { "contact" },
-                        onclick: { let name = name.clone(); move |_| state.select(name.clone()) },
-                        span { "{name}" }
-                        if let Some(n) = state.unread.read().get(&name) {
-                            span { class: "badge", "{n}" }
+                for (name, last) in rows {
+                    {
+                        let unread = state.unread.read().get(&name).copied().unwrap_or(0);
+                        let mut class = String::from("contact");
+                        if selected.as_deref() == Some(name.as_str()) { class.push_str(" selected"); }
+                        if unread > 0 { class.push_str(" unread"); }
+                        let preview = match &last {
+                            Some(m) if m.outgoing => format!("You: {}", m.text.lines().next().unwrap_or_default()),
+                            Some(m) => m.text.lines().next().unwrap_or_default().to_string(),
+                            None => "No messages yet".into(),
+                        };
+                        let when = last.as_ref().map(|m| short_time(m.time)).unwrap_or_default();
+                        let pick = name.clone();
+                        rsx! {
+                            button { key: "{name}", class: "{class}", onclick: move |_| state.select(pick.clone()),
+                                span { class: "name", "{name}" }
+                                span { class: "when", "{when}" }
+                                span { class: "preview", "{preview}" }
+                                if unread > 0 { span { class: "count", "{unread}" } }
+                            }
                         }
                     }
                 }
             }
-            div { class: "grow" }
-            button { class: "wide", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
+            button { class: "add", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
         }
     }
+}
+
+/// A line of the thread: a day, or a message with or without its time
+/// (messages from one side within five minutes share the last one's).
+enum Row {
+    Day(String),
+    Slip { m: HistoryItem, meta: bool },
+}
+
+fn rows(messages: &[HistoryItem]) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
+        let day = date(m.time);
+        if i == 0 || date(messages[i - 1].time) != day {
+            rows.push(Row::Day(day_label(m.time)));
+        }
+        let last = messages.get(i + 1).is_none_or(|n| n.outgoing != m.outgoing || n.time.saturating_sub(m.time) > 5 * 60_000 || date(n.time) != day);
+        rows.push(Row::Slip { m: m.clone(), meta: last || (m.outgoing && !m.delivered) });
+    }
+    rows
 }
 
 #[component]
@@ -233,13 +295,13 @@ fn Conversation() -> Element {
     let Some(name) = state.selected.read().clone() else {
         return rsx! {
             main { div { class: "empty",
-                p { "No conversation yet." }
-                p { class: "dim", "Invite someone with a link, or with a code you read out to them." }
-                button { onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
+                h2 { "Nobody here yet" }
+                p { "Nightpost only connects people who know each other. Send someone a one-time link, or read them a code on the phone." }
+                button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
             } }
         };
     };
-    let messages = state.messages.read().get(&name).cloned().unwrap_or_default();
+    let rows = rows(state.messages.read().get(&name).map(Vec::as_slice).unwrap_or_default());
 
     let send = {
         let name = name.clone();
@@ -251,7 +313,7 @@ fn Conversation() -> Element {
             draft.set(String::new());
             let to = name.clone();
             spawn(async move {
-                match call(Request::Send { to: to.clone(), text: text.clone() }).await {
+                match call(Request::Send { to, text: text.clone() }).await {
                     // The message itself comes back as Event::Sent.
                     Ok(Reply::Sent { .. }) => {}
                     other => {
@@ -271,6 +333,7 @@ fn Conversation() -> Element {
             header {
                 h2 { "{name}" }
                 button {
+                    class: "quiet",
                     onclick: move |_| {
                         let name = verify_name.clone();
                         spawn(async move {
@@ -280,27 +343,37 @@ fn Conversation() -> Element {
                             }
                         });
                     },
-                    "Safety number"
+                    "Compare safety number"
                 }
             }
             // Reversed column: the newest message sits at the bottom and the
             // view stays there as messages arrive.
             div { class: "thread",
-                for m in messages.into_iter().rev() {
-                    div { key: "{m.id}", class: if m.outgoing { "msg out" } else { "msg in" },
-                        div { class: "text", "{m.text}" }
-                        div { class: "meta",
-                            "{clock(m.time)}"
-                            if m.outgoing && !m.delivered { " · not delivered yet" }
+                div { class: "column",
+                    for row in rows.into_iter().rev() {
+                        match row {
+                            Row::Day(label) => rsx! { p { key: "day-{label}", class: "day", "{label}" } },
+                            Row::Slip { m, meta } => rsx! {
+                                div { key: "{m.id}", class: if m.outgoing { "slip-row out" } else { "slip-row in" },
+                                    div { class: "slip", "{m.text}" }
+                                    if meta {
+                                        p { class: "meta",
+                                            "{clock(m.time)}"
+                                            if m.outgoing && !m.delivered { span { class: "pending", ", not delivered yet" } }
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
                 }
             }
             div { class: "composer",
                 textarea {
-                    placeholder: "Message to {name} — Enter sends, Shift+Enter new line",
+                    "aria-label": "Message to {name}",
+                    placeholder: "Write to {name}",
                     value: "{draft}",
-                    rows: "2",
+                    rows: "1",
                     oninput: move |e| draft.set(e.value()),
                     onkeydown: move |e: KeyboardEvent| {
                         if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
@@ -309,9 +382,9 @@ fn Conversation() -> Element {
                         }
                     },
                 }
-                button { onclick: move |_| send_click(), "Send" }
+                button { class: "send", onclick: move |_| send_click(), "Send" }
             }
-            div { class: "status", "{state.status}" }
+            p { class: "status", "{state.status}" }
         }
     }
 }
@@ -324,51 +397,51 @@ fn DialogView() -> Element {
     let body = match dialog {
         Dialog::Add => rsx! { AddDialog {} },
         Dialog::Invite { name, link } => rsx! {
-            h3 { "Invitation for {name}" }
-            p { class: "dim", "Send this link to {name} only, by a channel you trust. It works once and expires in 7 days." }
+            h3 { "An invitation for {name}" }
+            p { "Give it to {name} only, through a channel you trust. It works once, for 7 days." }
             img { class: "qr", src: "{qr(&link)}", alt: "QR code of the invitation" }
-            textarea { class: "link", readonly: true, rows: "5", value: "{link}" }
-            div { class: "row",
-                button { onclick: move |_| copy(&link), "Copy the link" }
+            textarea { class: "link", readonly: true, rows: "4", "aria-label": "Invitation link", value: "{link}" }
+            div { class: "actions",
+                button { class: "primary", onclick: move |_| copy(&link), "Copy the link" }
                 button { onclick: close, "Done" }
             }
         },
         Dialog::Code { name, code } => rsx! {
-            h3 { "Code for {name}" }
-            p { class: "dim", "Read it to {name}, on a call or in person. It is valid 10 minutes." }
-            p { class: "code", "{code}" }
-            p { class: "dim", "Once {name} types it, you will compare a safety number before anything is kept." }
-            div { class: "row", button { onclick: close, "Hide" } }
+            h3 { "Read this code to {name}" }
+            p { "On a call or in person. It works for 10 minutes." }
+            p { class: "code", "{code.replace('-', \" \")}" }
+            p { "When {name} types it in, you will both compare a safety number before anything is kept." }
+            div { class: "actions", button { onclick: close, "Hide" } }
         },
         Dialog::Confirm { name, number } => {
             let (keep, refuse) = (name.clone(), name.clone());
             rsx! {
-                h3 { "{name} used your code" }
-                p { "Ask {name} to read their safety number. Yours:" }
+                h3 { "Someone used your code for {name}" }
+                p { "Ask them to read their safety number aloud. Yours is:" }
                 p { class: "number", "{groups(&number)}" }
-                p { class: "accent-text", "Same digits? Only then is it really {name}." }
-                div { class: "row",
-                    button { onclick: move |_| confirm(state, keep.clone(), true), "Same — keep {name}" }
-                    button { class: "danger", onclick: move |_| confirm(state, refuse.clone(), false), "Different — turn down" }
+                p { class: "warning", "Keep them only if every digit matches. Otherwise it is not {name}." }
+                div { class: "actions",
+                    button { class: "primary", onclick: move |_| confirm(state, keep.clone(), true), "The digits match" }
+                    button { class: "danger", onclick: move |_| confirm(state, refuse.clone(), false), "They differ, turn down" }
                 }
             }
         }
         Dialog::Waiting { name, number } => rsx! {
             h3 { "Waiting for {name}" }
-            p { "Read this safety number to {name}; they check it matches theirs:" }
+            p { "Read this safety number to {name}. They check that it matches theirs:" }
             p { class: "number", "{groups(&number)}" }
-            p { class: "dim", "{name} will be added as soon as they confirm." }
+            p { "{name} is added as soon as they confirm." }
         },
         Dialog::Verify { name, number } => rsx! {
-            h3 { "Safety number with {name}" }
-            p { class: "dim", "Read it to each other, on a call or in person. The same digits on both sides mean nobody is in between." }
+            h3 { "Your safety number with {name}" }
+            p { "Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between." }
             p { class: "number", "{groups(&number)}" }
-            div { class: "row", button { onclick: close, "Done" } }
+            div { class: "actions", button { class: "primary", onclick: close, "Done" } }
         },
     };
     rsx! {
         div { class: "overlay",
-            div { class: "dialog", {body} }
+            div { class: "sheet", role: "dialog", {body} }
         }
     }
 }
@@ -416,15 +489,15 @@ fn AddDialog() -> Element {
         h3 { "Add someone" }
         label { "Their name, as you will see it" }
         input { autofocus: true, value: "{name}", placeholder: "Alice", oninput: move |e| name.set(e.value()) }
-        div { class: "row",
-            button { onclick: move |_| by_link(false), "Create a link" }
+        div { class: "actions",
+            button { class: "primary", onclick: move |_| by_link(false), "Create a link" }
             button { onclick: move |_| by_code(true), "Create a code to read out" }
         }
         hr {}
-        label { "Or paste their link, or type the code they read you" }
+        label { "Or use what they gave you: their link, or the code they read you" }
         input { value: "{pasted}", placeholder: "nightpost:1:… or 482-109-375-512", oninput: move |e| pasted.set(e.value()) }
-        div { class: "row",
-            button { onclick: accept, "Use it" }
+        div { class: "actions",
+            button { class: "primary", onclick: accept, "Use it" }
             button { onclick: move |_| state.dialog.set(None), "Cancel" }
         }
     }
@@ -519,11 +592,39 @@ fn qr(link: &str) -> String {
     format!("data:image/svg+xml;base64,{}", data_encoding::BASE64.encode(image.as_bytes()))
 }
 
+fn zoned(millis: u64) -> Option<jiff::Zoned> {
+    Some(jiff::Timestamp::from_millisecond(millis as i64).ok()?.to_zoned(jiff::tz::TimeZone::system()))
+}
+
+fn date(millis: u64) -> Option<jiff::civil::Date> {
+    zoned(millis).map(|z| z.date())
+}
+
 fn clock(millis: u64) -> String {
-    let Ok(ts) = jiff::Timestamp::from_millisecond(millis as i64) else { return String::new() };
-    let zone = jiff::tz::TimeZone::system();
-    let (then, now) = (ts.to_zoned(zone.clone()), jiff::Timestamp::now().to_zoned(zone));
-    if then.date() == now.date() { then.strftime("%H:%M").to_string() } else { then.strftime("%d/%m %H:%M").to_string() }
+    zoned(millis).map(|z| z.strftime("%H:%M").to_string()).unwrap_or_default()
+}
+
+/// "Today", "Yesterday", "Monday 5 October", "5 October 2025".
+fn day_label(millis: u64) -> String {
+    let (Some(then), Some(today)) = (zoned(millis), zoned(jiff::Timestamp::now().as_millisecond() as u64)) else { return String::new() };
+    let days = (today.date() - then.date()).get_days();
+    match days {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ if then.year() == today.year() => then.strftime("%A %-d %B").to_string(),
+        _ => then.strftime("%-d %B %Y").to_string(),
+    }
+}
+
+/// For the list: the time today, then "Yesterday", the weekday, the date.
+fn short_time(millis: u64) -> String {
+    let (Some(then), Some(today)) = (zoned(millis), zoned(jiff::Timestamp::now().as_millisecond() as u64)) else { return String::new() };
+    match (today.date() - then.date()).get_days() {
+        0 => then.strftime("%H:%M").to_string(),
+        1 => "Yesterday".into(),
+        2..=6 => then.strftime("%A").to_string(),
+        _ => then.strftime("%-d %b").to_string(),
+    }
 }
 
 /// 60 digits as 3 lines of 4 groups, the way they are read out.
