@@ -14,9 +14,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # libsignal compiles its protobufs with protoc at build time.
+      # libsignal compiles its protobufs with protoc at build time; the
+      # graphical interface links the system webview (WebKitGTK on Linux).
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libxdo-dev
       - if: runner.os == 'macOS'
         run: brew install protobuf
       - if: runner.os == 'Windows'
@@ -33,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libxdo-dev
       - name: Check with the declared rust-version
         run: |
           msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)

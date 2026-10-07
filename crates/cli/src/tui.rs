@@ -239,11 +239,8 @@ impl App {
             return;
         };
         match requests.call(&Request::Send { to, text: input.clone() }).await {
-            Ok(Reply::Sent { id }) => {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-                self.conversations[self.selected].messages.push(HistoryItem { id, outgoing: true, time: now, text: input, delivered: false });
-                self.scroll = 0;
-            }
+            // The message itself comes back as Event::Sent.
+            Ok(Reply::Sent { .. }) => self.scroll = 0,
             Ok(Reply::Error { message }) => {
                 self.status = message;
                 self.input = input;
@@ -345,6 +342,11 @@ impl App {
                         // The name, never the text: a notification can show on a locked screen.
                         self.notify = Some(format!("Message from {from}"));
                     }
+                }
+            }
+            Update::Event(Event::Sent { to, id, time, text }) => {
+                if let Some(c) = self.conversations.iter_mut().find(|c| c.name == to) {
+                    c.messages.push(HistoryItem { id, outgoing: true, time, text, delivered: false });
                 }
             }
             Update::Event(Event::Delivered { to, id }) => {

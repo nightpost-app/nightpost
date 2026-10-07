@@ -4,7 +4,7 @@
 //! the daemon writes to `api.token` at start: the socket's directory is
 //! private, and the token keeps it so where a named pipe is not.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context as _, Result, bail};
@@ -62,6 +62,9 @@ pub enum Reply {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Message { from: String, id: String, time: u64, text: String },
+    /// Sent from any interface: each shows it from here, not from its own
+    /// reply, so all of them show the same conversation.
+    Sent { to: String, id: String, time: u64, text: String },
     Delivered { to: String, id: String },
     ContactAdded { name: String },
     /// Someone used an oral code: the two people compare this number before
@@ -82,6 +85,23 @@ pub struct HistoryItem {
 pub struct ContactInfo {
     pub name: String,
     pub safety_number: String,
+}
+
+/// The data directory: `NIGHTPOST_DIR` if set (tests run several), else
+/// the platform's. Created owner-only, and returned absolute so the socket
+/// and the keychain entry do not depend on where a command runs from.
+pub fn data_dir() -> Result<PathBuf> {
+    let dir = match std::env::var_os("NIGHTPOST_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => directories::ProjectDirs::from("", "", "Nightpost").context("no home directory")?.data_dir().to_path_buf(),
+    };
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(std::fs::canonicalize(&dir)?)
 }
 
 /// Answers clients until the process ends.

@@ -4,7 +4,7 @@
 mod tui;
 
 use std::io::Read as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 use nightpost_core::api::{Client, Event, Reply, Request};
@@ -42,7 +42,7 @@ async fn main() {
 
 async fn run(args: Vec<String>) -> Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let dir = data_dir()?;
+    let dir = nightpost_core::api::data_dir()?;
     let request = match args.as_slice() {
         [] => return tui::run(&dir).await,
         ["daemon"] => return daemon(&dir).await,
@@ -167,6 +167,8 @@ async fn listen(dir: &Path) -> Result<Client> {
 async fn daemon(dir: &Path) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // Plain text when stderr is a file (the graphical interface's daemon.log).
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "warn,nightpost_core=info".into()),
@@ -226,18 +228,3 @@ fn unlock(dir: &Path) -> Result<Unlock> {
     Unlock::new(secret, passphrase).context("nothing to derive the database key from")
 }
 
-fn data_dir() -> Result<PathBuf> {
-    let dir = match std::env::var_os("NIGHTPOST_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => directories::ProjectDirs::from("", "", "Nightpost").context("no home directory")?.data_dir().to_path_buf(),
-    };
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    // Absolute, so the socket and keychain label do not depend on where the
-    // command runs from.
-    Ok(std::fs::canonicalize(&dir)?)
-}

@@ -85,6 +85,7 @@ anyhow = "1"
 # The local API: JSON lines over a Unix socket, or a named pipe on Windows.
 serde_json = "1"
 interprocess = { version = "2", features = ["tokio"] }
+directories = "6"
 
 [dev-dependencies]
 tempfile = "3"

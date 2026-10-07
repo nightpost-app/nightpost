@@ -333,6 +333,7 @@ impl<T: Transport + 'static> Daemon<T> {
             }
             Ok(())
         })?;
+        let _ = self.events.send(Event::Sent { to: to.into(), id: hex(&id), time, text: text.into() });
         for device in &devices.devices {
             if let Some(Some(link)) = self.links.borrow().get(&(contact.identity.clone(), device.id)) {
                 let _ = link.send(());
@@ -740,6 +741,11 @@ mod tests {
         timeout(Duration::from_secs(10), events.recv()).await.expect("no event within 10 s").unwrap()
     }
 
+    fn sent(to: &str, id: [u8; 16], text: &str) -> impl Fn(&Event) -> bool {
+        let (to, id, text) = (to.to_string(), hex(&id), text.to_string());
+        move |e| matches!(e, Event::Sent { to: t, id: i, text: x, .. } if *t == to && *i == id && *x == text)
+    }
+
     fn message(from: &str, id: [u8; 16], text: &str) -> impl Fn(&Event) -> bool {
         let (from, id, text) = (from.to_string(), hex(&id), text.to_string());
         move |e| matches!(e, Event::Message { from: f, id: i, text: t, .. } if *f == from && *i == id && *t == text)
@@ -773,16 +779,19 @@ mod tests {
 
                 let id = bob.send("alice", "bonjour").unwrap();
                 assert!(message("bob", id, "bonjour")(&next(&mut alice_events).await));
+                assert!(sent("alice", id, "bonjour")(&next(&mut bob_events).await));
                 assert_eq!(next(&mut bob_events).await, Event::Delivered { to: "alice".into(), id: hex(&id) });
                 let id = alice.send("bob", "salut").unwrap();
                 assert!(message("alice", id, "salut")(&next(&mut bob_events).await));
                 let history = bob.history("alice", 10).unwrap();
                 assert_eq!(history.iter().map(|m| (m.outgoing, m.text.as_str())).collect::<Vec<_>>(), [(true, "bonjour"), (false, "salut")]);
+                assert!(sent("bob", id, "salut")(&next(&mut alice_events).await));
                 assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
 
                 bob.stop().await;
                 drop(bob);
                 let id = alice.send("bob", "tu es là ?").unwrap();
+                assert!(sent("bob", id, "tu es là ?")(&next(&mut alice_events).await));
                 sleep(Duration::from_millis(200)).await;
 
                 let bob = open(dir.path(), "bob-device", &net);
