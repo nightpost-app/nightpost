@@ -20,7 +20,10 @@
 //! anything: answering for a different identity would let a contact relay our
 //! proof elsewhere (murmure learnt this one).
 
+use std::io;
+
 use libsignal_protocol::{IdentityKey, PrivateKey, PublicKey};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use rand::{Rng, TryRngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -78,6 +81,26 @@ pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> Result<T, FrameError> {
         Ok((msg, [])) => Ok(msg),
         _ => Err(FrameError::Malformed),
     }
+}
+
+/// Writes `msg` as one frame.
+pub async fn send<T: Serialize>(io: &mut (impl AsyncWrite + Unpin), msg: &T) -> io::Result<()> {
+    io.write_all(&encode(msg).map_err(invalid)?).await?;
+    io.flush().await
+}
+
+/// Reads one frame. The length is checked before anything is allocated.
+pub async fn receive<T: DeserializeOwned>(io: &mut (impl AsyncRead + Unpin)) -> io::Result<T> {
+    let mut header = [0; HEADER];
+    io.read_exact(&mut header).await?;
+    let mut frame = vec![0; frame_len(header).map_err(invalid)?];
+    frame[..HEADER].copy_from_slice(&header);
+    io.read_exact(&mut frame[HEADER..]).await?;
+    decode(&frame).map_err(invalid)
+}
+
+fn invalid(e: FrameError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}"))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

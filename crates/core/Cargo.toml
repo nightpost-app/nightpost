@@ -18,8 +18,11 @@ async-trait = "0.1"
 # libsignal's own version: its functions take an RNG with this rand's traits.
 rand = "0.9"
 # SQLCipher compiled from source, with OpenSSL compiled from source too: no
-# system library to install on any of the three platforms.
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+# system library to install on any of the three platforms. 0.39, not newer:
+# arti's directory cache links the same libsqlite3-sys, and a native library
+# can only be linked once. arti's copy then gets SQLCipher too, which without
+# a key behaves as plain SQLite.
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
 argon2 = "0.6"
 # Where the database secret lives by default: the OS keychain (Secret Service
 # over D-Bus on Linux, Keychain on macOS, Credential Manager on Windows).
@@ -36,6 +39,48 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 # a hand copy confuses.
 data-encoding = "2"
 
-[dev-dependencies]
+# Tor, pinned with "=": 0.x crates, monthly releases, API breaks at every bump.
+# Features, as murmure settled them:
+# - onion-service-{client,service}, experimental-api: dial, and publish under
+#   our own key (launch_onion_service_with_hsid, discovery key API).
+# - restricted-discovery: the descriptor is encrypted for named clients, so a
+#   stranger who knows the address cannot even tell we are online.
+# - vanguards: guard-discovery protection for a long-lived service.
+# - ephemeral-keystore: arti's keys stay in memory. Its on-disk store writes
+#   one plaintext directory per contact, next to an encrypted database.
+# - rustls rather than native-tls: the TLS handshake then looks the same on
+#   every OS. default-features off drops native-tls; tokio and compression
+#   are the rest of the default set.
+arti-client = { version = "=0.47.0", default-features = false, features = [
+    "tokio",
+    "compression",
+    "rustls",
+    "experimental-api",
+    "onion-service-client",
+    "onion-service-service",
+    "restricted-discovery",
+    "vanguards",
+    "ephemeral-keystore",
+] }
+# Named for the service config, our own HsIdKeypair, the discovery keys and
+# the keystore kind, none of which arti-client re-exports.
+tor-hsservice = "=0.47.0"
+tor-hscrypto = "=0.47.0"
+tor-llcrypto = "=0.47.0"
+tor-keymgr = "=0.47.0"
+tor-config = "=0.47.0"
+# The CONNECTED reply that accepts an incoming stream.
+tor-cell = "=0.47.0"
+tor-rtcompat = { version = "=0.47.0", features = ["tokio", "rustls"] }
+# Only to pick rustls' crypto backend for arti, which selects none: without
+# this the first TLS connection panics. ring, because aws-lc-rs wants cmake and
+# NASM on Windows.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+safelog = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }
 futures = "0.3"
+# arti logs through it already; the interfaces decide where it goes.
+tracing = "0.1"
+
+[dev-dependencies]
 tempfile = "3"

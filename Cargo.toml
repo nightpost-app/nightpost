@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Built only as a [patch] of a dependency; its own tests run in CI on Windows.
+exclude = ["patches"]
 
 [workspace.package]
 version = "0.0.0"
@@ -13,3 +15,10 @@ publish = false
 # per call.
 [profile.dev.package.argon2]
 opt-level = 3
+
+[patch.crates-io]
+# saturating-time 0.5.0 (pulled in by tor-netdoc) never returns on Windows: it
+# halves a step down to 1 ns while Windows counts in 100 ns, so the last steps
+# change nothing and the loop never ends. The copy under patches/ stops when a
+# step no longer changes the value. Drop it once upstream has the fix.
+saturating-time = { path = "patches/saturating-time" }

@@ -26,6 +26,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The saturating-time fix only matters on Windows, and its test with it.
+      - if: runner.os == 'Windows'
+        run: cargo test --manifest-path patches/saturating-time/Cargo.toml
   msrv:
     runs-on: ubuntu-latest
     steps:
