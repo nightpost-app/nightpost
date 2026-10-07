@@ -1,0 +1,423 @@
+//! What goes over a link: frames, and the handshake that opens it.
+//!
+//! A frame is a big-endian u32 length, a postcard body, and zeros up to the
+//! next multiple of 512 bytes, so an observer of the stream learns sizes only
+//! to the nearest 512. Nothing larger than 1 MiB is read.
+//!
+//! The handshake, on a stream to an onion service:
+//!
+//! 1. caller → `Hello { version, account, device, devices, nonce_c }`
+//! 2. service → `Challenge { version, account, device, devices, nonce_s, sig_s }`
+//! 3. caller → `Proof { sig_c }`
+//!
+//! Each side signs, with its device key, the whole transcript: role, the
+//! service's onion, both nonces, both accounts and devices. The key must be in
+//! the account's signed device list, which travels in the handshake and goes
+//! through [`SignedDeviceList::verify`] like any other. A mailbox can thus
+//! open links without holding the account identity.
+//!
+//! The caller checks the service is the account it dialed before signing
+//! anything: answering for a different identity would let a contact relay our
+//! proof elsewhere (murmure learnt this one).
+
+use libsignal_protocol::{IdentityKey, PrivateKey, PublicKey};
+use rand::{Rng, TryRngCore, rngs::OsRng};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::PROTOCOL_VERSION;
+use crate::identity::{DeviceList, DeviceListError, SignedDeviceList};
+
+pub const MAX_FRAME: usize = 1 << 20;
+const PAD: usize = 512;
+const HEADER: usize = 4;
+const CONTEXT: &[u8] = b"nightpost-link-v1";
+const SERVICE: u8 = 1;
+const CALLER: u8 = 2;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FrameError {
+    TooLarge,
+    Malformed,
+}
+
+/// The whole frame for `msg`, padding included.
+pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, FrameError> {
+    let body = postcard::to_stdvec(msg).map_err(|_| FrameError::Malformed)?;
+    let total = (HEADER + body.len()).next_multiple_of(PAD);
+    if total > MAX_FRAME {
+        return Err(FrameError::TooLarge);
+    }
+    let mut frame = Vec::with_capacity(total);
+    frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&body);
+    frame.resize(total, 0);
+    Ok(frame)
+}
+
+/// How many bytes the frame starting with `header` has in all, header
+/// included: what to read before calling [`decode`].
+pub fn frame_len(header: [u8; HEADER]) -> Result<usize, FrameError> {
+    // Compared before adding, so a huge length cannot wrap on 32 bits.
+    let len = u32::from_be_bytes(header) as usize;
+    if len > MAX_FRAME - HEADER {
+        return Err(FrameError::TooLarge);
+    }
+    Ok((HEADER + len).next_multiple_of(PAD))
+}
+
+pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> Result<T, FrameError> {
+    let header: [u8; HEADER] = frame
+        .get(..HEADER)
+        .and_then(|h| h.try_into().ok())
+        .ok_or(FrameError::Malformed)?;
+    if frame.len() != frame_len(header)? {
+        return Err(FrameError::Malformed);
+    }
+    let body = &frame[HEADER..HEADER + u32::from_be_bytes(header) as usize];
+    match postcard::take_from_bytes(body) {
+        Ok((msg, [])) => Ok(msg),
+        _ => Err(FrameError::Malformed),
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Hello {
+    pub version: u16,
+    pub account: Vec<u8>,
+    pub device: u8,
+    pub devices: SignedDeviceList,
+    pub nonce: [u8; 32],
+    /// The invitation being answered, when the caller is not a contact yet.
+    pub token: Option<[u8; 16]>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Challenge {
+    pub version: u16,
+    pub account: Vec<u8>,
+    pub device: u8,
+    pub devices: SignedDeviceList,
+    pub nonce: [u8; 32],
+    pub signature: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Proof {
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum HandshakeError {
+    /// The other side runs another protocol version: one must update.
+    Version(u16),
+    /// The service is not the account that was dialed.
+    WrongAccount,
+    Devices(DeviceListError),
+    UnknownDevice,
+    BadSignature,
+    Malformed,
+}
+
+/// This device, as it presents itself.
+pub struct Me<'a> {
+    pub account: &'a IdentityKey,
+    pub device: u8,
+    /// The device's signing key, listed under `device` in `devices`.
+    pub key: &'a PrivateKey,
+    pub devices: &'a SignedDeviceList,
+}
+
+/// The other side, once authenticated.
+#[derive(Debug)]
+pub struct Peer {
+    pub account: IdentityKey,
+    pub device: u8,
+    pub devices: DeviceList,
+}
+
+/// The caller's side. `onion` is the service dialed.
+pub struct Caller {
+    onion: [u8; 32],
+    hello: Hello,
+}
+
+impl Caller {
+    pub fn new(me: &Me, onion: [u8; 32], token: Option<[u8; 16]>) -> Caller {
+        let hello = Hello {
+            version: PROTOCOL_VERSION,
+            account: me.account.serialize().into_vec(),
+            device: me.device,
+            devices: me.devices.clone(),
+            nonce: OsRng.unwrap_err().random(),
+            token,
+        };
+        Caller { onion, hello }
+    }
+
+    pub fn hello(&self) -> &Hello {
+        &self.hello
+    }
+
+    /// Checks the service is `expected` and answers. `previous` is the device
+    /// list already accepted from that account, if any.
+    pub fn on_challenge(
+        &self,
+        me: &Me,
+        challenge: &Challenge,
+        expected: &IdentityKey,
+        previous: Option<&SignedDeviceList>,
+    ) -> Result<(Proof, Peer), HandshakeError> {
+        check_version(challenge.version)?;
+        if challenge.account != expected.serialize().as_ref() {
+            return Err(HandshakeError::WrongAccount);
+        }
+        let peer = authenticate(
+            &challenge.account,
+            challenge.device,
+            &challenge.devices,
+            previous,
+            &transcript(SERVICE, &self.onion, &self.hello, &challenge.account, challenge.device, &challenge.nonce),
+            &challenge.signature,
+        )?;
+        let signature = sign(
+            me,
+            &transcript(CALLER, &self.onion, &self.hello, &challenge.account, challenge.device, &challenge.nonce),
+        );
+        Ok((Proof { signature }, peer))
+    }
+}
+
+/// The service's side, from a received `Hello` to an authenticated caller.
+pub struct Service {
+    onion: [u8; 32],
+    hello: Hello,
+    challenge: Challenge,
+}
+
+impl Service {
+    /// Answers `hello` on the service `onion` (ours). The caller is not
+    /// authenticated until [`Service::on_proof`].
+    pub fn on_hello(me: &Me, onion: [u8; 32], hello: Hello) -> Result<(Service, Challenge), HandshakeError> {
+        check_version(hello.version)?;
+        let account = me.account.serialize().into_vec();
+        let nonce = OsRng.unwrap_err().random();
+        let signature = sign(me, &transcript(SERVICE, &onion, &hello, &account, me.device, &nonce));
+        let challenge = Challenge {
+            version: PROTOCOL_VERSION,
+            account,
+            device: me.device,
+            devices: me.devices.clone(),
+            nonce,
+            signature,
+        };
+        Ok((Service { onion, hello, challenge: challenge.clone() }, challenge))
+    }
+
+    /// Who is calling, as the `Hello` claims: the account to look up the
+    /// known device list of, and the invitation token if any.
+    pub fn hello(&self) -> &Hello {
+        &self.hello
+    }
+
+    pub fn on_proof(&self, proof: &Proof, previous: Option<&SignedDeviceList>) -> Result<Peer, HandshakeError> {
+        let c = &self.challenge;
+        authenticate(
+            &self.hello.account,
+            self.hello.device,
+            &self.hello.devices,
+            previous,
+            &transcript(CALLER, &self.onion, &self.hello, &c.account, c.device, &c.nonce),
+            &proof.signature,
+        )
+    }
+}
+
+fn check_version(theirs: u16) -> Result<(), HandshakeError> {
+    if theirs == PROTOCOL_VERSION { Ok(()) } else { Err(HandshakeError::Version(theirs)) }
+}
+
+/// Everything both sides agree on once the challenge is out; `role` says who
+/// signs it. Fixed-size fields first, then the one variable field (an
+/// account) behind its length.
+fn transcript(role: u8, onion: &[u8; 32], hello: &Hello, service: &[u8], service_device: u8, nonce_s: &[u8; 32]) -> Vec<u8> {
+    let mut t = Vec::with_capacity(256);
+    t.extend_from_slice(CONTEXT);
+    t.push(role);
+    t.extend_from_slice(onion);
+    t.extend_from_slice(&hello.nonce);
+    t.extend_from_slice(nonce_s);
+    for (account, device) in [(&hello.account[..], hello.device), (service, service_device)] {
+        t.extend_from_slice(&(account.len() as u16).to_be_bytes());
+        t.extend_from_slice(account);
+        t.push(device);
+    }
+    t
+}
+
+fn sign(me: &Me, transcript: &[u8]) -> Vec<u8> {
+    me.key
+        .calculate_signature(transcript, &mut OsRng.unwrap_err())
+        .expect("signing with a valid key")
+        .into_vec()
+}
+
+/// Accepts `devices` for `account`, then checks `signature` over
+/// `transcript` comes from the key it lists for `device`.
+fn authenticate(
+    account: &[u8],
+    device: u8,
+    devices: &SignedDeviceList,
+    previous: Option<&SignedDeviceList>,
+    transcript: &[u8],
+    signature: &[u8],
+) -> Result<Peer, HandshakeError> {
+    let account = IdentityKey::decode(account).map_err(|_| HandshakeError::Malformed)?;
+    let devices = devices.verify(&account, previous).map_err(HandshakeError::Devices)?;
+    let key = devices.device(device).ok_or(HandshakeError::UnknownDevice)?;
+    let key = PublicKey::deserialize(&key.key).map_err(|_| HandshakeError::Malformed)?;
+    if !key.verify_signature(transcript, signature) {
+        return Err(HandshakeError::BadSignature);
+    }
+    Ok(Peer { account, device, devices })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::{Device, Role};
+    use libsignal_protocol::{IdentityKeyPair, KeyPair};
+
+    struct Account {
+        identity: IdentityKeyPair,
+        device_key: KeyPair,
+        devices: SignedDeviceList,
+    }
+
+    impl Account {
+        fn new() -> Account {
+            let mut rng = OsRng.unwrap_err();
+            let identity = IdentityKeyPair::generate(&mut rng);
+            let device_key = KeyPair::generate(&mut rng);
+            let list = DeviceList::first(vec![Device {
+                id: 1,
+                onion: [7; 32],
+                key: device_key.public_key.serialize().into_vec(),
+                role: Role::Normal,
+            }]);
+            let devices = SignedDeviceList::sign(&list, &identity).unwrap();
+            Account { identity, device_key, devices }
+        }
+
+        fn me(&self) -> Me<'_> {
+            Me { account: self.identity.identity_key(), device: 1, key: &self.device_key.private_key, devices: &self.devices }
+        }
+    }
+
+    const ONION: [u8; 32] = [7; 32];
+
+    #[test]
+    fn frames_are_padded_bounded_and_exact() {
+        let frame = encode(&("hello", 42u32)).unwrap();
+        assert_eq!(frame.len(), PAD);
+        assert_eq!(frame_len(frame[..4].try_into().unwrap()), Ok(PAD));
+        assert_eq!(decode::<(String, u32)>(&frame), Ok(("hello".into(), 42)));
+
+        let big = encode(&vec![1u8; 600]).unwrap();
+        assert_eq!(big.len(), 2 * PAD);
+        assert_eq!(encode(&vec![0u8; MAX_FRAME]), Err(FrameError::TooLarge));
+        assert_eq!(frame_len(u32::MAX.to_be_bytes()), Err(FrameError::TooLarge));
+        assert_eq!(frame_len((MAX_FRAME as u32).to_be_bytes()), Err(FrameError::TooLarge));
+
+        // Cut short, or a body longer than what it decodes to.
+        assert_eq!(decode::<(String, u32)>(&frame[..PAD - 1]), Err(FrameError::Malformed));
+        assert_eq!(decode::<String>(&frame), Err(FrameError::Malformed));
+    }
+
+    #[test]
+    fn both_sides_learn_who_the_other_is() {
+        let (alice, bob) = (Account::new(), Account::new());
+        let caller = Caller::new(&alice.me(), ONION, Some([5; 16]));
+        // Over the wire and back, as the service receives it.
+        let hello: Hello = decode(&encode(caller.hello()).unwrap()).unwrap();
+        let (service, challenge) = Service::on_hello(&bob.me(), ONION, hello).unwrap();
+        assert_eq!(service.hello().token, Some([5; 16]));
+        let (proof, bob_seen) = caller.on_challenge(&alice.me(), &challenge, bob.identity.identity_key(), None).unwrap();
+        let alice_seen = service.on_proof(&proof, None).unwrap();
+        assert_eq!(alice_seen.account, *alice.identity.identity_key());
+        assert_eq!(bob_seen.account, *bob.identity.identity_key());
+        assert_eq!((alice_seen.device, bob_seen.device), (1, 1));
+    }
+
+    #[test]
+    fn the_caller_refuses_a_wrong_onion_nonce_or_account() {
+        let (alice, bob, carol) = (Account::new(), Account::new(), Account::new());
+        let bob_id = bob.identity.identity_key();
+        let caller = Caller::new(&alice.me(), ONION, None);
+        let answer = |onion, hello: Hello| Service::on_hello(&bob.me(), onion, hello).unwrap().1;
+
+        // Bob's answer signed for another onion: a relay, not the service dialed.
+        let challenge = answer([8; 32], caller.hello().clone());
+        let err = caller.on_challenge(&alice.me(), &challenge, bob_id, None).unwrap_err();
+        assert_eq!(err, HandshakeError::BadSignature);
+
+        // The caller's nonce changed on the way, or the service's after signing.
+        let mut hello = caller.hello().clone();
+        hello.nonce[0] ^= 1;
+        let err = caller.on_challenge(&alice.me(), &answer(ONION, hello), bob_id, None).unwrap_err();
+        assert_eq!(err, HandshakeError::BadSignature);
+        let mut challenge = answer(ONION, caller.hello().clone());
+        challenge.nonce[0] ^= 1;
+        let err = caller.on_challenge(&alice.me(), &challenge, bob_id, None).unwrap_err();
+        assert_eq!(err, HandshakeError::BadSignature);
+
+        // Alice dialed Carol; Bob answering is refused before Alice signs.
+        let challenge = answer(ONION, caller.hello().clone());
+        let err = caller.on_challenge(&alice.me(), &challenge, carol.identity.identity_key(), None).unwrap_err();
+        assert_eq!(err, HandshakeError::WrongAccount);
+
+        // Bob claiming a device his list does not have.
+        let mut challenge = answer(ONION, caller.hello().clone());
+        challenge.device = 2;
+        let err = caller.on_challenge(&alice.me(), &challenge, bob_id, None).unwrap_err();
+        assert_eq!(err, HandshakeError::UnknownDevice);
+
+        let mut challenge = answer(ONION, caller.hello().clone());
+        challenge.version += 1;
+        let err = caller.on_challenge(&alice.me(), &challenge, bob_id, None).unwrap_err();
+        assert_eq!(err, HandshakeError::Version(PROTOCOL_VERSION + 1));
+    }
+
+    #[test]
+    fn the_service_refuses_a_borrowed_account_or_a_replayed_proof() {
+        let (alice, bob, carol) = (Account::new(), Account::new(), Account::new());
+        let bob_id = bob.identity.identity_key();
+
+        // Alice claims to be Carol, with Carol's (public) device list.
+        let caller = Caller::new(&alice.me(), ONION, None);
+        let mut hello = caller.hello().clone();
+        hello.account = carol.identity.identity_key().serialize().into_vec();
+        hello.devices = carol.devices.clone();
+        let (service, _) = Service::on_hello(&bob.me(), ONION, hello).unwrap();
+        let (proof, _) = caller
+            .on_challenge(&alice.me(), &Service::on_hello(&bob.me(), ONION, caller.hello().clone()).unwrap().1, bob_id, None)
+            .unwrap();
+        assert_eq!(service.on_proof(&proof, None).unwrap_err(), HandshakeError::BadSignature);
+
+        // Carol's account with Alice's list: the list is not Carol's.
+        let mut hello = caller.hello().clone();
+        hello.account = carol.identity.identity_key().serialize().into_vec();
+        let (service, _) = Service::on_hello(&bob.me(), ONION, hello).unwrap();
+        assert_eq!(
+            service.on_proof(&proof, None).unwrap_err(),
+            HandshakeError::Devices(DeviceListError::BadSignature)
+        );
+
+        // A proof from one session does not open another: new service nonce.
+        let (service, _) = Service::on_hello(&bob.me(), ONION, caller.hello().clone()).unwrap();
+        assert_eq!(service.on_proof(&proof, None).unwrap_err(), HandshakeError::BadSignature);
+
+        let mut hello = caller.hello().clone();
+        hello.version = 0;
+        assert_eq!(Service::on_hello(&bob.me(), ONION, hello).err(), Some(HandshakeError::Version(0)));
+    }
+}

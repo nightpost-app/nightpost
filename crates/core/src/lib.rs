@@ -2,6 +2,9 @@
 //! this crate; nothing about identity, encryption or the network lives in them.
 
 pub mod dbkey;
+pub mod identity;
+pub mod invite;
+pub mod proto;
 pub mod session;
 pub mod store;
 
