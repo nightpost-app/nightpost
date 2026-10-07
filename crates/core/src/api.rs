@@ -39,6 +39,8 @@ pub enum Request {
     Confirm { name: String, keep: bool },
     Contacts,
     Verify { name: String },
+    /// The last `limit` messages with `name`, oldest first.
+    History { name: String, limit: u32 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -50,6 +52,7 @@ pub enum Reply {
     Added { name: String },
     Done,
     Contacts { contacts: Vec<ContactInfo> },
+    History { messages: Vec<HistoryItem> },
     SafetyNumber { name: String, number: String },
     Listening,
     Error { message: String },
@@ -64,6 +67,15 @@ pub enum Event {
     /// Someone used an oral code: the two people compare this number before
     /// the inviter confirms.
     Fingerprint { name: String, safety_number: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HistoryItem {
+    pub id: String,
+    pub outgoing: bool,
+    pub time: u64,
+    pub text: String,
+    pub delivered: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -146,6 +158,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             Reply::Done
         }
         Request::Contacts => Reply::Contacts { contacts: daemon.contacts()? },
+        Request::History { name, limit } => Reply::History { messages: daemon.history(&name, limit.min(1000))? },
         Request::Verify { name } => {
             let number = daemon.contacts()?.into_iter().find(|c| c.name == name).context("no such contact")?.safety_number;
             Reply::SafetyNumber { name, number }

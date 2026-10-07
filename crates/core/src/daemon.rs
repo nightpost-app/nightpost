@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
 
-use crate::api::{ContactInfo, Event, hex};
+use crate::api::{ContactInfo, Event, HistoryItem, hex};
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite};
@@ -342,6 +342,17 @@ impl<T: Transport + 'static> Daemon<T> {
         Ok(id)
     }
 
+    /// The last `limit` messages with `name`, oldest first.
+    pub fn history(&self, name: &str, limit: u32) -> Result<Vec<HistoryItem>> {
+        let contact = self.contacts_raw()?.into_iter().find(|c| c.name == name).context("no such contact")?;
+        Ok(self
+            .store
+            .history(&contact.identity, limit)?
+            .into_iter()
+            .map(|(id, outgoing, time, text, delivered)| HistoryItem { id: hex(&id), outgoing, time, text, delivered })
+            .collect())
+    }
+
     pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
         self.contacts_raw()?
             .into_iter()
@@ -615,6 +626,7 @@ impl<T: Transport + 'static> Daemon<T> {
         ensure!(envelope.id == id, "the envelope id does not match the frame");
         let Body::Text(text) = envelope.body;
         ensure!(text.len() <= MAX_TEXT, "message too long");
+        let text = crate::text::message(&text);
         // The sender's clock, unless it claims a time more than a day ahead.
         let now = now_millis();
         let time = if envelope.time > now + 86_400_000 { now } else { envelope.time };
@@ -764,6 +776,8 @@ mod tests {
                 assert_eq!(next(&mut bob_events).await, Event::Delivered { to: "alice".into(), id: hex(&id) });
                 let id = alice.send("bob", "salut").unwrap();
                 assert!(message("alice", id, "salut")(&next(&mut bob_events).await));
+                let history = bob.history("alice", 10).unwrap();
+                assert_eq!(history.iter().map(|m| (m.outgoing, m.text.as_str())).collect::<Vec<_>>(), [(true, "bonjour"), (false, "salut")]);
                 assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
 
                 bob.stop().await;

@@ -15,3 +15,14 @@ sha2 = "0.11"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = "1"
+# The terminal interface. Line counts of wrapped paragraphs (to keep the
+# conversation scrolled to its end) are behind ratatui's unstable flag.
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+unicode-width = "0.2"
+# Local time for message timestamps.
+jiff = "0.2"
+# Invitation links as a QR code in characters; no image support needed.
+qrcode = { version = "0.14", default-features = false }
+data-encoding = "2"

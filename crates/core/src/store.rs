@@ -175,6 +175,23 @@ impl Store {
         Ok(added == 1)
     }
 
+    /// The last `limit` messages with `account`, oldest first.
+    /// ponytail: scans the account's rows to sort by time; an index on
+    /// (account, time) when histories get long.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn history(&self, account: &[u8], limit: u32) -> rusqlite::Result<Vec<([u8; 16], bool, u64, String, bool)>> {
+        let mut stmt = self.db.prepare(
+            "SELECT id, outgoing, time, text, delivered FROM messages WHERE account = ?1 ORDER BY time DESC LIMIT ?2",
+        )?;
+        let mut rows: Vec<_> = stmt
+            .query_map(params![account, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u64, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
+
     pub(crate) fn queue(&self, account: &[u8], device: u8, id: &[u8; 16], envelope: &[u8]) -> rusqlite::Result<()> {
         self.db.execute(
             "INSERT OR IGNORE INTO outbox (account, device, id, envelope) VALUES (?1, ?2, ?3, ?4)",

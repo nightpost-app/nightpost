@@ -9,6 +9,7 @@ pub mod invite;
 pub mod proto;
 pub mod session;
 pub mod store;
+pub mod text;
 pub mod transport;
 
 /// Version of the wire protocol. Peers must match exactly.

@@ -1,4 +1,7 @@
-//! `nightpost`: the daemon, and the commands that talk to it.
+//! `nightpost`: the daemon, the terminal interface, and the commands that
+//! talk to the daemon.
+
+mod tui;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -13,6 +16,7 @@ use sha2::{Digest as _, Sha256};
 
 const USAGE: &str = "\
 usage:
+  nightpost                        the terminal interface
   nightpost daemon                 run the daemon (Tor) in the foreground
   nightpost invite <name>          print a one-time link for <name>
   nightpost invite --code <name>   a 12-digit code to read out (10 minutes)
@@ -21,6 +25,7 @@ usage:
                                    use a code read out by the inviter
   nightpost send <name> [text]     send text (read from stdin without it)
   nightpost listen                 print events as JSON lines
+  nightpost history <name> [n]     the last n messages (default 50), JSON lines
   nightpost contacts               list contacts and safety numbers
   nightpost verify <name>          print the safety number to compare
 
@@ -39,6 +44,7 @@ async fn run(args: Vec<String>) -> Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let dir = data_dir()?;
     let request = match args.as_slice() {
+        [] => return tui::run(&dir).await,
         ["daemon"] => return daemon(&dir).await,
         ["--version" | "version"] => {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
@@ -56,6 +62,8 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["send", to, text @ ..] => Request::Send { to: to.to_string(), text: text.join(" ") },
         ["listen"] => Request::Listen,
         ["contacts"] => Request::Contacts,
+        ["history", name] => Request::History { name: name.to_string(), limit: 50 },
+        ["history", name, n] => Request::History { name: name.to_string(), limit: n.parse().context("a number of messages")? },
         ["verify", name] => Request::Verify { name: name.to_string() },
         _ => {
             println!("{USAGE}");
@@ -73,10 +81,15 @@ async fn run(args: Vec<String>) -> Result<()> {
         Reply::Done => {}
         Reply::Contacts { contacts } => {
             for c in contacts {
-                println!("{}\t{}", c.name, groups(&c.safety_number));
+                println!("{}\t{}", c.name, tui::groups(&c.safety_number));
             }
         }
-        Reply::SafetyNumber { number, .. } => println!("{}", groups(&number)),
+        Reply::SafetyNumber { number, .. } => println!("{}", tui::groups(&number)),
+        Reply::History { messages } => {
+            for m in messages {
+                println!("{}", serde_json::to_string(&m)?);
+            }
+        }
         Reply::Listening => {
             while let Some(event) = client.event().await? {
                 println!("{}", serde_json::to_string(&event)?);
@@ -104,7 +117,7 @@ async fn invite_code(dir: &Path, name: &str) -> Result<()> {
             None => bail!("the daemon stopped"),
         }
     };
-    println!("\nSomeone used the code. Ask {name} to read their safety number:\n\n    {}\n", groups(&number));
+    println!("\nSomeone used the code. Ask {name} to read their safety number:\n\n    {}\n", tui::groups(&number));
     print!("Is it the same? [y/N] ");
     std::io::Write::flush(&mut std::io::stdout())?;
     let mut answer = String::new();
@@ -126,7 +139,7 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
             if let Event::Fingerprint { name: n, safety_number } = event
                 && n == name_owned
             {
-                println!("Read this safety number to {n}:\n\n    {}\n\nWaiting for {n} to confirm…", groups(&safety_number));
+                println!("Read this safety number to {n}:\n\n    {}\n\nWaiting for {n} to confirm…", tui::groups(&safety_number));
             }
         }
     });
@@ -150,10 +163,6 @@ async fn listen(dir: &Path) -> Result<Client> {
     }
 }
 
-/// Twelve groups of five, the way people read it out.
-fn groups(number: &str) -> String {
-    number.as_bytes().chunks(5).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
-}
 
 async fn daemon(dir: &Path) -> Result<()> {
     tracing_subscriber::fmt()
