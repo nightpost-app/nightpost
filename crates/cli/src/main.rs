@@ -11,7 +11,7 @@ use nightpost_core::api::{Client, Event, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
-use nightpost_core::transport::tor::{Bridges, TorTransport};
+use nightpost_core::transport::tor::{BRIDGES_FILE, Bridges, TorTransport};
 use sha2::{Digest as _, Sha256};
 
 const USAGE: &str = "\
@@ -165,8 +165,7 @@ async fn listen(dir: &Path) -> Result<Client> {
 
 
 /// lyrebird next to this program (as released) or on the PATH, and the
-/// bridge lines of `bridges.txt` in the data directory, if any (one per
-/// line, as Tor Browser or bridges.torproject.org gives them).
+/// user's own bridges in `bridges.txt` in the data directory.
 fn bridges(dir: &Path) -> Option<Bridges> {
     let name = format!("lyrebird{}", std::env::consts::EXE_SUFFIX);
     let beside = std::env::current_exe().ok()?.with_file_name(&name);
@@ -175,9 +174,7 @@ fn bridges(dir: &Path) -> Option<Bridges> {
     } else {
         std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())?
     };
-    let lines = std::fs::read_to_string(dir.join("bridges.txt")).unwrap_or_default();
-    let lines = lines.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
-    Some(Bridges { lyrebird, lines })
+    Some(Bridges { lyrebird, file: dir.join(BRIDGES_FILE) })
 }
 
 async fn daemon(dir: &Path) -> Result<()> {

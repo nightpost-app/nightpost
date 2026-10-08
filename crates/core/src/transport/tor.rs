@@ -45,13 +45,41 @@ const STALL_BRIDGED: Duration = Duration::from_secs(120);
 /// How long a probe (see [`reachable`]) may take.
 const PROBE: Duration = Duration::from_secs(30);
 
+/// How often the bridges file is checked for changes.
+const RELOAD: Duration = Duration::from_secs(3);
+
+/// The file in the data directory that holds the user's own bridge lines.
+pub const BRIDGES_FILE: &str = "bridges.txt";
+
 /// For networks that block Tor (some university or company Wi-Fi): lyrebird,
 /// the Tor Project's pluggable-transport program (Snowflake, WebTunnel,
-/// obfs4), and the bridges to reach through it.
+/// obfs4), and the file of bridges to reach through it.
 pub struct Bridges {
     pub lyrebird: PathBuf,
-    /// Bridge lines; none means Tor Browser's Snowflake bridges.
-    pub lines: Vec<String>,
+    /// One bridge line per line, as Tor Browser or bridges.torproject.org
+    /// gives them; none (or no file) means Tor Browser's Snowflake bridges.
+    /// Read again whenever it changes.
+    pub file: PathBuf,
+}
+
+/// The bridge lines of `file`, without blank lines and `#` comments.
+pub fn read_bridges(file: &Path) -> Vec<String> {
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
+}
+
+/// Checks `lines` and writes them to `file` for a running client to pick up.
+pub fn save_bridges(file: &Path, lines: &[String]) -> Result<()> {
+    for line in lines {
+        bridge(line)?;
+    }
+    let mut text = lines.join("\n");
+    text.push('\n');
+    std::fs::write(file, text).map_err(|e| TransportError(format!("writing {}: {e}", file.display())))
+}
+
+fn bridge(line: &str) -> Result<BridgeConfigBuilder> {
+    line.parse().map_err(|e| TransportError(format!("bridge line {line:?}: {e}")))
 }
 
 pub struct TorTransport {
@@ -81,7 +109,8 @@ impl TorTransport {
     ) -> Result<TorTransport> {
         create_private_dir(state_dir)?;
         create_private_dir(cache_dir)?;
-        let configs = configs(state_dir, cache_dir, bridges.as_ref())?;
+        let lines = bridges.as_ref().map(|b| read_bridges(&b.file));
+        let configs = configs(state_dir, cache_dir, bridges.as_ref().map(|b| (b.lyrebird.as_path(), lines.as_deref().unwrap_or_default())))?;
         let marker = state_dir.join("bridged");
         let bridged = configs.len() == 2 && marker.exists();
 
@@ -92,7 +121,8 @@ impl TorTransport {
             .map_err(|e| describe(e, "creating the Tor client"))?;
         // Subscribed before bootstrapping, or the early progress is lost.
         let events = client.bootstrap_events();
-        tokio::spawn(watch(client.clone(), events, configs, bridged, marker, progress));
+        let dirs = (state_dir.to_path_buf(), cache_dir.to_path_buf());
+        tokio::spawn(watch(client.clone(), events, configs, bridged, marker, bridges, dirs, progress));
         client.bootstrap().await.map_err(|e| describe(e, "bootstrapping Tor"))?;
         Ok(TorTransport { client })
     }
@@ -101,25 +131,25 @@ impl TorTransport {
 /// The direct configuration and, with bridges, the bridged one. Both list
 /// the bridges and lyrebird; only `enabled` differs, so switching is a
 /// reconfiguration of the running client.
-fn configs(state_dir: &Path, cache_dir: &Path, bridges: Option<&Bridges>) -> Result<Vec<TorClientConfig>> {
+/// `bridges` = lyrebird and the bridge lines.
+fn configs(state_dir: &Path, cache_dir: &Path, bridges: Option<(&Path, &[String])>) -> Result<Vec<TorClientConfig>> {
     let base = || {
         let mut builder = TorClientConfigBuilder::from_directories(state_dir, cache_dir);
         builder.storage().keystore().primary().kind(ExplicitOrAuto::Explicit(ArtiKeystoreKind::Ephemeral));
         builder
     };
     let build = |builder: TorClientConfigBuilder| builder.build().map_err(|e| TransportError(format!("Tor configuration: {e}")));
-    let Some(bridges) = bridges else { return Ok(vec![build(base())?]) };
-    let lines: Vec<&str> = if bridges.lines.is_empty() { SNOWFLAKE.to_vec() } else { bridges.lines.iter().map(String::as_str).collect() };
+    let Some((program, lines)) = bridges else { return Ok(vec![build(base())?]) };
+    let lines: Vec<&str> = if lines.is_empty() { SNOWFLAKE.to_vec() } else { lines.iter().map(String::as_str).collect() };
     let mut configs = Vec::new();
     for enabled in [false, true] {
         let mut builder = base();
         for line in &lines {
-            let bridge: BridgeConfigBuilder = line.parse().map_err(|e| TransportError(format!("bridge line {line:?}: {e}")))?;
-            builder.bridges().bridges().push(bridge);
+            builder.bridges().bridges().push(bridge(line)?);
         }
         let mut lyrebird = TransportConfigBuilder::default();
         let protocols = ["snowflake", "webtunnel", "obfs4"].map(|p| p.parse().expect("a valid transport name"));
-        lyrebird.protocols(protocols.into()).path(CfgPath::new_literal(bridges.lyrebird.clone())).run_on_startup(false);
+        lyrebird.protocols(protocols.into()).path(CfgPath::new_literal(program)).run_on_startup(false);
         builder.bridges().transports().push(lyrebird);
         builder.bridges().enabled(BoolOrAuto::Explicit(enabled));
         configs.push(build(builder)?);
@@ -130,18 +160,48 @@ fn configs(state_dir: &Path, cache_dir: &Path, bridges: Option<&Bridges>) -> Res
 /// Reports progress, and switches between `configs` when it stalls: no
 /// progress while bootstrapping, or, once bootstrapped, two failed probes
 /// in a row. Remembers in `marker` the way that last got the client ready.
+/// New lines in the bridges file are used at once.
+#[allow(clippy::too_many_arguments)]
 async fn watch(
     client: Arc<TorClient<PreferredRuntime>>,
     mut events: arti_client::status::BootstrapEvents,
-    configs: Vec<TorClientConfig>,
+    mut both: Vec<TorClientConfig>,
     mut bridged: bool,
     marker: PathBuf,
+    bridges: Option<Bridges>,
+    (state_dir, cache_dir): (PathBuf, PathBuf),
     mut progress: impl FnMut(String),
 ) {
     let (mut best, mut since, mut saved, mut failures) = (-1.0_f32, Instant::now(), None, 0);
+    let modified = |b: &Bridges| std::fs::metadata(&b.file).and_then(|m| m.modified()).ok();
+    let mut seen = bridges.as_ref().and_then(modified);
+    let mut reload = tokio::time::interval(RELOAD);
     loop {
         let stall = if bridged { STALL_BRIDGED } else { STALL };
-        match tokio::time::timeout_at((since + stall).into(), events.next()).await {
+        let next = tokio::select! {
+            next = tokio::time::timeout_at((since + stall).into(), events.next()) => next,
+            _ = reload.tick() => {
+                let Some(b) = bridges.as_ref().filter(|b| modified(b) != seen) else { continue };
+                seen = modified(b);
+                let lines = read_bridges(&b.file);
+                match configs(&state_dir, &cache_dir, Some((&b.lyrebird, &lines))) {
+                    Ok(new) => both = new,
+                    Err(e) => {
+                        progress(format!("Tor: {e}"));
+                        continue;
+                    }
+                }
+                // Lines of one's own are there to be used.
+                bridged |= !lines.is_empty();
+                progress(if bridged { "Tor: reconnecting through the bridges…" } else { "Tor: reconnecting…" }.into());
+                if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
+                    progress(format!("Tor: switching failed: {e}"));
+                }
+                (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
+                continue;
+            }
+        };
+        match next {
             Ok(None) => return,
             Ok(Some(status)) => {
                 if status.as_frac() > best {
@@ -156,7 +216,7 @@ async fn watch(
                     None => format!("Tor: {:.0}%", status.as_frac() * 100.0),
                 });
             }
-            Err(_) if configs.len() < 2 => since = Instant::now(),
+            Err(_) if both.len() < 2 => since = Instant::now(),
             Err(_) => {
                 // Bootstrapped, arti's status says "online" for good after
                 // one success: ask the network itself. Still bootstrapping
@@ -173,7 +233,7 @@ async fn watch(
                     if bridged { "Tor: blocked on this network? Going through a bridge…" } else { "Tor: the bridge is not getting through; trying without it…" }
                         .into(),
                 );
-                if let Err(e) = client.reconfigure(&configs[usize::from(bridged)], Reconfigure::AllOrNothing) {
+                if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
                     progress(format!("Tor: switching failed: {e}"));
                 }
                 (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
@@ -344,13 +404,20 @@ mod tests {
     #[test]
     fn the_bridges_parse_and_differ_only_in_being_enabled() {
         let dir = tempfile::tempdir().unwrap();
-        let bridges = Bridges { lyrebird: "/opt/lyrebird".into(), lines: Vec::new() };
-        let both = configs(dir.path(), dir.path(), Some(&bridges)).unwrap();
+        let lyrebird = Path::new("/opt/lyrebird");
+        let both = configs(dir.path(), dir.path(), Some((lyrebird, &[]))).unwrap();
         assert_eq!(both.len(), 2);
         assert_ne!(both[0], both[1]);
         assert_eq!(configs(dir.path(), dir.path(), None).unwrap().len(), 1);
-        let bad = Bridges { lyrebird: "/opt/lyrebird".into(), lines: vec!["snowflake nonsense".into()] };
-        assert!(configs(dir.path(), dir.path(), Some(&bad)).is_err());
+        assert!(configs(dir.path(), dir.path(), Some((lyrebird, &["snowflake nonsense".into()]))).is_err());
+
+        // What the graphical interface saves is read back, comments aside.
+        let file = dir.path().join(BRIDGES_FILE);
+        assert!(save_bridges(&file, &["obfs4 nonsense".into()]).is_err());
+        let line = "obfs4 192.0.2.5:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0".to_string();
+        save_bridges(&file, std::slice::from_ref(&line)).unwrap();
+        std::fs::write(&file, format!("# mine\n\n{line}\n")).unwrap();
+        assert_eq!(read_bridges(&file), [line]);
     }
 
     #[test]

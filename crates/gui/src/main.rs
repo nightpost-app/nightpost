@@ -14,6 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, Reply, Request};
+use nightpost_core::transport::tor;
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 /// The typefaces travel inside the program: a Tor messenger fetches nothing
@@ -66,6 +67,7 @@ enum Dialog {
     /// We used a code: read our number to the inviter.
     Waiting { name: String, number: String },
     Verify { name: String, number: String },
+    Bridges,
 }
 
 /// Everything the components share. Signals are `Copy`.
@@ -181,7 +183,7 @@ impl State {
 
 #[component]
 fn App() -> Element {
-    let state = use_context_provider(|| State {
+    let mut state = use_context_provider(|| State {
         phase: Signal::new(Phase::Connecting("Connecting to the daemon…".into())),
         contacts: Signal::new(Vec::new()),
         unread: Signal::new(HashMap::new()),
@@ -212,7 +214,14 @@ fn App() -> Element {
     rsx! {
         style { {STYLE.as_str()} }
         match state.phase.read().clone() {
-            Phase::Connecting(what) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { "{what}" } } },
+            Phase::Connecting(what) => rsx! {
+                div { class: "splash",
+                    p { class: "wordmark", "Nightpost" }
+                    p { "{what}" }
+                    button { class: "quiet", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), "Tor blocked here? Bridges" }
+                }
+                DialogView {}
+            },
             Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
             Phase::Ready => rsx! {
                 div { class: "app",
@@ -263,6 +272,7 @@ fn Sidebar() -> Element {
                     }
                 }
             }
+            button { class: "quiet bridges", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), "Bridges" }
             button { class: "add", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
         }
     }
@@ -298,7 +308,8 @@ fn Conversation() -> Element {
                 h2 { "Nobody here yet" }
                 p { "Nightpost only connects people who know each other. Send someone a one-time link, or read them a code on the phone." }
                 button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
-            } }
+            }
+            p { class: "status", "{state.status}" } }
         };
     };
     let rows = rows(state.messages.read().get(&name).map(Vec::as_slice).unwrap_or_default());
@@ -396,6 +407,7 @@ fn DialogView() -> Element {
     let close = move |_| state.dialog.set(None);
     let body = match dialog {
         Dialog::Add => rsx! { AddDialog {} },
+        Dialog::Bridges => rsx! { BridgesDialog {} },
         Dialog::Invite { name, link } => rsx! {
             h3 { "An invitation for {name}" }
             p { "Give it to {name} only, through a channel you trust. It works once, for 7 days." }
@@ -442,6 +454,36 @@ fn DialogView() -> Element {
     rsx! {
         div { class: "overlay",
             div { class: "sheet", role: "dialog", {body} }
+        }
+    }
+}
+
+#[component]
+fn BridgesDialog() -> Element {
+    let mut state = use_context::<State>();
+    let file = dir().join(tor::BRIDGES_FILE);
+    let mut text = use_signal(|| tor::read_bridges(&file).join("\n"));
+    let mut error = use_signal(String::new);
+    let save = move |_| {
+        let lines: Vec<String> = text.read().lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
+        match tor::save_bridges(&file, &lines) {
+            Ok(()) => {
+                state.dialog.set(None);
+                state.status.set(if lines.is_empty() { "Back to the built-in Snowflake bridges".into() } else { "Bridges saved: Tor reconnects through them".into() });
+            }
+            Err(e) => error.set(e.to_string()),
+        }
+    };
+    rsx! {
+        h3 { "Bridges" }
+        p { "Some networks (university or work Wi-Fi) block Tor. Nightpost then goes through a bridge: Snowflake by default, with nothing to set up." }
+        p { "If that does not get through, paste bridge lines here: your own, a friend's, or from bridges.torproject.org (WebTunnel gets through most often). They are used at once." }
+        label { r#for: "bridges", "Bridge lines, one per line" }
+        textarea { id: "bridges", class: "link", rows: "5", placeholder: "webtunnel [2001:db8::1]:443 … url=https://…", value: "{text}", oninput: move |e| text.set(e.value()) }
+        if !error.read().is_empty() { p { class: "warning", "{error}" } }
+        div { class: "actions",
+            button { class: "primary", onclick: save, "Save" }
+            button { onclick: move |_| state.dialog.set(None), "Cancel" }
         }
     }
 }
