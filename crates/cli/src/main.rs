@@ -189,7 +189,10 @@ async fn daemon(dir: &Path) -> Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,nightpost_core=info".into()),
+                // arti warns whenever a spare onion circuit is slower than 80 % of
+                // the previous ones and so dropped, which Tor does by design to
+                // about one in five: noise, rebuilt 30 s later.
+                .unwrap_or_else(|_| "warn,nightpost_core=info,tor_circmgr::hspool=error".into()),
         )
         .init();
     if Client::connect(dir).await.is_ok() {
