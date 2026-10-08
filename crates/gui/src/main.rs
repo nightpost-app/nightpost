@@ -17,21 +17,15 @@ use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, 
 use nightpost_core::transport::tor;
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
-/// The typefaces travel inside the program: a Tor messenger fetches nothing
-/// from a font server. Barlow, under the SIL Open Font License (`fonts/`).
+/// The typeface travels inside the program: a Tor messenger fetches nothing
+/// from a font server. Space Grotesk, one variable file for every weight,
+/// under the SIL Open Font License (`fonts/`).
 static STYLE: LazyLock<String> = LazyLock::new(|| {
-    let face = |family: &str, weight: u16, bytes: &[u8]| {
-        format!(
-            "@font-face {{ font-family: \"{family}\"; font-weight: {weight}; src: url(data:font/ttf;base64,{}) format(\"truetype\"); }}\n",
-            data_encoding::BASE64.encode(bytes)
-        )
-    };
-    face("Barlow", 400, include_bytes!("../fonts/Barlow-Regular.ttf"))
-        + &face("Barlow", 500, include_bytes!("../fonts/Barlow-Medium.ttf"))
-        + &face("Barlow", 600, include_bytes!("../fonts/Barlow-SemiBold.ttf"))
-        + &face("Barlow Semi Condensed", 600, include_bytes!("../fonts/BarlowSemiCondensed-SemiBold.ttf"))
-        + &face("Barlow Semi Condensed", 700, include_bytes!("../fonts/BarlowSemiCondensed-Bold.ttf"))
-        + include_str!("style.css")
+    format!(
+        "@font-face {{ font-family: \"Space Grotesk\"; font-weight: 300 700; src: url(data:font/ttf;base64,{}) format(\"truetype\"); }}\n{}",
+        data_encoding::BASE64.encode(include_bytes!("../fonts/SpaceGrotesk.ttf")),
+        include_str!("style.css")
+    )
 });
 const HISTORY: u32 = 200;
 

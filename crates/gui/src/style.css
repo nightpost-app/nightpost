@@ -27,8 +27,8 @@
   --tip: #1c2740;
   --veil: rgba(5, 8, 14, .72);
   --shadow: rgba(0, 0, 0, .55);
-  --ui: "Barlow", system-ui, sans-serif;
-  --display: "Barlow Semi Condensed", "Barlow", system-ui, sans-serif;
+  --ui: "Space Grotesk", system-ui, sans-serif;
+  --display: "Space Grotesk", system-ui, sans-serif;
   color-scheme: dark;
 }
 .root[data-theme="light"] {
