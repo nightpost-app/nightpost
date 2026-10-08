@@ -801,7 +801,7 @@ fn Conversation() -> Element {
 
     rsx! {
         main {
-            header {
+            header { class: "talk-head",
                 button { class: if open { "who open" } else { "who" }, "aria-label": "About {name}", onclick: toggle,
                     {avatar(&name, person.photo.as_deref(), 48)}
                     span { class: "who-text",
