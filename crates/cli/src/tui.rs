@@ -12,7 +12,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use futures::StreamExt as _;
-use nightpost_core::api::{Client, Event, HistoryItem, Reply, Request};
+use nightpost_core::api::{Client, Event, HistoryItem, Person, Reply, Request};
 use ratatui::DefaultTerminal;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -52,10 +52,15 @@ Ctrl+C           quit (the daemon keeps running)
 /accept <link> <name>        use a link
 /acceptcode <code> <name>    use a code read out to you
 /verify                      the safety number of this conversation
+/rename <new name>           only you see it
+/mute [1h | 8h]              no notification from them (until /unmute)
+/unmute
+/remove                      they can no longer reach you
 /quit";
 
 struct Conversation {
     name: String,
+    person: Person,
     unread: usize,
     messages: Vec<HistoryItem>,
     loaded: bool,
@@ -67,6 +72,10 @@ enum Overlay {
     Invite { name: String, link: String, qr: Vec<String> },
     /// Someone used our code: keep them only if the numbers match.
     Confirm { name: String, number: String },
+    /// Their safety number; y marks it compared.
+    Verify { name: String, number: String },
+    /// y removes them, w also deletes the conversation.
+    Remove { name: String },
 }
 
 enum Update {
@@ -189,6 +198,30 @@ impl App {
             };
             return;
         }
+        if let (Some(Overlay::Verify { name, .. }), KeyCode::Char('y' | 'Y')) = (&self.overlay, key.code) {
+            let name = name.clone();
+            self.overlay = None;
+            self.set_person(&name, |p| p.verified = true, requests).await;
+            return;
+        }
+        if let Some(Overlay::Remove { name }) = &self.overlay {
+            let wipe = match key.code {
+                KeyCode::Char('y' | 'Y') => false,
+                KeyCode::Char('w' | 'W') => true,
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                    self.overlay = None;
+                    return;
+                }
+                _ => return,
+            };
+            let name = name.clone();
+            self.overlay = None;
+            // The daemon's ContactRemoved event updates the list.
+            if let Err(e) = expect_done(requests.call(&Request::Remove { name, wipe }).await) {
+                self.status = format!("{e:#}");
+            }
+            return;
+        }
         if let (Some(Overlay::Invite { link, .. }), KeyCode::Char('c')) = (&self.overlay, key.code) {
             copy(link);
             self.status = "link copied (if the terminal allows it)".into();
@@ -306,18 +339,48 @@ impl App {
                     Reply::Error { message } => bail!("{message}"),
                     other => bail!("unexpected reply {other:?}"),
                 };
-                self.overlay = Some(Overlay::Text {
-                    title: format!("Safety number with {name}"),
-                    body: [
-                        vec!["Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between.".into(), String::new()],
-                        number_lines(&number),
-                    ]
-                    .concat(),
-                });
+                self.overlay = Some(Overlay::Verify { name, number });
             }
+            ["rename", new @ ..] if !new.is_empty() => {
+                let name = self.current()?;
+                expect_done(requests.call(&Request::Rename { name, to: new.join(" ") }).await)?;
+            }
+            ["mute", rest @ ..] => {
+                const HOUR: u64 = 3_600_000;
+                let until = match rest {
+                    [] => u64::MAX,
+                    ["1h"] => now_millis() + HOUR,
+                    ["8h"] => now_millis() + 8 * HOUR,
+                    _ => bail!("/mute, /mute 1h or /mute 8h"),
+                };
+                let name = self.current()?;
+                self.set_person(&name, |p| p.muted_until = Some(until), requests).await;
+                self.status = if until == u64::MAX { format!("{name} muted until /unmute") } else { format!("{name} muted until {}", clock(until)) };
+            }
+            ["unmute"] => {
+                let name = self.current()?;
+                self.set_person(&name, |p| p.muted_until = None, requests).await;
+                self.status = format!("notifications from {name} are back on");
+            }
+            ["remove"] => self.overlay = Some(Overlay::Remove { name: self.current()? }),
             _ => bail!("unknown command: /help lists them"),
         }
         Ok(())
+    }
+
+    fn current(&self) -> Result<String> {
+        Ok(self.conversations.get(self.selected).context("no conversation selected")?.name.clone())
+    }
+
+    /// Changes what we keep about them; the daemon's PersonChanged event
+    /// brings the result back.
+    async fn set_person(&mut self, name: &str, change: impl FnOnce(&mut Person), requests: &mut Client) {
+        let Some(c) = self.conversations.iter().find(|c| c.name == name) else { return };
+        let mut person = c.person.clone();
+        change(&mut person);
+        if let Err(e) = expect_done(requests.call(&Request::SetPerson { name: name.into(), person }).await) {
+            self.status = format!("{e:#}");
+        }
     }
 
     /// A request that can take minutes runs on its own connection, so the
@@ -353,8 +416,10 @@ impl App {
                     c.messages.push(HistoryItem { id, outgoing: false, time, text, delivered: true });
                     if i != selected || !focused {
                         c.unread += 1;
-                        // The name, never the text: a notification can show on a locked screen.
-                        self.notify = Some(format!("Message from {from}"));
+                        if c.person.muted_until.is_none_or(|until| until <= now_millis()) {
+                            // The name, never the text: a notification can show on a locked screen.
+                            self.notify = Some(format!("Message from {from}"));
+                        }
                     }
                 }
             }
@@ -382,6 +447,7 @@ impl App {
             }
             Update::Event(Event::ContactRenamed { name, to }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
+                    self.status = format!("{name} is now {to}");
                     c.name = to;
                 }
             }
@@ -390,9 +456,13 @@ impl App {
                 self.selected = self.selected.min(self.conversations.len().saturating_sub(1));
                 self.status = format!("{name} removed");
             }
-            // The route, photos and per-person settings are the graphical
-            // interface's.
-            Update::Event(Event::Network { .. } | Event::Link { .. } | Event::PersonChanged { .. }) => {}
+            Update::Event(Event::PersonChanged { name, person }) => {
+                if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
+                    c.person = person;
+                }
+            }
+            // The route is the graphical interface's.
+            Update::Event(Event::Network { .. } | Event::Link { .. }) => {}
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 self.notify = Some(format!("{name} used your invitation"));
                 self.overlay = Some(if self.codes.contains(&name) {
@@ -421,7 +491,7 @@ impl App {
                     Reply::Error { message } => bail!("{message}"),
                     other => bail!("unexpected reply {other:?}"),
                 };
-                self.conversations.push(Conversation { name: c.name, unread: 0, messages, loaded: true });
+                self.conversations.push(Conversation { name: c.name, person: c.person, unread: 0, messages, loaded: true });
             }
         }
         Ok(())
@@ -470,8 +540,16 @@ impl App {
 
         let current = self.conversations.get(self.selected);
         let margin = |r: Rect| Rect { x: r.x + 2, width: r.width.saturating_sub(4), ..r };
-        let title = current.map_or(String::new(), |c| c.name.clone());
-        frame.render_widget(Paragraph::new(Span::styled(title, Style::new().add_modifier(Modifier::BOLD))), margin(header));
+        let mut title = vec![Span::styled(current.map_or(String::new(), |c| c.name.clone()), Style::new().add_modifier(Modifier::BOLD))];
+        if let Some(c) = current {
+            if c.person.verified {
+                title.push(Span::styled("  verified", Style::new().fg(LAMP)));
+            }
+            if c.person.muted_until.is_some_and(|until| until > now_millis()) {
+                title.push(Span::styled("  muted", Style::new().fg(INK_SOFT)));
+            }
+        }
+        frame.render_widget(Paragraph::new(Line::from(title)), margin(header));
 
         let thread = margin(thread);
         let mut lines = slips(current.map(|c| c.messages.as_slice()).unwrap_or_default(), thread.width as usize);
@@ -535,6 +613,31 @@ impl App {
                 ]);
                 popup(frame, &format!("Someone used your code for {name}"), lines);
             }
+            Some(Overlay::Verify { name, number }) => {
+                let mut lines = vec![
+                    Line::from("Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between."),
+                    Line::default(),
+                ];
+                lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, Style::new().add_modifier(Modifier::BOLD))));
+                lines.extend([
+                    Line::default(),
+                    Line::styled(format!("If even one digit differs, it is not {name} at the other end."), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
+                    Line::default(),
+                    Line::from("y  they match, mark as verified"),
+                ]);
+                popup(frame, &format!("Safety number with {name}"), lines);
+            }
+            Some(Overlay::Remove { name }) => popup(
+                frame,
+                &format!("Remove {name}?"),
+                vec![
+                    Line::from(format!("{name} can no longer reach you or see when you are online. To talk again, one of you sends a new invitation.")),
+                    Line::default(),
+                    Line::from("y    remove, keep the conversation on this computer"),
+                    Line::styled("w    remove and delete the conversation", Style::new().fg(POST_ON_PAPER)),
+                    Line::from("n    keep them"),
+                ],
+            ),
             None => {}
         }
     }
@@ -757,6 +860,19 @@ fn zoned(millis: u64) -> Option<jiff::Zoned> {
 
 fn date(millis: u64) -> Option<jiff::civil::Date> {
     zoned(millis).map(|z| z.date())
+}
+
+fn now_millis() -> u64 {
+    jiff::Timestamp::now().as_millisecond() as u64
+}
+
+/// `Done`, or the daemon's error as ours.
+fn expect_done(reply: Result<Reply>) -> Result<()> {
+    match reply? {
+        Reply::Done => Ok(()),
+        Reply::Error { message } => bail!("{message}"),
+        other => bail!("unexpected reply {other:?}"),
+    }
 }
 
 fn clock(millis: u64) -> String {
