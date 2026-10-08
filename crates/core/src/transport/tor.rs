@@ -44,6 +44,8 @@ const STALL: Duration = Duration::from_secs(30);
 const STALL_BRIDGED: Duration = Duration::from_secs(120);
 /// How long a probe (see [`reachable`]) may take.
 const PROBE: Duration = Duration::from_secs(30);
+/// Onion service circuits a probe may try to build before it fails.
+const PROBE_TRIES: usize = 4;
 
 /// How often the bridges file is checked for changes.
 const RELOAD: Duration = Duration::from_secs(3);
@@ -260,7 +262,20 @@ async fn reachable(client: &TorClient<PreferredRuntime>) -> bool {
         }
         _ => false,
     };
-    let onion = one_hop && matches!(tokio::time::timeout(PROBE, pool.get_or_launch_client_rend(&netdir)).await, Ok(Ok(_)));
+    // One attempt each (arti leaves retrying to the caller): a single failed
+    // circuit is common on Tor and says nothing about the network.
+    let onion = one_hop
+        && tokio::time::timeout(PROBE, async {
+            for _ in 0..PROBE_TRIES {
+                match pool.get_or_launch_client_rend(&netdir).await {
+                    Ok(_) => return true,
+                    Err(e) => tracing::debug!("Tor probe: onion circuit: {e}"),
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
     tracing::debug!("Tor probe: one hop {one_hop}, onion circuit {onion}, {:?}", started.elapsed());
     onion
 }
