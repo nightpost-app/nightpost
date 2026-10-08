@@ -14,7 +14,12 @@ use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
-use nightpost_core::transport::tor;
+
+mod person;
+mod settings;
+
+use person::PersonPanel;
+use settings::{BridgesEditor, Section, SettingsPage};
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 /// The typeface travels inside the program: a Tor messenger fetches nothing
@@ -63,8 +68,15 @@ enum Dialog {
     Confirm { name: String, number: String },
     /// We used a code: read our number to the inviter.
     Waiting { name: String, number: String },
-    Verify { name: String, number: String },
+    /// Full screen, over everything: the digits to read out.
+    Safety { name: String, number: String },
     Bridges,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Chat,
+    Settings(Section),
 }
 
 /// Everything the components share. Signals are `Copy`.
@@ -85,6 +97,36 @@ struct State {
     /// The last message that came in, numbered so its pulse runs once.
     arrival: Signal<Option<(String, u64)>>,
     theme: Signal<Theme>,
+    prefs: Signal<Prefs>,
+    view: Signal<View>,
+    /// The selected person's panel is open.
+    panel: Signal<bool>,
+}
+
+/// How notifications behave; nothing about anyone, so a plain file.
+#[derive(Clone, Copy, PartialEq)]
+struct Prefs {
+    notify: bool,
+    sound: bool,
+    /// Who wrote, or only that something came.
+    show_name: bool,
+}
+
+impl Prefs {
+    const FILE: &str = "gui-settings";
+
+    fn load() -> Prefs {
+        let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
+        let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
+        let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
+        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name") }
+    }
+
+    fn save(self) -> Prefs {
+        let text = format!("notify={}\nsound={}\nshow_name={}\n", u8::from(self.notify), u8::from(self.sound), u8::from(self.show_name));
+        let _ = std::fs::write(dir().join(Prefs::FILE), text);
+        self
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -105,14 +147,9 @@ impl Theme {
         }
     }
 
-    fn next(self) -> Theme {
-        let next = match self {
-            Theme::System => Theme::Dark,
-            Theme::Dark => Theme::Light,
-            Theme::Light => Theme::System,
-        };
-        let _ = std::fs::write(dir().join(Theme::FILE), next.name());
-        next
+    fn save(self) -> Theme {
+        let _ = std::fs::write(dir().join(Theme::FILE), self.name());
+        self
     }
 
     fn name(self) -> &'static str {
@@ -198,7 +235,11 @@ impl State {
                     if !here {
                         *self.unread.write().entry(from.clone()).or_default() += 1;
                     }
-                    notify(&format!("Message from {from}"));
+                    let prefs = *self.prefs.read();
+                    let muted = self.people.read().get(&from).is_some_and(|p| muted(p).is_some());
+                    if prefs.notify && !muted {
+                        notify(&if prefs.show_name { format!("Message from {from}") } else { "New message".into() }, prefs.sound);
+                    }
                 }
             }
             Event::Sent { to, id, time, text } => {
@@ -220,7 +261,7 @@ impl State {
                 });
             }
             Event::Fingerprint { name, safety_number } => {
-                notify(&format!("{name} used your invitation"));
+                notify(&format!("{name} used your invitation"), self.prefs.read().sound);
                 let ours = self.codes.read().contains(&name);
                 self.dialog.set(Some(if ours {
                     Dialog::Confirm { name, number: safety_number }
@@ -254,6 +295,7 @@ impl State {
                 self.people.write().remove(&name);
                 if self.selected.read().as_deref() == Some(name.as_str()) {
                     self.selected.set(None);
+                    self.panel.set(false);
                 }
             }
             Event::PersonChanged { name, person } => {
@@ -283,6 +325,9 @@ fn App() -> Element {
         people: Signal::new(HashMap::new()),
         arrival: Signal::new(None),
         theme: Signal::new(Theme::load()),
+        prefs: Signal::new(Prefs::load()),
+        view: Signal::new(View::Chat),
+        panel: Signal::new(false),
     });
 
     use_future(move || async move {
@@ -326,7 +371,10 @@ fn App() -> Element {
                 Phase::Ready => rsx! {
                     div { class: "app",
                         Sidebar {}
-                        Conversation {}
+                        match *state.view.read() {
+                            View::Chat => rsx! { Conversation {} },
+                            View::Settings(section) => rsx! { SettingsPage { section } },
+                        }
                     }
                     DialogView {}
                 },
@@ -346,28 +394,28 @@ fn Sidebar() -> Element {
     };
     rows.sort_by(|a, b| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time)).then_with(|| a.0.cmp(&b.0)));
     let reachable = rows.iter().filter(|(n, _)| reached(state.links.read().get(n).copied())).count();
-    let theme = *state.theme.read();
-    let theme_label = match theme {
-        Theme::System => "Theme: as the system",
-        Theme::Dark => "Theme: dark",
-        Theme::Light => "Theme: light",
+    let (title, _) = network_summary(&state.network.read());
+    let net = state.network.read().clone();
+    let dot = if net.entry == Some(false) || net.circuit == Some(false) {
+        "net-dot fail"
+    } else if net.percent < 100 {
+        "net-dot live"
+    } else {
+        "net-dot"
     };
-    let (title, detail) = network_summary(&state.network.read());
+    let in_settings = matches!(*state.view.read(), View::Settings(_));
     rsx! {
         aside {
             div { class: "brand",
                 p { class: "wordmark", "Nightpost" }
                 if !rows.is_empty() { span { class: "reach-count", "{reachable} reachable of {rows.len()}" } }
-                button { class: "theme", title: theme_label, "aria-label": theme_label, onclick: move |_| state.theme.set(theme.next()),
-                    {theme_icon(theme)}
-                }
             }
             nav {
                 for (name, last) in rows {
                     {
                         let unread = state.unread.read().get(&name).copied().unwrap_or(0);
                         let mut class = String::from("contact");
-                        if selected.as_deref() == Some(name.as_str()) { class.push_str(" selected"); }
+                        if !in_settings && selected.as_deref() == Some(name.as_str()) { class.push_str(" selected"); }
                         if unread > 0 { class.push_str(" unread"); }
                         let preview = match &last {
                             Some(m) if m.outgoing => format!("You: {}", m.text.lines().next().unwrap_or_default()),
@@ -376,11 +424,16 @@ fn Sidebar() -> Element {
                         };
                         let when = last.as_ref().map(|m| short_time(m.time)).unwrap_or_default();
                         let on = reached(state.links.read().get(&name).copied());
+                        let photo = state.people.read().get(&name).and_then(|p| p.photo.clone());
                         let pick = name.clone();
                         rsx! {
-                            button { key: "{name}", class: "{class}", onclick: move |_| state.select(pick.clone()),
+                            button { key: "{name}", class: "{class}",
+                                onclick: move |_| {
+                                    state.view.set(View::Chat);
+                                    state.select(pick.clone());
+                                },
                                 span { class: "avatar",
-                                    {avatar(&name, 44)}
+                                    {avatar(&name, photo.as_deref(), 44)}
                                     span { class: if on { "dot on" } else { "dot" } }
                                 }
                                 span { class: "lines",
@@ -394,12 +447,23 @@ fn Sidebar() -> Element {
                     }
                 }
             }
-            section { class: "network", "aria-label": "Network",
-                p { class: "title", "{title}" }
-                p { class: "detail", "{detail}" }
-                div { class: "buttons",
-                    button { class: "ghost", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), "Bridges" }
+            div { class: "footer",
+                button { class: "net-status", onclick: move |_| state.view.set(View::Settings(Section::Network)),
+                    span { class: dot }
+                    "{title}"
+                }
+                div { class: "footer-row",
                     button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
+                    button {
+                        class: if in_settings { "gear on" } else { "gear" },
+                        title: "Settings",
+                        "aria-label": "Settings",
+                        onclick: move |_| state.view.set(if in_settings { View::Chat } else { View::Settings(Section::Appearance) }),
+                        svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
+                            circle { cx: "12", cy: "12", r: "3" }
+                            path { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" }
+                        }
+                    }
                 }
             }
         }
@@ -425,8 +489,13 @@ fn network_summary(net: &Network) -> (&'static str, String) {
     }
 }
 
-/// Three rings, the same for a name on every machine: an onion of one's own.
-fn avatar(name: &str, size: u32) -> Element {
+/// The photo chosen for them, or three rings, the same for a name on every
+/// machine: an onion of one's own.
+fn avatar(name: &str, photo: Option<&str>, size: u32) -> Element {
+    if let Some(photo) = photo {
+        // Our own re-encoded PNG (`person::photo_uri`), checked by the daemon.
+        return rsx! { img { class: "photo", width: "{size}", height: "{size}", src: "{photo}", alt: "" } };
+    }
     const RINGS: [[&str; 3]; 8] = [
         ["#F2B880", "#C8553D", "#2D3047"],
         ["#A7C4E2", "#3A6EA5", "#F4E285"],
@@ -445,18 +514,6 @@ fn avatar(name: &str, size: u32) -> Element {
             circle { cx: "23", cy: "23", r: "23", fill: a }
             circle { cx: "23", cy: "23", r: "16", fill: b }
             circle { cx: "23", cy: "23", r: "9", fill: c }
-        }
-    }
-}
-
-fn theme_icon(theme: Theme) -> Element {
-    rsx! {
-        svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
-            match theme {
-                Theme::System => rsx! { circle { cx: "12", cy: "12", r: "8" } path { d: "M12 4a8 8 0 0 1 0 16z", fill: "currentColor" } },
-                Theme::Dark => rsx! { path { d: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" } },
-                Theme::Light => rsx! { circle { cx: "12", cy: "12", r: "4" } path { d: "M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" } },
-            }
         }
     }
 }
@@ -701,30 +758,43 @@ fn Conversation() -> Element {
     };
     let mut send_key = send.clone();
     let mut send_click = send;
-    let verify_name = name.clone();
+    let person = state.people.read().get(&name).cloned().unwrap_or_default();
+    let open = *state.panel.read();
+    let toggle = move |_| {
+        let open = *state.panel.read();
+        state.panel.set(!open);
+    };
 
     rsx! {
         main {
             header {
-                div { class: "who",
-                    {avatar(&name, 48)}
-                    div {
-                        h2 { "{name}" }
-                        p { class: "state {reach_class}", "{reach}" }
+                button { class: if open { "who open" } else { "who" }, "aria-label": "About {name}", onclick: toggle,
+                    {avatar(&name, person.photo.as_deref(), 48)}
+                    span { class: "who-text",
+                        span { class: "who-name",
+                            h2 { "{name}" }
+                            if person.verified {
+                                svg { class: "mark verified", view_box: "0 0 24 24", role: "img", "aria-label": "Verified",
+                                    path { d: "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z" }
+                                    path { d: "M8.5 12l2.5 2.5 4.5-5" }
+                                }
+                            }
+                            if muted(&person).is_some() {
+                                svg { class: "mark", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
+                                    path { d: "M6 8a6 6 0 0 1 9.3-5M18 8c0 7 3 9 3 9H9" }
+                                    path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" }
+                                    path { d: "M3 3l18 18" }
+                                }
+                            }
+                        }
+                        span { class: "state {reach_class}", "{reach}" }
                     }
                 }
-                button {
-                    class: "ghost",
-                    onclick: move |_| {
-                        let name = verify_name.clone();
-                        spawn(async move {
-                            match call(Request::Verify { name: name.clone() }).await {
-                                Ok(Reply::SafetyNumber { number, .. }) => state.dialog.set(Some(Dialog::Verify { name, number })),
-                                other => state.fail(other),
-                            }
-                        });
-                    },
-                    "Compare safety number"
+                button { class: if open { "info on" } else { "info" }, title: "About {name}", "aria-label": "About {name}", onclick: toggle,
+                    svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", "aria-hidden": "true",
+                        circle { cx: "12", cy: "12", r: "9" }
+                        path { d: "M12 11v5M12 7.6v.1" }
+                    }
                 }
             }
             RouteView { name: name.clone() }
@@ -771,8 +841,18 @@ fn Conversation() -> Element {
                 button { class: "primary", onclick: move |_| send_click(), "Send" }
             }
             p { class: "status", "{state.status}" }
+            if open { PersonPanel { key: "{name}", name: name.clone() } }
         }
     }
+}
+
+/// Until when notifications from them are off, if they are now.
+fn muted(person: &Person) -> Option<u64> {
+    person.muted_until.filter(|until| *until > now_millis())
+}
+
+fn now_millis() -> u64 {
+    jiff::Timestamp::now().as_millisecond() as u64
 }
 
 #[component]
@@ -782,7 +862,12 @@ fn DialogView() -> Element {
     let close = move |_| state.dialog.set(None);
     let body = match dialog {
         Dialog::Add => rsx! { AddDialog {} },
-        Dialog::Bridges => rsx! { BridgesDialog {} },
+        Dialog::Bridges => rsx! {
+            h3 { "Bridges" }
+            BridgesEditor {}
+            div { class: "actions", button { onclick: close, "Close" } }
+        },
+        Dialog::Safety { name, number } => return rsx! { SafetyNumber { name, number } },
         Dialog::Invite { name, link } => rsx! {
             h3 { "An invitation for {name}" }
             p { "Give it to {name} only, through a channel you trust. It works once, for 7 days." }
@@ -819,12 +904,6 @@ fn DialogView() -> Element {
             p { class: "number", "{groups(&number)}" }
             p { "{name} is added as soon as they confirm." }
         },
-        Dialog::Verify { name, number } => rsx! {
-            h3 { "Your safety number with {name}" }
-            p { "Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between." }
-            p { class: "number", "{groups(&number)}" }
-            div { class: "actions", button { class: "primary", onclick: close, "Done" } }
-        },
     };
     rsx! {
         div { class: "overlay",
@@ -833,32 +912,32 @@ fn DialogView() -> Element {
     }
 }
 
+/// The digits to read out, over everything, on a blurred veil.
 #[component]
-fn BridgesDialog() -> Element {
+fn SafetyNumber(name: String, number: String) -> Element {
     let mut state = use_context::<State>();
-    let file = dir().join(tor::BRIDGES_FILE);
-    let mut text = use_signal(|| tor::read_bridges(&file).join("\n"));
-    let mut error = use_signal(String::new);
-    let save = move |_| {
-        let lines: Vec<String> = text.read().lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
-        match tor::save_bridges(&file, &lines) {
-            Ok(()) => {
-                state.dialog.set(None);
-                state.status.set(if lines.is_empty() { "Back to the built-in Snowflake bridges".into() } else { "Bridges saved: Tor reconnects through them".into() });
-            }
-            Err(e) => error.set(e.to_string()),
-        }
-    };
+    let photo = state.people.read().get(&name).and_then(|p| p.photo.clone());
+    let who = name.clone();
+    let close = move |_| state.dialog.set(None);
     rsx! {
-        h3 { "Bridges" }
-        p { "Some networks (university or work Wi-Fi) block Tor. Nightpost then goes through a bridge: Snowflake by default, with nothing to set up." }
-        p { "If that does not get through, paste bridge lines here: your own, a friend's, or from bridges.torproject.org (WebTunnel gets through most often). They are used at once." }
-        label { r#for: "bridges", "Bridge lines, one per line" }
-        textarea { id: "bridges", class: "link", rows: "5", placeholder: "webtunnel [2001:db8::1]:443 … url=https://…", value: "{text}", oninput: move |e| text.set(e.value()) }
-        if !error.read().is_empty() { p { class: "warning", "{error}" } }
-        div { class: "actions",
-            button { class: "primary", onclick: save, "Save" }
-            button { onclick: move |_| state.dialog.set(None), "Cancel" }
+        div { class: "full", role: "dialog", "aria-label": "Safety number with {name}",
+            button { class: "full-close", "aria-label": "Close", onclick: close,
+                svg { width: "22", height: "22", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", "aria-hidden": "true", path { d: "M6 6l12 12M18 6L6 18" } }
+            }
+            div { class: "full-body",
+                {avatar(&name, photo.as_deref(), 64)}
+                h1 { "Your safety number with {name}" }
+                p { class: "full-help", "Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between." }
+                p { class: "full-number", "{groups(&number)}" }
+                div { class: "actions",
+                    button { class: "primary", onclick: move |_| {
+                        state.dialog.set(None);
+                        person::update(state, who.clone(), |p| p.verified = true);
+                    }, "They match" }
+                    button { class: "ghost", onclick: close, "Not now" }
+                }
+                p { class: "full-warn", "If even one digit differs, it is not {name} at the other end: do not mark it." }
+            }
         }
     }
 }
@@ -990,10 +1069,16 @@ fn start_daemon() -> Result<std::process::Child> {
 }
 
 /// The name only, never the text: a notification can show on a locked screen.
-fn notify(text: &str) {
+fn notify(text: &str, sound: bool) {
     let text = text.to_string();
     std::thread::spawn(move || {
-        let _ = notify_rust::Notification::new().summary("Nightpost").body(&text).show();
+        let mut notification = notify_rust::Notification::new();
+        notification.summary("Nightpost").body(&text);
+        if sound {
+            // The freedesktop sound theme's name; macOS and Windows play their default.
+            notification.sound_name("message-new-instant");
+        }
+        let _ = notification.show();
     });
 }
 
