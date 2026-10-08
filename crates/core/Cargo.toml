@@ -61,6 +61,8 @@ arti-client = { version = "=0.47.0", default-features = false, features = [
     "restricted-discovery",
     "vanguards",
     "ephemeral-keystore",
+    # Bridges and pluggable transports, for networks that block Tor.
+    "pt-client",
 ] }
 # Named for the service config, our own HsIdKeypair, the discovery keys and
 # the keystore kind, none of which arti-client re-exports.

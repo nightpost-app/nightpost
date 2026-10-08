@@ -11,7 +11,7 @@ use nightpost_core::api::{Client, Event, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
-use nightpost_core::transport::tor::TorTransport;
+use nightpost_core::transport::tor::{Bridges, TorTransport};
 use sha2::{Digest as _, Sha256};
 
 const USAGE: &str = "\
@@ -164,6 +164,22 @@ async fn listen(dir: &Path) -> Result<Client> {
 }
 
 
+/// lyrebird next to this program (as released) or on the PATH, and the
+/// bridge lines of `bridges.txt` in the data directory, if any (one per
+/// line, as Tor Browser or bridges.torproject.org gives them).
+fn bridges(dir: &Path) -> Option<Bridges> {
+    let name = format!("lyrebird{}", std::env::consts::EXE_SUFFIX);
+    let beside = std::env::current_exe().ok()?.with_file_name(&name);
+    let lyrebird = if beside.is_file() {
+        beside
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())?
+    };
+    let lines = std::fs::read_to_string(dir.join("bridges.txt")).unwrap_or_default();
+    let lines = lines.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
+    Some(Bridges { lyrebird, lines })
+}
+
 async fn daemon(dir: &Path) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -180,12 +196,12 @@ async fn daemon(dir: &Path) -> Result<()> {
     let store = Store::open(&dir.join("nightpost.db"), &unlock(dir)?).context("opening the database (wrong key?)")?;
 
     eprintln!("Tor: starting (minutes the first time)");
+    let bridges = bridges(dir);
+    if bridges.is_none() {
+        eprintln!("no lyrebird next to nightpost nor on the PATH: on a network that blocks Tor, Nightpost cannot get around it");
+    }
     let mut shown = String::new();
-    let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), |frac, blocked| {
-        let line = match blocked {
-            Some(why) => format!("Tor: stuck? {why}"),
-            None => format!("Tor: {:.0}%", frac * 100.0),
-        };
+    let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges, move |line| {
         if line != shown {
             eprintln!("{line}");
             shown = line;

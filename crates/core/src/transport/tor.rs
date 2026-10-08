@@ -1,17 +1,19 @@
 //! Tor through arti, as murmure runs it: keys in memory only, rustls, and
 //! every service in restricted discovery mode.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use arti_client::config::{Reconfigure, TorClientConfigBuilder};
+use arti_client::config::pt::TransportConfigBuilder;
+use arti_client::config::{BridgeConfigBuilder, CfgPath, Reconfigure, TorClientConfig, TorClientConfigBuilder};
 use arti_client::{DataStream, KeystoreSelector, TorClient};
 use data_encoding::BASE32_NOPAD;
 use futures::{Stream, StreamExt as _};
 use safelog::DisplayRedacted as _;
 use tor_cell::relaycell::msg::Connected;
-use tor_config::ExplicitOrAuto;
+use tor_config::{BoolOrAuto, ExplicitOrAuto};
 use tor_hscrypto::pk::{HsClientDescEncKey, HsClientDescEncSecretKey, HsId, HsIdKeypair};
 use tor_hsservice::config::OnionServiceConfigBuilder;
 use tor_hsservice::config::restricted_discovery::HsClientNickname;
@@ -26,6 +28,32 @@ use crate::dbkey::Secret;
 /// The virtual port Nightpost listens on inside its onion services.
 const PORT: u16 = 7777;
 
+/// Tor Browser's default Snowflake bridges (tor-browser-build,
+/// `projects/tor-expert-bundle/pt_config.json`, 15.0.24). Snowflake looks
+/// like a video call and needs no bridge address of ours.
+const SNOWFLAKE: [&str; 2] = [
+    "snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn",
+    "snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA fingerprint=8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn",
+];
+
+/// No progress for this long and Tor is taken for blocked on this network:
+/// the client switches to the bridges, and back without them when those
+/// stall in turn (a laptop that moved). Snowflake starts slowly, so the
+/// bridges get longer.
+const STALL: Duration = Duration::from_secs(30);
+const STALL_BRIDGED: Duration = Duration::from_secs(120);
+/// How long a probe (see [`reachable`]) may take.
+const PROBE: Duration = Duration::from_secs(30);
+
+/// For networks that block Tor (some university or company Wi-Fi): lyrebird,
+/// the Tor Project's pluggable-transport program (Snowflake, WebTunnel,
+/// obfs4), and the bridges to reach through it.
+pub struct Bridges {
+    pub lyrebird: PathBuf,
+    /// Bridge lines; none means Tor Browser's Snowflake bridges.
+    pub lines: Vec<String>,
+}
+
 pub struct TorTransport {
     client: Arc<TorClient<PreferredRuntime>>,
 }
@@ -38,44 +66,133 @@ pub struct TorService {
 
 impl TorTransport {
     /// Bootstraps a client keeping its state and cache in the two directories.
-    /// `progress` gets a fraction from 0 to 1 and, when arti believes it is
-    /// stuck, why: a cold first start downloads the whole consensus and takes
+    /// `progress` gets lines to show ("Tor: 45%"), during the bootstrap and
+    /// after it: a cold first start downloads the whole consensus and takes
     /// minutes, and a number on screen is what tells that apart from a hang.
+    ///
+    /// With `bridges`, the client starts the way that worked last time and
+    /// switches between direct and bridged whenever it stops making progress
+    /// (see [`STALL`]), for as long as it runs.
     pub async fn bootstrap(
         state_dir: &Path,
         cache_dir: &Path,
-        mut progress: impl FnMut(f32, Option<String>),
+        bridges: Option<Bridges>,
+        progress: impl FnMut(String) + Send + 'static,
     ) -> Result<TorTransport> {
         create_private_dir(state_dir)?;
         create_private_dir(cache_dir)?;
-        let mut builder = TorClientConfigBuilder::from_directories(state_dir, cache_dir);
-        builder.storage().keystore().primary().kind(ExplicitOrAuto::Explicit(ArtiKeystoreKind::Ephemeral));
-        let config = builder.build().map_err(|e| TransportError(format!("Tor configuration: {e}")))?;
+        let configs = configs(state_dir, cache_dir, bridges.as_ref())?;
+        let marker = state_dir.join("bridged");
+        let bridged = configs.len() == 2 && marker.exists();
 
         let client = TorClient::builder()
-            .config(config)
+            .config(configs[usize::from(bridged)].clone())
             .create_unbootstrapped_async()
             .await
             .map_err(|e| describe(e, "creating the Tor client"))?;
         // Subscribed before bootstrapping, or the early progress is lost.
-        // Scoped: the bootstrap future borrows the client.
-        {
-            let mut events = client.bootstrap_events();
-            let booting = client.bootstrap();
-            futures::pin_mut!(booting);
-            loop {
-                tokio::select! {
-                    outcome = &mut booting => {
-                        outcome.map_err(|e| describe(e, "bootstrapping Tor"))?;
-                        break;
-                    }
-                    Some(status) = events.next() => {
-                        progress(status.as_frac(), status.blocked().map(|b| b.message().to_string()));
+        let events = client.bootstrap_events();
+        tokio::spawn(watch(client.clone(), events, configs, bridged, marker, progress));
+        client.bootstrap().await.map_err(|e| describe(e, "bootstrapping Tor"))?;
+        Ok(TorTransport { client })
+    }
+}
+
+/// The direct configuration and, with bridges, the bridged one. Both list
+/// the bridges and lyrebird; only `enabled` differs, so switching is a
+/// reconfiguration of the running client.
+fn configs(state_dir: &Path, cache_dir: &Path, bridges: Option<&Bridges>) -> Result<Vec<TorClientConfig>> {
+    let base = || {
+        let mut builder = TorClientConfigBuilder::from_directories(state_dir, cache_dir);
+        builder.storage().keystore().primary().kind(ExplicitOrAuto::Explicit(ArtiKeystoreKind::Ephemeral));
+        builder
+    };
+    let build = |builder: TorClientConfigBuilder| builder.build().map_err(|e| TransportError(format!("Tor configuration: {e}")));
+    let Some(bridges) = bridges else { return Ok(vec![build(base())?]) };
+    let lines: Vec<&str> = if bridges.lines.is_empty() { SNOWFLAKE.to_vec() } else { bridges.lines.iter().map(String::as_str).collect() };
+    let mut configs = Vec::new();
+    for enabled in [false, true] {
+        let mut builder = base();
+        for line in &lines {
+            let bridge: BridgeConfigBuilder = line.parse().map_err(|e| TransportError(format!("bridge line {line:?}: {e}")))?;
+            builder.bridges().bridges().push(bridge);
+        }
+        let mut lyrebird = TransportConfigBuilder::default();
+        let protocols = ["snowflake", "webtunnel", "obfs4"].map(|p| p.parse().expect("a valid transport name"));
+        lyrebird.protocols(protocols.into()).path(CfgPath::new_literal(bridges.lyrebird.clone())).run_on_startup(false);
+        builder.bridges().transports().push(lyrebird);
+        builder.bridges().enabled(BoolOrAuto::Explicit(enabled));
+        configs.push(build(builder)?);
+    }
+    Ok(configs)
+}
+
+/// Reports progress, and switches between `configs` when it stalls: no
+/// progress while bootstrapping, or, once bootstrapped, two failed probes
+/// in a row. Remembers in `marker` the way that last got the client ready.
+async fn watch(
+    client: Arc<TorClient<PreferredRuntime>>,
+    mut events: arti_client::status::BootstrapEvents,
+    configs: Vec<TorClientConfig>,
+    mut bridged: bool,
+    marker: PathBuf,
+    mut progress: impl FnMut(String),
+) {
+    let (mut best, mut since, mut saved, mut failures) = (-1.0_f32, Instant::now(), None, 0);
+    loop {
+        let stall = if bridged { STALL_BRIDGED } else { STALL };
+        match tokio::time::timeout_at((since + stall).into(), events.next()).await {
+            Ok(None) => return,
+            Ok(Some(status)) => {
+                if status.as_frac() > best {
+                    (best, since) = (status.as_frac(), Instant::now());
+                }
+                if status.ready_for_traffic() && saved != Some(bridged) {
+                    let _ = if bridged { std::fs::write(&marker, b"") } else { std::fs::remove_file(&marker).or(Ok(())) };
+                    saved = Some(bridged);
+                }
+                progress(match status.blocked() {
+                    Some(why) => format!("Tor: stuck? {}", why.message()),
+                    None => format!("Tor: {:.0}%", status.as_frac() * 100.0),
+                });
+            }
+            Err(_) if configs.len() < 2 => since = Instant::now(),
+            Err(_) => {
+                // Bootstrapped, arti's status says "online" for good after
+                // one success: ask the network itself. Still bootstrapping
+                // with no progress: stalled already.
+                if client.bootstrap_status().ready_for_traffic() {
+                    failures = if reachable(&client).await { 0 } else { failures + 1 };
+                    if failures < 2 {
+                        since = Instant::now();
+                        continue;
                     }
                 }
+                bridged = !bridged;
+                progress(
+                    if bridged { "Tor: blocked on this network? Going through a bridge…" } else { "Tor: the bridge is not getting through; trying without it…" }
+                        .into(),
+                );
+                if let Err(e) = client.reconfigure(&configs[usize::from(bridged)], Reconfigure::AllOrNothing) {
+                    progress(format!("Tor: switching failed: {e}"));
+                }
+                (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
             }
         }
-        Ok(TorTransport { client })
+    }
+}
+
+/// Whether a fresh one-hop circuit to a guard can be built. It is retired
+/// afterwards, so the next probe builds a new one rather than reusing it.
+async fn reachable(client: &TorClient<PreferredRuntime>) -> bool {
+    let (Ok(circmgr), Ok(dirmgr)) = (client.circmgr(), client.dirmgr()) else { return true };
+    let Ok(netdir) = dirmgr.timely_netdir() else { return false };
+    match tokio::time::timeout(PROBE, circmgr.get_or_launch_dir(netdir.as_ref().into())).await {
+        Ok(Ok(tunnel)) => {
+            circmgr.retire_circ(&tunnel.unique_id());
+            true
+        }
+        _ => false,
     }
 }
 
@@ -225,6 +342,18 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     #[test]
+    fn the_bridges_parse_and_differ_only_in_being_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridges = Bridges { lyrebird: "/opt/lyrebird".into(), lines: Vec::new() };
+        let both = configs(dir.path(), dir.path(), Some(&bridges)).unwrap();
+        assert_eq!(both.len(), 2);
+        assert_ne!(both[0], both[1]);
+        assert_eq!(configs(dir.path(), dir.path(), None).unwrap().len(), 1);
+        let bad = Bridges { lyrebird: "/opt/lyrebird".into(), lines: vec!["snowflake nonsense".into()] };
+        assert!(configs(dir.path(), dir.path(), Some(&bad)).is_err());
+    }
+
+    #[test]
     fn the_service_config_is_always_restricted() {
         let nickname: HsNickname = slug(&[1; 32]).try_into().unwrap();
         assert!(service_config(&nickname, &[]).is_err());
@@ -245,15 +374,7 @@ mod tests {
             let cache = dir.path().join(name).join("cache");
             let name = name.to_string();
             async move {
-                TorTransport::bootstrap(&state, &cache, |f, blocked| {
-                    if let Some(why) = blocked {
-                        println!("{name}: stuck: {why}");
-                    } else if f >= 1.0 {
-                        println!("{name}: bootstrapped");
-                    }
-                })
-                .await
-                .unwrap()
+                TorTransport::bootstrap(&state, &cache, None, move |line| println!("{name}: {line}")).await.unwrap()
             }
         };
         let alice = boot("alice").await;
