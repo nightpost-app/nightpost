@@ -518,7 +518,9 @@ fn AddDialog() -> Element {
         };
         state.dialog.set(None);
         state.status.set(format!("Looking for {who} (up to a few minutes)…"));
-        spawn(async move {
+        // Not `spawn`: that task belongs to this dialog, which just closed,
+        // and would be dropped before the request even left.
+        dioxus::core::spawn_forever(async move {
             match call(request).await {
                 Ok(Reply::Added { name }) => state.status.set(format!("{name} added")),
                 other => state.fail(other),
