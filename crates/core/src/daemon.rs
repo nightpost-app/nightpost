@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
 
-use crate::api::{ContactInfo, Event, HistoryItem, LinkState, Network, hex};
+use crate::api::{ContactInfo, Event, HistoryItem, LinkState, MAX_PHOTO, Network, Person, hex};
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite};
@@ -372,7 +372,7 @@ impl<T: Transport + 'static> Daemon<T> {
 
     /// The last `limit` messages with `name`, oldest first.
     pub fn history(&self, name: &str, limit: u32) -> Result<Vec<HistoryItem>> {
-        let contact = self.contacts_raw()?.into_iter().find(|c| c.name == name).context("no such contact")?;
+        let contact = self.contact_named(name)?;
         Ok(self
             .store
             .history(&contact.identity, limit)?
@@ -384,8 +384,56 @@ impl<T: Transport + 'static> Daemon<T> {
     pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
         self.contacts_raw()?
             .into_iter()
-            .map(|c| Ok(ContactInfo { safety_number: self.safety_number(&c)?, name: c.name }))
+            .map(|c| Ok(ContactInfo { safety_number: self.safety_number(&c)?, person: self.person(&c)?, name: c.name }))
             .collect()
+    }
+
+    pub fn rename(&self, name: &str, to: &str) -> Result<()> {
+        self.check_name(to)?;
+        let mut contact = self.contact_named(name)?;
+        contact.name = to.into();
+        self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(&contact)?)?;
+        let state = self.link_states.borrow_mut().remove(name);
+        if let Some(state) = state {
+            self.link_states.borrow_mut().insert(to.into(), state);
+        }
+        let _ = self.events.send(Event::ContactRenamed { name: name.into(), to: to.into() });
+        Ok(())
+    }
+
+    /// Takes their discovery key off the service, so they can no longer
+    /// reach us or tell we are online, and stops sending to them. An open
+    /// link closes at its next turn ([`Self::run_link`] looks them up).
+    pub async fn remove(self: &Rc<Self>, name: &str, wipe: bool) -> Result<()> {
+        let contact = self.contact_named(name)?;
+        let key = hex(&contact.identity);
+        self.store.atomically(|| {
+            self.store.remove("contact", &key)?;
+            self.store.remove("person", &key)?;
+            self.store.forget(&contact.identity, wipe)
+        })?;
+        self.link_states.borrow_mut().remove(name);
+        self.backoff.borrow_mut().retain(|(account, _), _| *account != contact.identity);
+        self.refresh_service().await?;
+        let _ = self.events.send(Event::ContactRemoved { name: name.into() });
+        Ok(())
+    }
+
+    pub fn set_person(&self, name: &str, person: Person) -> Result<()> {
+        if let Some(photo) = &person.photo {
+            ensure!(photo.len() <= MAX_PHOTO && photo.starts_with("data:image/png;base64,"), "a photo is a PNG data URI of at most {MAX_PHOTO} bytes");
+        }
+        let contact = self.contact_named(name)?;
+        self.store.put("person", &hex(&contact.identity), &postcard::to_stdvec(&person)?)?;
+        let _ = self.events.send(Event::PersonChanged { name: name.into(), person });
+        Ok(())
+    }
+
+    fn person(&self, contact: &Contact) -> Result<Person> {
+        Ok(match self.store.get("person", &hex(&contact.identity))? {
+            Some(bytes) => postcard::from_bytes(&bytes)?,
+            None => Person::default(),
+        })
     }
 
     // --- the service -------------------------------------------------------
@@ -584,7 +632,10 @@ impl<T: Transport + 'static> Daemon<T> {
             tracing::info!("link to {} closed: {e:#}", contact.name);
         }
         self.links.borrow_mut().remove(&target);
-        self.set_link(&contact.name, LinkState::Idle);
+        // By the name they have now; nothing for someone just removed.
+        if let Ok(Some(now)) = self.contact(&contact.identity) {
+            self.set_link(&now.name, LinkState::Idle);
+        }
         // Whatever was in flight goes again on the next link.
         self.wake.notify_one();
     }
@@ -611,6 +662,8 @@ impl<T: Transport + 'static> Daemon<T> {
             let (me, them) = (self.address(), address(&contact.identity, device)?);
             let mut in_flight = HashSet::new();
             loop {
+                // Renamed since, or removed: then the link ends here.
+                let contact = &self.contact(&contact.identity)?.context("no longer a contact")?;
                 for (id, envelope) in self.store.queued(&contact.identity, device)? {
                     if in_flight.insert(id) {
                         let message = session::encrypt(&self.store, &me, &them, &envelope).await?;
@@ -622,6 +675,8 @@ impl<T: Transport + 'static> Daemon<T> {
                     frame = frames.recv() => match frame {
                         None => return Ok(()),
                         Some(Frame::Message { id, kind, body }) => {
+                            // Not kept from someone removed while we waited.
+                            let contact = &self.contact(&contact.identity)?.context("no longer a contact")?;
                             match self.receive(contact, &them, id, kind, &body).await {
                                 Ok(Some(event)) => { let _ = self.events.send(event); }
                                 Ok(None) => {}
@@ -700,6 +755,10 @@ impl<T: Transport + 'static> Daemon<T> {
             Some(bytes) => Some(postcard::from_bytes(&bytes)?),
             None => None,
         })
+    }
+
+    fn contact_named(&self, name: &str) -> Result<Contact> {
+        self.contacts_raw()?.into_iter().find(|c| c.name == name).context("no such contact")
     }
 
     fn contacts_raw(&self) -> Result<Vec<Contact>> {
@@ -843,6 +902,51 @@ mod tests {
                 bob.start().await.unwrap();
                 assert!(message("alice", id, "tu es là ?")(&next(&mut bob_events).await));
                 assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
+            })
+            .await;
+    }
+
+    /// Renamed, they are reached under the new name; removed, they can no
+    /// longer reach us, and with `wipe` the conversation is gone.
+    #[tokio::test]
+    async fn rename_then_remove() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+
+                alice.rename("bob", "robert").unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::ContactRenamed { name: "bob".into(), to: "robert".into() });
+                assert!(alice.rename("robert", "robert").is_err() && alice.rename("bob", "x").is_err());
+                let id = bob.send("alice", "toujours moi").unwrap();
+                assert!(message("robert", id, "toujours moi")(&next(&mut alice_events).await));
+
+                let person = Person { verified: true, muted_until: Some(u64::MAX), photo: None };
+                alice.set_person("robert", person.clone()).unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::PersonChanged { name: "robert".into(), person: person.clone() });
+                assert_eq!(alice.contacts().unwrap()[0].person, person);
+                let bad = Person { photo: Some("data:text/html,<script>".into()), ..Person::default() };
+                assert!(alice.set_person("robert", bad).is_err());
+
+                alice.remove("robert", true).await.unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::ContactRemoved { name: "robert".into() });
+                assert!(alice.contacts().unwrap().is_empty());
+                assert!(alice.store.history(&bob.identity.identity_key().serialize(), 10).unwrap().is_empty());
+                // Bob can no longer reach Alice's service, so his messages
+                // no longer get through.
+                assert!(bob.net.dial(onion(&alice.seed())).await.is_err());
+                bob.send("alice", "tu es là ?").unwrap();
+                sleep(Duration::from_millis(500)).await;
+                assert!(alice.store.history(&bob.identity.identity_key().serialize(), 10).unwrap().is_empty());
+                assert_eq!(bob.links(), [("alice".to_string(), LinkState::Unreachable)]);
             })
             .await;
     }

@@ -380,8 +380,19 @@ impl App {
                     self.status = format!("{e:#}");
                 }
             }
-            // The route is drawn by the graphical interface only.
-            Update::Event(Event::Network { .. } | Event::Link { .. }) => {}
+            Update::Event(Event::ContactRenamed { name, to }) => {
+                if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
+                    c.name = to;
+                }
+            }
+            Update::Event(Event::ContactRemoved { name }) => {
+                self.conversations.retain(|c| c.name != name);
+                self.selected = self.selected.min(self.conversations.len().saturating_sub(1));
+                self.status = format!("{name} removed");
+            }
+            // The route, photos and per-person settings are the graphical
+            // interface's.
+            Update::Event(Event::Network { .. } | Event::Link { .. } | Event::PersonChanged { .. }) => {}
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 self.notify = Some(format!("{name} used your invitation"));
                 self.overlay = Some(if self.codes.contains(&name) {

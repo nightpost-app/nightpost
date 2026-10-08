@@ -192,6 +192,16 @@ impl Store {
         Ok(rows)
     }
 
+    /// Drops what still waits for `account`, and with `wipe` the
+    /// conversation too.
+    pub(crate) fn forget(&self, account: &[u8], wipe: bool) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM outbox WHERE account = ?1", params![account])?;
+        if wipe {
+            self.db.execute("DELETE FROM messages WHERE account = ?1", params![account])?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn queue(&self, account: &[u8], device: u8, id: &[u8; 16], envelope: &[u8]) -> rusqlite::Result<()> {
         self.db.execute(
             "INSERT OR IGNORE INTO outbox (account, device, id, envelope) VALUES (?1, ?2, ?3, ?4)",

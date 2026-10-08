@@ -44,6 +44,13 @@ pub enum Request {
     /// Where the network and each contact stand now; [`Event::Network`] and
     /// [`Event::Link`] tell what changes after.
     Status,
+    /// The name only we see them by.
+    Rename { name: String, to: String },
+    /// Revokes their access to our onion service: they can no longer reach
+    /// us nor tell when we are online. `wipe` also deletes the conversation.
+    Remove { name: String, wipe: bool },
+    /// What we keep about them besides the name.
+    SetPerson { name: String, person: Person },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -76,6 +83,9 @@ pub enum Event {
     Fingerprint { name: String, safety_number: String },
     Network { network: Network },
     Link { name: String, state: LinkState },
+    ContactRenamed { name: String, to: String },
+    ContactRemoved { name: String },
+    PersonChanged { name: String, person: Person },
 }
 
 /// How far Tor got, for interfaces to draw the route a message takes.
@@ -120,7 +130,25 @@ pub struct HistoryItem {
 pub struct ContactInfo {
     pub name: String,
     pub safety_number: String,
+    #[serde(default)]
+    pub person: Person,
 }
+
+/// What we keep about a contact besides the name, in the encrypted
+/// database like everything else: who someone talks to is no one's business.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct Person {
+    /// We compared safety numbers with them.
+    pub verified: bool,
+    /// No notifications until then (Unix milliseconds); `u64::MAX` for good.
+    pub muted_until: Option<u64>,
+    /// A picture we chose for them, as a `data:image/png;base64,` URI the
+    /// interface made by decoding and re-encoding the image.
+    pub photo: Option<String>,
+}
+
+/// A photo's data URI, at most this long: 256 × 256 PNG with room to spare.
+pub const MAX_PHOTO: usize = 512 * 1024;
 
 /// The data directory: `NIGHTPOST_DIR` if set (tests run several), else
 /// the platform's. Created owner-only, and returned absolute so the socket
@@ -219,6 +247,18 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             Reply::SafetyNumber { name, number }
         }
         Request::Status => Reply::Status { network: daemon.network(), links: daemon.links() },
+        Request::Rename { name, to } => {
+            daemon.rename(&name, &to)?;
+            Reply::Done
+        }
+        Request::Remove { name, wipe } => {
+            daemon.remove(&name, wipe).await?;
+            Reply::Done
+        }
+        Request::SetPerson { name, person } => {
+            daemon.set_person(&name, person)?;
+            Reply::Done
+        }
         Request::Listen => unreachable!("answered by the caller"),
     })
 }

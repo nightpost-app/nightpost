@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
-use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Reply, Request};
+use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
 use nightpost_core::transport::tor;
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -81,6 +81,7 @@ struct State {
     codes: Signal<Vec<String>>,
     network: Signal<Network>,
     links: Signal<HashMap<String, LinkState>>,
+    people: Signal<HashMap<String, Person>>,
     /// The last message that came in, numbered so its pulse runs once.
     arrival: Signal<Option<(String, u64)>>,
     theme: Signal<Theme>,
@@ -143,7 +144,10 @@ impl State {
     /// shows each one's last message.
     async fn reload_contacts(mut self) {
         let names: Vec<String> = match call(Request::Contacts).await {
-            Ok(Reply::Contacts { contacts }) => contacts.into_iter().map(|c| c.name).collect(),
+            Ok(Reply::Contacts { contacts }) => {
+                self.people.set(contacts.iter().map(|c| (c.name.clone(), c.person.clone())).collect());
+                contacts.into_iter().map(|c| c.name).collect()
+            }
             other => return self.fail(other),
         };
         for name in &names {
@@ -224,6 +228,37 @@ impl State {
                     Dialog::Waiting { name, number: safety_number }
                 }));
             }
+            Event::ContactRenamed { name, to } => {
+                fn rekey<V: 'static>(mut map: Signal<HashMap<String, V>>, name: &str, to: &str) {
+                    let value = map.write().remove(name);
+                    if let Some(value) = value {
+                        map.write().insert(to.into(), value);
+                    }
+                }
+                rekey(self.messages, &name, &to);
+                rekey(self.unread, &name, &to);
+                rekey(self.links, &name, &to);
+                rekey(self.people, &name, &to);
+                for n in self.contacts.write().iter_mut().filter(|n| **n == name) {
+                    *n = to.clone();
+                }
+                if self.selected.read().as_deref() == Some(name.as_str()) {
+                    self.selected.set(Some(to));
+                }
+            }
+            Event::ContactRemoved { name } => {
+                self.contacts.write().retain(|n| *n != name);
+                self.messages.write().remove(&name);
+                self.unread.write().remove(&name);
+                self.links.write().remove(&name);
+                self.people.write().remove(&name);
+                if self.selected.read().as_deref() == Some(name.as_str()) {
+                    self.selected.set(None);
+                }
+            }
+            Event::PersonChanged { name, person } => {
+                self.people.write().insert(name, person);
+            }
             Event::Network { network } => self.network.set(network),
             Event::Link { name, state } => {
                 self.links.write().insert(name, state);
@@ -245,6 +280,7 @@ fn App() -> Element {
         codes: Signal::new(Vec::new()),
         network: Signal::new(Network::default()),
         links: Signal::new(HashMap::new()),
+        people: Signal::new(HashMap::new()),
         arrival: Signal::new(None),
         theme: Signal::new(Theme::load()),
     });
