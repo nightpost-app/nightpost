@@ -242,18 +242,27 @@ async fn watch(
     }
 }
 
-/// Whether a fresh one-hop circuit to a guard can be built. It is retired
-/// afterwards, so the next probe builds a new one rather than reusing it.
+/// Whether Tor gets through right now: a fresh one-hop circuit to a guard
+/// (retired afterwards, so the next probe builds a new one), and a circuit of
+/// the kind onion services need (our guard, then the vanguards). The first
+/// alone is not enough: on some filtered networks (a university Wi-Fi) a few
+/// relays answer and Tor says 100%, while onion service circuits never get
+/// built. The second alone comes from a pool built ahead, and so notices
+/// a network that just started blocking only once the pool runs dry.
 async fn reachable(client: &TorClient<PreferredRuntime>) -> bool {
-    let (Ok(circmgr), Ok(dirmgr)) = (client.circmgr(), client.dirmgr()) else { return true };
+    let (Ok(circmgr), Ok(pool), Ok(dirmgr)) = (client.circmgr(), client.hs_circ_pool(), client.dirmgr()) else { return true };
     let Ok(netdir) = dirmgr.timely_netdir() else { return false };
-    match tokio::time::timeout(PROBE, circmgr.get_or_launch_dir(netdir.as_ref().into())).await {
+    let started = Instant::now();
+    let one_hop = match tokio::time::timeout(PROBE, circmgr.get_or_launch_dir(netdir.as_ref().into())).await {
         Ok(Ok(tunnel)) => {
             circmgr.retire_circ(&tunnel.unique_id());
             true
         }
         _ => false,
-    }
+    };
+    let onion = one_hop && matches!(tokio::time::timeout(PROBE, pool.get_or_launch_client_rend(&netdir)).await, Ok(Ok(_)));
+    tracing::debug!("Tor probe: one hop {one_hop}, onion circuit {onion}, {:?}", started.elapsed());
+    onion
 }
 
 impl super::Transport for TorTransport {
