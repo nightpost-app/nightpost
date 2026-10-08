@@ -6,7 +6,7 @@
 //! passphrase alone, read from a file rather than typed, so the daemon can
 //! start unattended. The key itself is never written anywhere.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
@@ -26,6 +26,10 @@ impl Unlock {
     /// `None` when given neither: a database is never left without a key.
     pub fn new(secret: Option<Secret>, passphrase: Option<Zeroizing<Vec<u8>>>) -> Option<Self> {
         (secret.is_some() || passphrase.is_some()).then_some(Unlock { secret, passphrase })
+    }
+
+    pub(crate) fn secret(&self) -> Option<Secret> {
+        self.secret.clone()
     }
 
     /// The SQLCipher key for a database whose salt is `salt`.
@@ -92,6 +96,14 @@ pub fn keychain_secret(label: &str) -> keyring::Result<Secret> {
     }
 }
 
+/// Present in a data directory whose database also needs the passphrase,
+/// so that whatever starts the daemon knows to ask for it.
+pub const MARKER: &str = "uses-passphrase";
+
+pub fn uses_passphrase(dir: &Path) -> bool {
+    dir.join(MARKER).exists()
+}
+
 /// Where an unattended daemon reads its passphrase: a systemd credential
 /// (`LoadCredentialEncrypted=nightpost-passphrase`), else the file named by
 /// `NIGHTPOST_PASSPHRASE_FILE`. Trailing newlines are not part of it.
@@ -102,7 +114,7 @@ pub fn passphrase_file() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("NIGHTPOST_PASSPHRASE_FILE").map(PathBuf::from))
 }
 
-pub fn read_passphrase(path: &std::path::Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
+pub fn read_passphrase(path: &Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
     let mut bytes = Zeroizing::new(std::fs::read(path)?);
     while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
         bytes.pop();

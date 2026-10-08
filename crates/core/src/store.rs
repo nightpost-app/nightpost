@@ -9,9 +9,10 @@
 //! libsignal call takes the session store and the identity store as two `&mut`
 //! at once, and two `Db`s over the same `Store` give it that.
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use libsignal_protocol::{
@@ -24,7 +25,7 @@ use rand::{Rng, TryRngCore, rngs::OsRng};
 use rusqlite::{Connection, OptionalExtension, params};
 use zeroize::Zeroizing;
 
-use crate::dbkey::Unlock;
+use crate::dbkey::{MARKER, Secret, Unlock};
 
 type Result<T> = std::result::Result<T, SignalProtocolError>;
 
@@ -33,6 +34,12 @@ const SCHEMA: u32 = 1;
 
 pub struct Store {
     db: Connection,
+    path: PathBuf,
+    salt: [u8; 16],
+    /// The keychain secret it was opened with, and the key in use: what
+    /// changing the passphrase needs.
+    secret: Option<Secret>,
+    key: RefCell<Secret>,
 }
 
 impl Store {
@@ -95,7 +102,7 @@ impl Store {
             PRAGMA user_version = 1;",
         )?;
 
-        let store = Store { db };
+        let store = Store { db, path: path.to_path_buf(), salt, secret: unlock.secret(), key: RefCell::new(key) };
         if store.get("self", "identity")?.is_none() {
             let mut rng = OsRng.unwrap_err();
             let identity = IdentityKeyPair::generate(&mut rng);
@@ -109,6 +116,30 @@ impl Store {
             tx.commit()?;
         }
         Ok(store)
+    }
+
+    /// Encrypts the database again, for the same keychain secret with `new`
+    /// rather than `current` as the passphrase (`None`: no passphrase), once
+    /// `current` is shown to be the one in use. The marker next to the
+    /// database tells the interfaces whether to ask for it at start.
+    pub fn set_passphrase(&self, current: Option<Zeroizing<Vec<u8>>>, new: Option<Zeroizing<Vec<u8>>>) -> anyhow::Result<()> {
+        // Without a keychain the passphrase comes from a file, and is the only key.
+        anyhow::ensure!(self.secret.is_some(), "without a keychain, the passphrase cannot be changed here");
+        anyhow::ensure!(new.as_ref().is_none_or(|p| !p.is_empty()), "an empty passphrase protects nothing");
+        let current = Unlock::new(self.secret.clone(), current).expect("has a secret").key(&self.salt);
+        anyhow::ensure!(current == *self.key.borrow(), "that is not the current passphrase");
+        let adding = new.is_some();
+        let key = Unlock::new(self.secret.clone(), new).expect("has a secret").key(&self.salt);
+        let pragma = Zeroizing::new(format!("PRAGMA rekey = \"x'{}{}'\"", hex(&key[..]), hex(&self.salt)));
+        self.db.execute_batch(&pragma)?;
+        *self.key.borrow_mut() = key;
+        let marker = self.path.with_file_name(MARKER);
+        if adding {
+            File::create(marker)?;
+        } else if marker.exists() {
+            std::fs::remove_file(marker)?;
+        }
+        Ok(())
     }
 
     pub fn identity(&self) -> Result<IdentityKeyPair> {

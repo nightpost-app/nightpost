@@ -51,6 +51,8 @@ pub enum Request {
     Remove { name: String, wipe: bool },
     /// What we keep about them besides the name.
     SetPerson { name: String, person: Person },
+    /// Adds, changes or removes the passphrase over the keychain secret.
+    SetPassphrase { current: Option<String>, new: Option<String> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -257,6 +259,11 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
         }
         Request::SetPerson { name, person } => {
             daemon.set_person(&name, person)?;
+            Reply::Done
+        }
+        Request::SetPassphrase { current, new } => {
+            let bytes = |p: Option<String>| p.map(|p| zeroize::Zeroizing::new(p.into_bytes()));
+            daemon.set_passphrase(bytes(current), bytes(new))?;
             Reply::Done
         }
         Request::Listen => unreachable!("answered by the caller"),

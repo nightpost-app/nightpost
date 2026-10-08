@@ -14,6 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
+use nightpost_core::dbkey;
 
 mod person;
 mod settings;
@@ -55,6 +56,9 @@ fn dir() -> &'static PathBuf {
 #[derive(Clone, PartialEq)]
 enum Phase {
     Connecting(String),
+    /// The database needs the passphrase before the daemon can start; the
+    /// text says why it is asked again, if it is.
+    Locked(String),
     Ready,
     Failed(String),
 }
@@ -330,29 +334,7 @@ fn App() -> Element {
         panel: Signal::new(false),
     });
 
-    use_future(move || async move {
-        let mut state = state;
-        let mut events = match attach(state.phase).await {
-            Ok(events) => events,
-            Err(e) => {
-                state.phase.set(Phase::Failed(format!("{e:#}")));
-                return;
-            }
-        };
-        match call(Request::Status).await {
-            Ok(Reply::Status { network, links }) => {
-                state.network.set(network);
-                state.links.set(links.into_iter().collect());
-            }
-            other => state.fail(other),
-        }
-        state.reload_contacts().await;
-        state.phase.set(Phase::Ready);
-        while let Ok(Some(event)) = events.event().await {
-            state.on_event(event);
-        }
-        state.phase.set(Phase::Failed("The daemon stopped. Reopen Nightpost to start it again.".into()));
-    });
+    use_future(move || run(state, None));
 
     let theme = *state.theme.read();
     rsx! {
@@ -367,6 +349,7 @@ fn App() -> Element {
                     }
                     DialogView {}
                 },
+                Phase::Locked(why) => rsx! { Locked { why } },
                 Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
                 Phase::Ready => rsx! {
                     div { class: "app",
@@ -379,6 +362,57 @@ fn App() -> Element {
                     DialogView {}
                 },
             }
+        }
+    }
+}
+
+/// Attaches to the daemon (starting it, with the passphrase if given) and
+/// follows its events for as long as it runs.
+async fn run(mut state: State, passphrase: Option<String>) {
+    let mut events = match attach(state.phase, passphrase).await {
+        Ok(Some(events)) => events,
+        Ok(None) => return,
+        Err(e) => {
+            state.phase.set(Phase::Failed(format!("{e:#}")));
+            return;
+        }
+    };
+    match call(Request::Status).await {
+        Ok(Reply::Status { network, links }) => {
+            state.network.set(network);
+            state.links.set(links.into_iter().collect());
+        }
+        other => state.fail(other),
+    }
+    state.reload_contacts().await;
+    state.phase.set(Phase::Ready);
+    while let Ok(Some(event)) = events.event().await {
+        state.on_event(event);
+    }
+    state.phase.set(Phase::Failed("The daemon stopped. Reopen Nightpost to start it again.".into()));
+}
+
+/// Asks for the passphrase, then starts the daemon with it.
+#[component]
+fn Locked(why: String) -> Element {
+    let state = use_context::<State>();
+    let mut passphrase = use_signal(String::new);
+    let mut unlock = move || {
+        let given = passphrase.read().clone();
+        if given.is_empty() {
+            return;
+        }
+        passphrase.set(String::new());
+        // Not `spawn`: this screen goes away as the daemon starts.
+        dioxus::core::spawn_forever(run(state, Some(given)));
+    };
+    rsx! {
+        form { class: "splash", onsubmit: move |e| { e.prevent_default(); unlock(); },
+            p { class: "wordmark", "Nightpost" }
+            label { r#for: "passphrase", "Your passphrase opens your messages." }
+            input { id: "passphrase", class: "name-field", r#type: "password", autofocus: true, value: "{passphrase}", oninput: move |e| passphrase.set(e.value()) }
+            if !why.is_empty() { p { class: "warning", "{why}" } }
+            button { class: "primary", r#type: "submit", "Unlock" }
         }
     }
 }
@@ -1017,20 +1051,31 @@ async fn call(request: Request) -> Result<Reply> {
     Client::connect(dir()).await?.call(&request).await
 }
 
-/// The event stream, starting the daemon first if none answers.
-async fn attach(mut phase: Signal<Phase>) -> Result<Client> {
+/// The event stream, starting the daemon first if none answers. `None`:
+/// the daemon needs the passphrase (again) and the phase now asks for it.
+async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<Option<Client>> {
     if let Ok(client) = listen().await {
-        return Ok(client);
+        return Ok(Some(client));
     }
-    let mut daemon = start_daemon()?;
+    let asked = passphrase.is_some();
+    if !asked && dbkey::uses_passphrase(dir()) {
+        phase.set(Phase::Locked(String::new()));
+        return Ok(None);
+    }
+    phase.set(Phase::Connecting("Starting…".into()));
+    let mut daemon = start_daemon(passphrase)?;
     let log = dir().join("daemon.log");
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
         if let Ok(client) = listen().await {
-            return Ok(client);
+            return Ok(Some(client));
         }
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if let Some(status) = daemon.try_wait()? {
+            if asked && text.contains("wrong key") {
+                phase.set(Phase::Locked("That passphrase does not open them. Try again.".into()));
+                return Ok(None);
+            }
             bail!("the daemon stopped ({status}): {}", text.lines().last().unwrap_or_default());
         }
         // Its progress lines, not the log lines around them.
@@ -1049,11 +1094,12 @@ async fn listen() -> Result<Client> {
 
 /// `nightpost daemon`, from next to this program, outliving it: closing the
 /// window must not take the messages offline.
-fn start_daemon() -> Result<std::process::Child> {
+fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
     let exe = std::env::current_exe()?.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX));
     let log = std::fs::File::create(dir().join("daemon.log"))?;
     let mut command = std::process::Command::new(&exe);
-    command.arg("daemon").stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    let stdin = if passphrase.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+    command.arg("daemon").stdin(stdin).stdout(log.try_clone()?).stderr(log);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -1065,7 +1111,13 @@ fn start_daemon() -> Result<std::process::Child> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command.spawn().with_context(|| format!("starting {}", exe.display()))
+    let mut child = command.spawn().with_context(|| format!("starting {}", exe.display()))?;
+    // One line on its stdin, then closed: never in its arguments or environment.
+    if let (Some(passphrase), Some(mut stdin)) = (passphrase, child.stdin.take()) {
+        use std::io::Write as _;
+        stdin.write_all(zeroize::Zeroizing::new(passphrase + "\n").as_bytes())?;
+    }
+    Ok(child)
 }
 
 /// The name only, never the text: a notification can show on a locked screen.

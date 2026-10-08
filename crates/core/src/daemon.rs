@@ -26,6 +26,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
+use zeroize::Zeroizing;
 
 use crate::api::{ContactInfo, Event, HistoryItem, LinkState, MAX_PHOTO, Network, Person, hex};
 use crate::dbkey::Secret;
@@ -427,6 +428,10 @@ impl<T: Transport + 'static> Daemon<T> {
         self.store.put("person", &hex(&contact.identity), &postcard::to_stdvec(&person)?)?;
         let _ = self.events.send(Event::PersonChanged { name: name.into(), person });
         Ok(())
+    }
+
+    pub fn set_passphrase(&self, current: Option<Zeroizing<Vec<u8>>>, new: Option<Zeroizing<Vec<u8>>>) -> Result<()> {
+        self.store.set_passphrase(current, new)
     }
 
     fn person(&self, contact: &Contact) -> Result<Person> {

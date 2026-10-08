@@ -13,6 +13,7 @@ use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
 use nightpost_core::transport::tor::{BRIDGES_FILE, Bridges, TorTransport};
 use sha2::{Digest as _, Sha256};
+use zeroize::Zeroizing;
 
 const USAGE: &str = "\
 usage:
@@ -31,7 +32,8 @@ usage:
   nightpost status                 where Tor and each link stand, as JSON
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
-passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).";
+passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).
+A passphrase added in the graphical interface is asked for by `daemon`.";
 
 #[tokio::main]
 async fn main() {
@@ -238,6 +240,15 @@ async fn daemon(dir: &Path) -> Result<()> {
 fn unlock(dir: &Path) -> Result<Unlock> {
     let passphrase = match dbkey::passphrase_file() {
         Some(path) => Some(dbkey::read_passphrase(&path).with_context(|| format!("reading {}", path.display()))?),
+        // Typed without echo at a terminal, or one line from whatever started us.
+        None if dbkey::uses_passphrase(dir) => Some(Zeroizing::new(if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            rpassword::prompt_password("Passphrase: ")?
+        } else {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.truncate(line.trim_end_matches(['\r', '\n']).len());
+            line
+        }.into_bytes())),
         None => None,
     };
     // One keychain entry per data directory, so test instances do not share.

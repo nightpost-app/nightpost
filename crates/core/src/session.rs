@@ -262,4 +262,30 @@ mod tests {
         assert!(!raw.starts_with(b"SQLite format 3"));
         assert!(!raw.windows(identity.len()).any(|w| w == &identity[..]));
     }
+
+    /// A passphrase added later is then needed, the wrong current one changes
+    /// nothing, and removing it brings back the keychain alone.
+    #[test]
+    fn passphrase_added_then_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nightpost.db");
+        let marker = dir.path().join(crate::dbkey::MARKER);
+        let pass = |p: &str| Some(Zeroizing::new(p.as_bytes().to_vec()));
+        let store = Store::open(&path, &unlock(1, None)).unwrap();
+        let identity = store.identity().unwrap().serialize();
+        store.set_passphrase(None, pass("p")).unwrap();
+        assert!(marker.exists());
+        assert!(store.set_passphrase(pass("wrong"), None).is_err());
+        assert!(store.set_passphrase(None, None).is_err());
+        drop(store);
+
+        assert!(Store::open(&path, &unlock(1, None)).is_err());
+        let store = Store::open(&path, &unlock(1, Some("p"))).unwrap();
+        assert_eq!(store.identity().unwrap().serialize(), identity);
+        store.set_passphrase(pass("p"), None).unwrap();
+        assert!(!marker.exists());
+        drop(store);
+        assert!(Store::open(&path, &unlock(1, Some("p"))).is_err());
+        assert_eq!(Store::open(&path, &unlock(1, None)).unwrap().identity().unwrap().serialize(), identity);
+    }
 }

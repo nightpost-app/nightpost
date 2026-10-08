@@ -19,6 +19,7 @@ tokio = { version = "1", features = ["rt", "time"] }
 notify-rust = "4"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 data-encoding = "2"
+zeroize = "1"
 # Decodes a picked photo so only our own re-encoded PNG reaches the page
 # (already built for the window icon by dioxus-desktop).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }

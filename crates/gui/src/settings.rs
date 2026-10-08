@@ -2,9 +2,11 @@
 //! messages locked, and what it is.
 
 use dioxus::prelude::*;
+use nightpost_core::api::{Reply, Request};
+use nightpost_core::dbkey;
 use nightpost_core::transport::tor;
 
-use crate::{State, Theme, View, dir, network_summary};
+use crate::{State, Theme, View, call, dir, network_summary};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Section {
@@ -239,8 +241,62 @@ fn Notifications() -> Element {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Change {
+    Add,
+    Replace,
+    Remove,
+}
+
 #[component]
 fn Security() -> Element {
+    let mut state = use_context::<State>();
+    let mut has = use_signal(|| dbkey::uses_passphrase(dir()));
+    let mut change = use_signal(|| None::<Change>);
+    let mut current = use_signal(String::new);
+    let mut new = use_signal(String::new);
+    let mut again = use_signal(String::new);
+    let mut error = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+
+    let mut open = move |c: Option<Change>| {
+        change.set(c);
+        for mut field in [current, new, again, error] {
+            field.set(String::new());
+        }
+    };
+    let save = move |e: FormEvent| {
+        e.prevent_default();
+        let Some(c) = *change.read() else { return };
+        let wants = c != Change::Remove;
+        if wants && new.read().is_empty() {
+            return error.set("Choose a passphrase.".into());
+        }
+        if wants && *new.read() != *again.read() {
+            return error.set("The two passphrases differ.".into());
+        }
+        let request = Request::SetPassphrase { current: (c != Change::Add).then(|| current.read().clone()), new: wants.then(|| new.read().clone()) };
+        busy.set(true);
+        spawn(async move {
+            match call(request).await {
+                Ok(Reply::Done) => {
+                    has.set(wants);
+                    open(None);
+                    state.status.set(if wants { "Passphrase saved".into() } else { "Passphrase removed".into() });
+                }
+                Ok(Reply::Error { message }) => error.set(message),
+                other => state.fail(other),
+            }
+            busy.set(false);
+        });
+    };
+
+    let (title, help) = if *has.read() {
+        ("With your keychain and a passphrase", "Your messages and keys are stored encrypted. Nightpost asks for the passphrase each time it starts.")
+    } else {
+        ("With your system keychain", "Your messages and keys are stored encrypted. The key opens when you log in to this computer.")
+    };
+    let c = *change.read();
     rsx! {
         section { class: "block",
             h2 { "How your messages are locked" }
@@ -250,8 +306,53 @@ fn Security() -> Element {
                     path { d: "M8 11V8a4 4 0 0 1 8 0v3" }
                 }
                 span { class: "card-text",
-                    span { class: "card-title", "With your system keychain" }
-                    span { class: "help", "Your messages and keys are stored encrypted. The key opens when you log in to this computer." }
+                    span { class: "card-title", "{title}" }
+                    span { class: "help", "{help}" }
+                }
+            }
+            if c.is_none() {
+                div { class: "row",
+                    if *has.read() {
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Replace)), "Change the passphrase" }
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Remove)), "Remove the passphrase" }
+                    } else {
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Add)), "Add a passphrase" }
+                    }
+                }
+            }
+        }
+        if let Some(c) = c {
+            form { class: "block", onsubmit: save,
+                h2 {
+                    match c {
+                        Change::Add => "Add a passphrase",
+                        Change::Replace => "Change the passphrase",
+                        Change::Remove => "Remove the passphrase",
+                    }
+                }
+                if c != Change::Add {
+                    label { r#for: "current", class: "field-label", "Current passphrase" }
+                    input { id: "current", class: "name-field", r#type: "password", autofocus: true, value: "{current}", oninput: move |e| current.set(e.value()) }
+                }
+                if c != Change::Remove {
+                    label { r#for: "new", class: "field-label", "New passphrase" }
+                    input { id: "new", class: "name-field", r#type: "password", autofocus: c == Change::Add, value: "{new}", oninput: move |e| new.set(e.value()) }
+                    label { r#for: "again", class: "field-label", "The same again" }
+                    input { id: "again", class: "name-field", r#type: "password", value: "{again}", oninput: move |e| again.set(e.value()) }
+                    p { class: "warning", "Forget it and your messages are gone: nobody can recover it, not even with this computer." }
+                } else {
+                    p { class: "help", "The keychain alone will open your messages again." }
+                }
+                if !error.read().is_empty() { p { class: "warning", "{error}" } }
+                div { class: "row",
+                    button { class: "primary", r#type: "submit", disabled: *busy.read(),
+                        match c {
+                            Change::Add => "Add the passphrase",
+                            Change::Replace => "Change it",
+                            Change::Remove => "Remove it",
+                        }
+                    }
+                    button { class: "ghost", r#type: "button", onclick: move |_| open(None), "Cancel" }
                 }
             }
         }
