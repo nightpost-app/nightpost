@@ -380,6 +380,8 @@ impl App {
                     self.status = format!("{e:#}");
                 }
             }
+            // The route is drawn by the graphical interface only.
+            Update::Event(Event::Network { .. } | Event::Link { .. }) => {}
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 self.notify = Some(format!("{name} used your invitation"));
                 self.overlay = Some(if self.codes.contains(&name) {

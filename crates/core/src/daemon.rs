@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
 
-use crate::api::{ContactInfo, Event, HistoryItem, hex};
+use crate::api::{ContactInfo, Event, HistoryItem, LinkState, Network, hex};
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite};
@@ -71,6 +71,9 @@ pub struct Daemon<T: Transport> {
     stopping: watch::Sender<bool>,
     /// Oral codes used by someone, waiting for us to compare numbers.
     confirming: RefCell<HashMap<String, oneshot::Sender<bool>>>,
+    network: RefCell<Network>,
+    /// By contact name, for interfaces to show who is reachable.
+    link_states: RefCell<HashMap<String, LinkState>>,
 }
 
 type Target = (Vec<u8>, u8);
@@ -143,6 +146,8 @@ impl<T: Transport + 'static> Daemon<T> {
             wake: Notify::new(),
             stopping: watch::channel(false).0,
             confirming: RefCell::default(),
+            network: RefCell::default(),
+            link_states: RefCell::default(),
         }))
     }
 
@@ -173,6 +178,28 @@ impl<T: Transport + 'static> Daemon<T> {
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
+    }
+
+    pub fn network(&self) -> Network {
+        self.network.borrow().clone()
+    }
+
+    /// What the transport reports; told to interfaces when it changes.
+    pub fn set_network(&self, network: Network) {
+        if *self.network.borrow() != network {
+            *self.network.borrow_mut() = network.clone();
+            let _ = self.events.send(Event::Network { network });
+        }
+    }
+
+    pub fn links(&self) -> Vec<(String, LinkState)> {
+        self.link_states.borrow().iter().map(|(name, state)| (name.clone(), *state)).collect()
+    }
+
+    fn set_link(&self, name: &str, state: LinkState) {
+        if self.link_states.borrow_mut().insert(name.into(), state) != Some(state) {
+            let _ = self.events.send(Event::Link { name: name.into(), state });
+        }
     }
 
     /// A one-time link for someone who will be known here as `name`.
@@ -508,6 +535,10 @@ impl<T: Transport + 'static> Daemon<T> {
     }
 
     async fn dial(self: Rc<Self>, target: Target) {
+        let name = self.contact(&target.0).ok().flatten().map(|c| c.name);
+        if let Some(name) = &name {
+            self.set_link(name, LinkState::Trying);
+        }
         match self.try_dial(&target).await {
             Ok((stream, contact)) => {
                 self.backoff.borrow_mut().remove(&target);
@@ -515,6 +546,9 @@ impl<T: Transport + 'static> Daemon<T> {
             }
             Err(e) => {
                 tracing::info!("no link to a contact: {e:#}");
+                if let Some(name) = &name {
+                    self.set_link(name, LinkState::Unreachable);
+                }
                 self.links.borrow_mut().remove(&target);
                 let mut backoff = self.backoff.borrow_mut();
                 let failures = backoff.get(&target).map_or(0, |(n, _)| *n) + 1;
@@ -545,10 +579,12 @@ impl<T: Transport + 'static> Daemon<T> {
         let target = (contact.identity.clone(), device);
         let (wake, mut woken) = mpsc::unbounded_channel();
         self.links.borrow_mut().insert(target.clone(), Some(wake));
+        self.set_link(&contact.name, LinkState::Open);
         if let Err(e) = self.run_link(stream, &contact, device, &mut woken).await {
             tracing::info!("link to {} closed: {e:#}", contact.name);
         }
         self.links.borrow_mut().remove(&target);
+        self.set_link(&contact.name, LinkState::Idle);
         // Whatever was in flight goes again on the next link.
         self.wake.notify_one();
     }
@@ -737,8 +773,15 @@ mod tests {
         Daemon::open(store, net.node()).unwrap()
     }
 
+    /// The next event about messages and contacts; how links and Tor stand
+    /// is checked through `links()` where it matters.
     async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
-        timeout(Duration::from_secs(10), events.recv()).await.expect("no event within 10 s").unwrap()
+        loop {
+            match timeout(Duration::from_secs(10), events.recv()).await.expect("no event within 10 s").unwrap() {
+                Event::Link { .. } | Event::Network { .. } => continue,
+                event => return event,
+            }
+        }
     }
 
     fn sent(to: &str, id: [u8; 16], text: &str) -> impl Fn(&Event) -> bool {
@@ -793,6 +836,7 @@ mod tests {
                 let id = alice.send("bob", "tu es là ?").unwrap();
                 assert!(sent("bob", id, "tu es là ?")(&next(&mut alice_events).await));
                 sleep(Duration::from_millis(200)).await;
+                assert_eq!(alice.links(), [("bob".to_string(), LinkState::Unreachable)]);
 
                 let bob = open(dir.path(), "bob-device", &net);
                 let mut bob_events = bob.subscribe();

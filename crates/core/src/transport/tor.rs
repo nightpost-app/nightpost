@@ -23,6 +23,7 @@ use tor_llcrypto::pk::{curve25519, ed25519};
 use tor_rtcompat::PreferredRuntime;
 
 use super::{DiscoveryKey, Onion, Result, TransportError, none_authorized, onion};
+use crate::api::Network;
 use crate::dbkey::Secret;
 
 /// The virtual port Nightpost listens on inside its onion services.
@@ -96,9 +97,10 @@ pub struct TorService {
 
 impl TorTransport {
     /// Bootstraps a client keeping its state and cache in the two directories.
-    /// `progress` gets lines to show ("Tor: 45%"), during the bootstrap and
-    /// after it: a cold first start downloads the whole consensus and takes
-    /// minutes, and a number on screen is what tells that apart from a hang.
+    /// `progress` gets where Tor stands, with a line to show ("Tor: 45%"),
+    /// during the bootstrap and after it: a cold first start downloads the
+    /// whole consensus and takes minutes, and a number on screen is what
+    /// tells that apart from a hang.
     ///
     /// With `bridges`, the client starts the way that worked last time and
     /// switches between direct and bridged whenever it stops making progress
@@ -107,7 +109,7 @@ impl TorTransport {
         state_dir: &Path,
         cache_dir: &Path,
         bridges: Option<Bridges>,
-        progress: impl FnMut(String) + Send + 'static,
+        progress: impl FnMut(&Network) + Send + 'static,
     ) -> Result<TorTransport> {
         create_private_dir(state_dir)?;
         create_private_dir(cache_dir)?;
@@ -172,9 +174,20 @@ async fn watch(
     marker: PathBuf,
     bridges: Option<Bridges>,
     (state_dir, cache_dir): (PathBuf, PathBuf),
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(&Network),
 ) {
     let (mut best, mut since, mut saved, mut failures) = (-1.0_f32, Instant::now(), None, 0);
+    let mut net = Network { bridged, ..Network::default() };
+    macro_rules! say {
+        ($line:expr $(,)?) => {{
+            net.line = $line;
+            progress(&net);
+        }};
+    }
+    // After a switch: a new route, nothing known about it yet.
+    let restart = |net: &mut Network, bridged: bool, client: &TorClient<PreferredRuntime>| {
+        *net = Network { percent: percent(client.bootstrap_status().as_frac()), bridged, ..Network::default() };
+    };
     let modified = |b: &Bridges| std::fs::metadata(&b.file).and_then(|m| m.modified()).ok();
     let mut seen = bridges.as_ref().and_then(modified);
     let mut reload = tokio::time::interval(RELOAD);
@@ -189,16 +202,17 @@ async fn watch(
                 match configs(&state_dir, &cache_dir, Some((&b.lyrebird, &lines))) {
                     Ok(new) => both = new,
                     Err(e) => {
-                        progress(format!("Tor: {e}"));
+                        say!(format!("Tor: {e}"));
                         continue;
                     }
                 }
                 // Lines of one's own are there to be used.
                 bridged |= !lines.is_empty();
-                progress(if bridged { "Tor: reconnecting through the bridges…" } else { "Tor: reconnecting…" }.into());
                 if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
-                    progress(format!("Tor: switching failed: {e}"));
+                    say!(format!("Tor: switching failed: {e}"));
                 }
+                restart(&mut net, bridged, &client);
+                say!(if bridged { "Tor: reconnecting through the bridges…" } else { "Tor: reconnecting…" }.into());
                 (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
                 continue;
             }
@@ -213,35 +227,50 @@ async fn watch(
                     let _ = if bridged { std::fs::write(&marker, b"") } else { std::fs::remove_file(&marker).or(Ok(())) };
                     saved = Some(bridged);
                 }
-                progress(match status.blocked() {
+                net.percent = percent(status.as_frac());
+                say!(match status.blocked() {
                     Some(why) => format!("Tor: stuck? {}", why.message()),
-                    None => format!("Tor: {:.0}%", status.as_frac() * 100.0),
+                    None => format!("Tor: {}%", net.percent),
                 });
             }
-            Err(_) if both.len() < 2 => since = Instant::now(),
+            Err(_) if both.len() < 2 => {
+                if client.bootstrap_status().ready_for_traffic() {
+                    let (entry, circuit) = reachable(&client).await;
+                    (net.entry, net.circuit) = (Some(entry), Some(circuit));
+                    progress(&net);
+                }
+                since = Instant::now();
+            }
             Err(_) => {
                 // Bootstrapped, arti's status says "online" for good after
                 // one success: ask the network itself. Still bootstrapping
                 // with no progress: stalled already.
                 if client.bootstrap_status().ready_for_traffic() {
-                    failures = if reachable(&client).await { 0 } else { failures + 1 };
+                    let (entry, circuit) = reachable(&client).await;
+                    (net.entry, net.circuit) = (Some(entry), Some(circuit));
+                    progress(&net);
+                    failures = if circuit { 0 } else { failures + 1 };
                     if failures < 2 {
                         since = Instant::now();
                         continue;
                     }
                 }
                 bridged = !bridged;
-                progress(
-                    if bridged { "Tor: blocked on this network? Going through a bridge…" } else { "Tor: the bridge is not getting through; trying without it…" }
+                if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
+                    say!(format!("Tor: switching failed: {e}"));
+                }
+                restart(&mut net, bridged, &client);
+                say!(if bridged { "Tor: blocked on this network? Going through a bridge…" } else { "Tor: the bridge is not getting through; trying without it…" }
                         .into(),
                 );
-                if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
-                    progress(format!("Tor: switching failed: {e}"));
-                }
                 (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
             }
         }
     }
+}
+
+fn percent(frac: f32) -> u8 {
+    (frac * 100.0).round().clamp(0.0, 100.0) as u8
 }
 
 /// Whether Tor gets through right now: a fresh one-hop circuit to a guard
@@ -251,9 +280,10 @@ async fn watch(
 /// relays answer and Tor says 100%, while onion service circuits never get
 /// built. The second alone comes from a pool built ahead, and so notices
 /// a network that just started blocking only once the pool runs dry.
-async fn reachable(client: &TorClient<PreferredRuntime>) -> bool {
-    let (Ok(circmgr), Ok(pool), Ok(dirmgr)) = (client.circmgr(), client.hs_circ_pool(), client.dirmgr()) else { return true };
-    let Ok(netdir) = dirmgr.timely_netdir() else { return false };
+/// Returns whether each of the two got through.
+async fn reachable(client: &TorClient<PreferredRuntime>) -> (bool, bool) {
+    let (Ok(circmgr), Ok(pool), Ok(dirmgr)) = (client.circmgr(), client.hs_circ_pool(), client.dirmgr()) else { return (true, true) };
+    let Ok(netdir) = dirmgr.timely_netdir() else { return (false, false) };
     let started = Instant::now();
     let one_hop = match tokio::time::timeout(PROBE, circmgr.get_or_launch_dir(netdir.as_ref().into())).await {
         Ok(Ok(tunnel)) => {
@@ -277,7 +307,7 @@ async fn reachable(client: &TorClient<PreferredRuntime>) -> bool {
         .await
         .unwrap_or(false);
     tracing::debug!("Tor probe: one hop {one_hop}, onion circuit {onion}, {:?}", started.elapsed());
-    onion
+    (one_hop, onion)
 }
 
 impl super::Transport for TorTransport {
@@ -465,7 +495,7 @@ mod tests {
             let cache = dir.path().join(name).join("cache");
             let name = name.to_string();
             async move {
-                TorTransport::bootstrap(&state, &cache, None, move |line| println!("{name}: {line}")).await.unwrap()
+                TorTransport::bootstrap(&state, &cache, None, move |net| println!("{name}: {}", net.line)).await.unwrap()
             }
         };
         let alice = boot("alice").await;

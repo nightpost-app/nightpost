@@ -41,6 +41,9 @@ pub enum Request {
     Verify { name: String },
     /// The last `limit` messages with `name`, oldest first.
     History { name: String, limit: u32 },
+    /// Where the network and each contact stand now; [`Event::Network`] and
+    /// [`Event::Link`] tell what changes after.
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -55,6 +58,7 @@ pub enum Reply {
     History { messages: Vec<HistoryItem> },
     SafetyNumber { name: String, number: String },
     Listening,
+    Status { network: Network, links: Vec<(String, LinkState)> },
     Error { message: String },
 }
 
@@ -70,6 +74,37 @@ pub enum Event {
     /// Someone used an oral code: the two people compare this number before
     /// the inviter confirms.
     Fingerprint { name: String, safety_number: String },
+    Network { network: Network },
+    Link { name: String, state: LinkState },
+}
+
+/// How far Tor got, for interfaces to draw the route a message takes.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct Network {
+    /// Tor's bootstrap, 0 to 100.
+    pub percent: u8,
+    /// Going through a bridge rather than straight to a guard.
+    pub bridged: bool,
+    /// The last probe ([`crate::transport::tor`]): the first hop answered,
+    /// and a circuit of the kind onion services use got built. `None` until
+    /// a probe ran since the last start or switch.
+    pub entry: Option<bool>,
+    pub circuit: Option<bool>,
+    /// The last line for people, as the daemon's log shows it.
+    pub line: String,
+}
+
+/// A link to one contact.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    /// Dialing them.
+    Trying,
+    Open,
+    /// Closed after use: they were reachable then.
+    Idle,
+    /// The last attempt did not reach them; it is tried again later.
+    Unreachable,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -183,6 +218,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             let number = daemon.contacts()?.into_iter().find(|c| c.name == name).context("no such contact")?.safety_number;
             Reply::SafetyNumber { name, number }
         }
+        Request::Status => Reply::Status { network: daemon.network(), links: daemon.links() },
         Request::Listen => unreachable!("answered by the caller"),
     })
 }

@@ -7,7 +7,7 @@ use std::io::Read as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
-use nightpost_core::api::{Client, Event, Reply, Request};
+use nightpost_core::api::{Client, Event, Network, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
@@ -28,6 +28,7 @@ usage:
   nightpost history <name> [n]     the last n messages (default 50), JSON lines
   nightpost contacts               list contacts and safety numbers
   nightpost verify <name>          print the safety number to compare
+  nightpost status                 where Tor and each link stand, as JSON
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
 passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).";
@@ -65,6 +66,7 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["history", name] => Request::History { name: name.to_string(), limit: 50 },
         ["history", name, n] => Request::History { name: name.to_string(), limit: n.parse().context("a number of messages")? },
         ["verify", name] => Request::Verify { name: name.to_string() },
+        ["status"] => Request::Status,
         _ => {
             println!("{USAGE}");
             return Ok(());
@@ -90,6 +92,7 @@ async fn run(args: Vec<String>) -> Result<()> {
                 println!("{}", serde_json::to_string(&m)?);
             }
         }
+        status @ Reply::Status { .. } => println!("{}", serde_json::to_string(&status)?),
         Reply::Listening => {
             while let Some(event) = client.event().await? {
                 println!("{}", serde_json::to_string(&event)?);
@@ -198,11 +201,14 @@ async fn daemon(dir: &Path) -> Result<()> {
         eprintln!("no lyrebird next to nightpost nor on the PATH: on a network that blocks Tor, Nightpost cannot get around it");
     }
     let mut shown = String::new();
-    let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges, move |line| {
-        if line != shown {
-            eprintln!("{line}");
-            shown = line;
+    // The daemon only exists once Tor is up; until then the latest state waits here.
+    let (status, mut status_changes) = tokio::sync::watch::channel(Network::default());
+    let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges, move |network| {
+        if network.line != shown {
+            eprintln!("{}", network.line);
+            shown = network.line.clone();
         }
+        status.send_replace(network.clone());
     })
     .await?;
 
@@ -210,6 +216,13 @@ async fn daemon(dir: &Path) -> Result<()> {
     local
         .run_until(async {
             let daemon = Daemon::open(store, net)?;
+            daemon.set_network(status_changes.borrow_and_update().clone());
+            let forward = daemon.clone();
+            tokio::task::spawn_local(async move {
+                while status_changes.changed().await.is_ok() {
+                    forward.set_network(status_changes.borrow_and_update().clone());
+                }
+            });
             daemon.start().await?;
             eprintln!("ready");
             tokio::select! {
