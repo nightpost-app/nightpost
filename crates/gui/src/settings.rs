@@ -297,6 +297,12 @@ fn Security() -> Element {
         ("With your system keychain", "Your messages and keys are stored encrypted. The key opens when you log in to this computer.")
     };
     let c = *change.read();
+    let lock_on_close = state.prefs.read().lock_on_close;
+    let leave_help = if *has.read() {
+        "Messages stop arriving, and your passphrase is asked for when you open Nightpost again."
+    } else {
+        "Messages stop arriving until you open Nightpost again. Add a passphrase above for this to lock it."
+    };
     rsx! {
         section { class: "block",
             h2 { "How your messages are locked" }
@@ -353,6 +359,34 @@ fn Security() -> Element {
                         }
                     }
                     button { class: "ghost", r#type: "button", onclick: move |_| open(None), "Cancel" }
+                }
+            }
+        }
+        section { class: "block",
+            h2 { "Leaving" }
+            button {
+                class: "toggle-row",
+                role: "switch",
+                "aria-checked": "{lock_on_close}",
+                onclick: move |_| {
+                    let mut p = *state.prefs.read();
+                    p.lock_on_close = !p.lock_on_close;
+                    state.prefs.set(p.save());
+                },
+                span { class: "card-text",
+                    span { class: "card-title", if *has.read() { "Closing the window locks Nightpost" } else { "Closing the window quits Nightpost" } }
+                    span { class: "help", "{leave_help}" }
+                }
+                span { class: if lock_on_close { "switch on" } else { "switch" }, span {} }
+            }
+            div {
+                button {
+                    class: "ghost",
+                    onclick: move |_| {
+                        crate::shut_down();
+                        dioxus::desktop::window().close();
+                    },
+                    if *has.read() { "Quit and lock" } else { "Quit Nightpost" }
                 }
             }
         }

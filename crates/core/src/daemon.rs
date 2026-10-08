@@ -166,14 +166,19 @@ impl<T: Transport + 'static> Daemon<T> {
     /// Takes the service down, closes every link, and returns once nothing
     /// else holds the daemon: dropping it then closes the database.
     pub async fn stop(self: &Rc<Self>) {
-        self.stopping.send_replace(true);
+        self.shut_down();
         self.service.borrow_mut().take();
         while Rc::strong_count(self) > 1 {
             sleep(Duration::from_millis(10)).await;
         }
     }
 
-    async fn stopped(&self) {
+    /// Asks everything to stop; [`Daemon::stopped`] then returns.
+    pub fn shut_down(&self) {
+        self.stopping.send_replace(true);
+    }
+
+    pub async fn stopped(&self) {
         let _ = self.stopping.subscribe().wait_for(|stop| *stop).await;
     }
 

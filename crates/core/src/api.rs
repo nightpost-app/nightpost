@@ -53,6 +53,9 @@ pub enum Request {
     SetPerson { name: String, person: Person },
     /// Adds, changes or removes the passphrase over the keychain secret.
     SetPassphrase { current: Option<String>, new: Option<String> },
+    /// Stops the daemon: the database closes and, with a passphrase, stays
+    /// locked until the next start.
+    Shutdown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -217,6 +220,12 @@ async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocket
                     }
                 }
             }
+            Ok(Request::Shutdown) => {
+                // Answered first: the caller learns it was heard.
+                write_line(&mut send, &Reply::Done).await?;
+                daemon.shut_down();
+                return Ok(());
+            }
             Ok(request) => handle(&daemon, request).await.unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
             Err(e) => Reply::Error { message: format!("bad request: {e}") },
         };
@@ -266,7 +275,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             daemon.set_passphrase(bytes(current), bytes(new))?;
             Reply::Done
         }
-        Request::Listen => unreachable!("answered by the caller"),
+        Request::Listen | Request::Shutdown => unreachable!("answered by the caller"),
     })
 }
 

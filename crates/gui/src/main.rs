@@ -114,6 +114,8 @@ struct Prefs {
     sound: bool,
     /// Who wrote, or only that something came.
     show_name: bool,
+    /// Closing the window stops the daemon too.
+    lock_on_close: bool,
 }
 
 impl Prefs {
@@ -123,11 +125,17 @@ impl Prefs {
         let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
         let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
         let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
-        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name") }
+        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), lock_on_close: on("lock_on_close") }
     }
 
     fn save(self) -> Prefs {
-        let text = format!("notify={}\nsound={}\nshow_name={}\n", u8::from(self.notify), u8::from(self.sound), u8::from(self.show_name));
+        let text = format!(
+            "notify={}\nsound={}\nshow_name={}\nlock_on_close={}\n",
+            u8::from(self.notify),
+            u8::from(self.sound),
+            u8::from(self.show_name),
+            u8::from(self.lock_on_close)
+        );
         let _ = std::fs::write(dir().join(Prefs::FILE), text);
         self
     }
@@ -335,6 +343,14 @@ fn App() -> Element {
     });
 
     use_future(move || run(state, None));
+    dioxus::desktop::use_wry_event_handler(move |event, _| {
+        use dioxus::desktop::tao::event::{Event, WindowEvent};
+        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event
+            && state.prefs.peek().lock_on_close
+        {
+            shut_down();
+        }
+    });
 
     let theme = *state.theme.read();
     rsx! {
@@ -1044,6 +1060,15 @@ fn confirm(mut state: State, name: String, keep: bool) {
             other => state.fail(other),
         }
     });
+}
+
+/// Stops the daemon and waits for its answer, on a thread of its own: this
+/// runs as the window closes, when nothing else will poll a future.
+pub fn shut_down() {
+    let _ = std::thread::spawn(|| -> Result<Reply> {
+        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(call(Request::Shutdown))
+    })
+    .join();
 }
 
 /// One request on its own connection.

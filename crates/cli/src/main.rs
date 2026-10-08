@@ -230,6 +230,7 @@ async fn daemon(dir: &Path) -> Result<()> {
             tokio::select! {
                 result = nightpost_core::api::serve(daemon.clone(), dir) => result,
                 _ = tokio::signal::ctrl_c() => Ok(()),
+                _ = daemon.stopped() => Ok(()),
             }
         })
         .await
