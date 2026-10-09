@@ -66,13 +66,17 @@ pub fn SettingsPage(section: Section) -> Element {
                         }
                     }
                 }
-                div { class: "settings-content",
-                    match section {
-                        Section::Appearance => rsx! { Appearance {} },
-                        Section::Network => rsx! { NetworkSection {} },
-                        Section::Notifications => rsx! { Notifications {} },
-                        Section::Security => rsx! { Security {} },
-                        Section::About => rsx! { About {} },
+                // Keyed by section: each one is a new scroll box, opened at its top
+                // rather than at the place the previous one was left.
+                for s in [section] {
+                    div { key: "{s as u8}", class: "settings-content",
+                        match s {
+                            Section::Appearance => rsx! { Appearance {} },
+                            Section::Network => rsx! { NetworkSection {} },
+                            Section::Notifications => rsx! { Notifications {} },
+                            Section::Security => rsx! { Security {} },
+                            Section::About => rsx! { About {} },
+                        }
                     }
                 }
             }
