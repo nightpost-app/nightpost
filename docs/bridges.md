@@ -81,7 +81,9 @@ services:
       - OBFS4V_PublishServerDescriptor=0
       - OBFS4V_BridgeDistribution=none
       - OBFS4V_AssumeReachable=1
-      - OBFS4V_MaxMemInQueues=256 MB
+      # Tor counts its compression buffers (~300 MB) against this: lower,
+      # it runs "low on memory" and drops every circuit, yours included.
+      - OBFS4V_MaxMemInQueues=1024 MB
     volumes:
       - data:/var/lib/tor
 
