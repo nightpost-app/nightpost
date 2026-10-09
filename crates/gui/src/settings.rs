@@ -200,7 +200,13 @@ fn Notifications() -> Element {
         ("Show notifications", "When a message arrives and Nightpost is not in front.", prefs.notify, 0),
         ("Play a sound", "A short chime with each notification.", prefs.sound, 1),
     ];
-    let shows = [(true, "Who wrote", "Message from Léa"), (false, "Nothing", "New message")];
+    // (name, text), its label, and the notification it gives.
+    let shows = [
+        ((true, true), "Who and what", "Léa", "See you at eight?"),
+        ((true, false), "Who wrote", "Nightpost", "Message from Léa"),
+        ((false, false), "Nothing", "Nightpost", "New message"),
+    ];
+    let shown = (prefs.show_name, prefs.show_name && prefs.show_text);
     rsx! {
         section { class: "block",
             h2 { "Notifications" }
@@ -223,26 +229,26 @@ fn Notifications() -> Element {
         section { class: "block",
             h2 { "What a notification shows" }
             div { role: "radiogroup", "aria-label": "What a notification shows", class: "choices",
-                for (name, label, sample) in shows {
+                for (choice, label, title, body) in shows {
                     button {
                         key: "{label}",
-                        class: if prefs.show_name == name { "choice on" } else { "choice" },
+                        class: if shown == choice { "choice on" } else { "choice" },
                         role: "radio",
-                        "aria-checked": "{prefs.show_name == name}",
+                        "aria-checked": "{shown == choice}",
                         onclick: move |_| {
                             let mut p = *state.prefs.read();
-                            p.show_name = name;
+                            (p.show_name, p.show_text) = choice;
                             state.prefs.set(p.save());
                         },
                         span { class: "radio" }
                         span { class: "card-text",
                             span { class: "card-title", "{label}" }
-                            span { class: "toast", b { "Nightpost" } span { "{sample}" } }
+                            span { class: "toast", b { "{title}" } span { "{body}" } }
                         }
                     }
                 }
             }
-            p { class: "help", "Never the text of a message: a notification can show on a locked screen." }
+            p { class: "help", "A notification can show on a locked screen, and the system may keep a history of them." }
         }
     }
 }

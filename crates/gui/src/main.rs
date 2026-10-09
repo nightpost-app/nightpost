@@ -130,6 +130,8 @@ struct Prefs {
     sound: bool,
     /// Who wrote, or only that something came.
     show_name: bool,
+    /// What they wrote too (with show_name).
+    show_text: bool,
     /// Closing the window stops the daemon too.
     lock_on_close: bool,
     /// The list of people is folded away.
@@ -143,15 +145,16 @@ impl Prefs {
         let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
         let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
         let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
-        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
+        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), show_text: on("show_text"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
     }
 
     fn save(self) -> Prefs {
         let text = format!(
-            "notify={}\nsound={}\nshow_name={}\nlock_on_close={}\nside_hidden={}\n",
+            "notify={}\nsound={}\nshow_name={}\nshow_text={}\nlock_on_close={}\nside_hidden={}\n",
             u8::from(self.notify),
             u8::from(self.sound),
             u8::from(self.show_name),
+            u8::from(self.show_text),
             u8::from(self.lock_on_close),
             u8::from(self.side_hidden)
         );
@@ -260,6 +263,7 @@ impl State {
                         self.arrival.set(None);
                     }
                 });
+                let body = preview(&text);
                 self.messages.write().entry(from.clone()).or_default().push(HistoryItem { id, outgoing: false, time, text, delivered: true });
                 let here = self.selected.read().as_deref() == Some(from.as_str());
                 if !here || !dioxus::desktop::window().window.is_focused() {
@@ -269,7 +273,11 @@ impl State {
                     let prefs = *self.prefs.read();
                     let muted = self.people.read().get(&from).is_some_and(|p| muted(p).is_some());
                     if prefs.notify && !muted {
-                        notify(&if prefs.show_name { format!("Message from {from}") } else { "New message".into() }, prefs.sound);
+                        match (prefs.show_name, prefs.show_text) {
+                            (true, true) => notify(&from, &body, prefs.sound),
+                            (true, false) => notify("Nightpost", &format!("Message from {from}"), prefs.sound),
+                            _ => notify("Nightpost", "New message", prefs.sound),
+                        }
                     }
                 }
             }
@@ -292,7 +300,7 @@ impl State {
                 });
             }
             Event::Fingerprint { name, safety_number } => {
-                notify(&format!("{name} used your invitation"), self.prefs.read().sound);
+                notify("Nightpost", &format!("{name} used your invitation"), self.prefs.read().sound);
                 let ours = self.codes.read().contains(&name);
                 self.dialog.set(Some(if ours {
                     Dialog::Confirm { name, number: safety_number }
@@ -1210,18 +1218,31 @@ fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
     Ok(child)
 }
 
-/// The name only, never the text: a notification can show on a locked screen.
-fn notify(text: &str, sound: bool) {
-    let text = text.to_string();
+/// Shown by the system: it can be on a locked screen and kept in a history,
+/// so what goes in is the user's choice (Settings, Notifications).
+fn notify(title: &str, body: &str, sound: bool) {
+    let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
         let mut notification = notify_rust::Notification::new();
-        notification.summary("Nightpost").body(&text);
+        notification.summary(&title).body(&body);
         if sound {
             // The freedesktop sound theme's name; macOS and Windows play their default.
             notification.sound_name("message-new-instant");
         }
         let _ = notification.show();
     });
+}
+
+/// A message as a notification's body: short, and markup-free. Some servers
+/// (Plasma) read the body as HTML, and an <img> in a message would load a
+/// picture from wherever the sender likes, giving our address away.
+fn preview(text: &str) -> String {
+    const MAX: usize = 200;
+    let mut short: String = text.chars().take(MAX).collect();
+    if text.chars().nth(MAX).is_some() {
+        short.push('…');
+    }
+    short.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn copy(text: &str) {
@@ -1282,6 +1303,14 @@ fn groups(number: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_in_a_notification_is_short_and_inert() {
+        assert_eq!(preview("<img src=\"http://x/\"> & co"), "&lt;img src=\"http://x/\"&gt; &amp; co");
+        let long = "é".repeat(250);
+        assert_eq!(preview(&long), format!("{}…", "é".repeat(200)));
+        assert_eq!(preview(&"é".repeat(200)), "é".repeat(200));
+    }
 
     #[test]
     fn the_route_lights_up_as_far_as_things_got() {
