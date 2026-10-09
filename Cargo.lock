@@ -5156,6 +5156,7 @@ dependencies = [
  "anyhow",
  "data-encoding",
  "dioxus",
+ "gtk",
  "image",
  "jiff",
  "nightpost-core",

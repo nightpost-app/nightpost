@@ -69,6 +69,7 @@ pub fn PersonPanel(name: String) -> Element {
                 button { class: "close", "aria-label": "Close", onclick: move |_| state.panel.set(false),
                     svg { width: "18", height: "18", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", "aria-hidden": "true", path { d: "M6 6l12 12M18 6L6 18" } }
                 }
+                div { class: "drag-fill", onmousedown: crate::chrome::drag, ondoubleclick: crate::chrome::toggle_maximized }
             }
             div { class: "person-photo",
                 {avatar(&name, person.photo.as_deref(), 96)}

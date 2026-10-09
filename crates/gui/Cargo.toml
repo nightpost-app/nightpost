@@ -24,3 +24,8 @@ zeroize = "1"
 # (already built for the window icon by dioxus-desktop).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 jiff = "0.2"
+
+# The window's round corners are cut out by GTK itself (chrome.rs); the same
+# version as the one under dioxus-desktop.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

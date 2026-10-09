@@ -46,10 +46,11 @@ pub fn SettingsPage(section: Section) -> Element {
     rsx! {
         main { class: "settings",
             header { class: "settings-head",
-                h1 { "Settings" }
-                button { class: "close", "aria-label": "Close settings", onclick: move |_| state.view.set(View::Chat),
-                    svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", "aria-hidden": "true", path { d: "M6 6l12 12M18 6L6 18" } }
+                button { class: "close", title: "Back to the conversation", "aria-label": "Back to the conversation", onclick: move |_| state.view.set(View::Chat),
+                    svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true", path { d: "M15 5l-7 7 7 7" } }
                 }
+                h1 { "Settings" }
+                div { class: "drag-fill", onmousedown: crate::chrome::drag, ondoubleclick: crate::chrome::toggle_maximized }
             }
             div { class: "settings-body",
                 nav { class: "sections", "aria-label": "Settings sections",

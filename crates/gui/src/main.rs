@@ -16,9 +16,11 @@ use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
 use nightpost_core::dbkey;
 
+mod chrome;
 mod person;
 mod settings;
 
+use chrome::Chrome;
 use person::PersonPanel;
 use settings::{BridgesEditor, Section, SettingsPage};
 
@@ -44,7 +46,19 @@ fn main() {
         }
     };
     DIR.set(dir).expect("set once");
-    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(1040.0, 700.0));
+    // Our own frame (chrome.rs): no system title bar; macOS keeps its own
+    // buttons. The page is never see-through (WebKitGTK then keeps only what
+    // changes); on Linux the window is, for the corners cut out of it.
+    let window = WindowBuilder::new()
+        .with_title("Nightpost")
+        .with_inner_size(LogicalSize::new(1040.0, 700.0))
+        .with_min_inner_size(LogicalSize::new(720.0, 480.0))
+        .with_decorations(cfg!(target_os = "macos"));
+    #[cfg(target_os = "linux")]
+    let window = {
+        use dioxus::desktop::tao::platform::unix::WindowBuilderExtUnix as _;
+        window.with_rgba_visual(true).with_app_paintable(true)
+    };
     let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -105,6 +119,8 @@ struct State {
     view: Signal<View>,
     /// The selected person's panel is open.
     panel: Signal<bool>,
+    /// The window fills the screen: no border, no edges to drag.
+    maximized: Signal<bool>,
 }
 
 /// How notifications behave; nothing about anyone, so a plain file.
@@ -340,22 +356,34 @@ fn App() -> Element {
         prefs: Signal::new(Prefs::load()),
         view: Signal::new(View::Chat),
         panel: Signal::new(false),
+        maximized: Signal::new(false),
     });
 
     use_future(move || run(state, None));
+    #[cfg(target_os = "linux")]
+    use_hook(chrome::cut_corners);
+    let desktop = dioxus::desktop::window();
     dioxus::desktop::use_wry_event_handler(move |event, _| {
         use dioxus::desktop::tao::event::{Event, WindowEvent};
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event
-            && state.prefs.peek().lock_on_close
-        {
-            shut_down();
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } if state.prefs.peek().lock_on_close => shut_down(),
+            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
+                let maximized = desktop.is_maximized();
+                if *state.maximized.peek() != maximized {
+                    state.maximized.set(maximized);
+                }
+            }
+            _ => {}
         }
     });
 
     let theme = *state.theme.read();
     rsx! {
         style { {STYLE.as_str()} }
-        div { class: "root", "data-theme": theme.name(),
+        div { class: "root", "data-theme": theme.name(), "data-maximized": "{state.maximized}",
+            if *state.phase.read() != Phase::Ready {
+                div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
+            }
             match state.phase.read().clone() {
                 Phase::Connecting(what) => rsx! {
                     div { class: "splash",
@@ -377,6 +405,9 @@ fn App() -> Element {
                     }
                     DialogView {}
                 },
+            }
+            if !cfg!(target_os = "macos") {
+                Chrome {}
             }
         }
     }
@@ -456,7 +487,7 @@ fn Sidebar() -> Element {
     let in_settings = matches!(*state.view.read(), View::Settings(_));
     rsx! {
         aside {
-            div { class: "brand",
+            div { class: "brand", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized,
                 p { class: "wordmark", "Nightpost" }
                 if !rows.is_empty() { span { class: "reach-count", "{reachable} reachable of {rows.len()}" } }
             }
@@ -712,33 +743,36 @@ fn RouteView(name: String) -> Element {
         _ => String::new(),
     };
     rsx! {
-        div { class: "route", role: "group", "aria-label": "Route to {name}",
-            svg { view_box: "0 0 900 140", "aria-hidden": "true",
-                for i in 0..5 {
-                    g { key: "{i}",
-                        path { class: "band {route.hop(i)}", d: hop_path(i) }
-                        path { class: "wire {route.hop(i)}", d: hop_path(i) }
+        // Measured by the narrow layout in style.css.
+        div { class: "route-box",
+            div { class: "route", role: "group", "aria-label": "Route to {name}",
+                svg { view_box: "0 0 900 140", "aria-hidden": "true",
+                    for i in 0..5 {
+                        g { key: "{i}",
+                            path { class: "band {route.hop(i)}", d: hop_path(i) }
+                            path { class: "wire {route.hop(i)}", d: hop_path(i) }
+                        }
                     }
+                    if sending { path { class: "pulse out", d: whole_path(), "pathLength": "1000" } }
+                    if let Some(n) = arrival { path { key: "in{n}", class: "pulse in", d: whole_path(), "pathLength": "1000" } }
                 }
-                if sending { path { class: "pulse out", d: whole_path(), "pathLength": "1000" } }
-                if let Some(n) = arrival { path { key: "in{n}", class: "pulse in", d: whole_path(), "pathLength": "1000" } }
-            }
-            for (i, ((title, body), label)) in tips.into_iter().zip(labels).enumerate() {
-                {
-                    let (x, y) = STEPS[i];
-                    let mut class = format!("step {}", route.step(i));
-                    if i == 0 || i == 5 { class.push_str(" device"); }
-                    if i == 0 { class.push_str(" first"); }
-                    if i == 5 { class.push_str(" last"); }
-                    let status = if route.step(i) == "live" || route.step(i) == "fail" { now.clone() } else { String::new() };
-                    rsx! {
-                        div { key: "step{i}", class: "{class}", style: "left: {x / 9.0}%; top: {y / 1.4}%",
-                            button { "aria-label": "{title}", "aria-describedby": "tip{i}", {step_icon(i)} }
-                            span { class: "label", "{label}" }
-                            span { class: "tip", id: "tip{i}", role: "tooltip",
-                                strong { "{title}" }
-                                span { "{body}" }
-                                if !status.is_empty() { em { "{status}" } }
+                for (i, ((title, body), label)) in tips.into_iter().zip(labels).enumerate() {
+                    {
+                        let (x, y) = STEPS[i];
+                        let mut class = format!("step {}", route.step(i));
+                        if i == 0 || i == 5 { class.push_str(" device"); }
+                        if i == 0 { class.push_str(" first"); }
+                        if i == 5 { class.push_str(" last"); }
+                        let status = if route.step(i) == "live" || route.step(i) == "fail" { now.clone() } else { String::new() };
+                        rsx! {
+                            div { key: "step{i}", class: "{class}", style: "left: {x / 9.0}%; --y: {y / 140.0}",
+                                button { "aria-label": "{title}", "aria-describedby": "tip{i}", {step_icon(i)} }
+                                span { class: "label", "{label}" }
+                                span { class: "tip", id: "tip{i}", role: "tooltip",
+                                    strong { "{title}" }
+                                    span { "{body}" }
+                                    if !status.is_empty() { em { "{status}" } }
+                                }
                             }
                         }
                     }
@@ -772,7 +806,9 @@ fn Conversation() -> Element {
     let mut draft = use_signal(String::new);
     let Some(name) = state.selected.read().clone() else {
         return rsx! {
-            main { div { class: "empty",
+            main {
+                div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
+                div { class: "empty",
                 h2 { "Nobody here yet" }
                 p { "Nightpost only connects people who know each other. Send someone a one-time link, or read them a code on the phone." }
                 button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
@@ -846,6 +882,7 @@ fn Conversation() -> Element {
                         path { d: "M12 11v5M12 7.6v.1" }
                     }
                 }
+                div { class: "drag-fill", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
             }
             RouteView { name: name.clone() }
             // Reversed column: the newest message sits at the bottom and the
