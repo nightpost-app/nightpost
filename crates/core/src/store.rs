@@ -101,6 +101,12 @@ impl Store {
             );
             PRAGMA user_version = 1;",
         )?;
+        // Added before any release, so without a new schema version: for an
+        // outgoing message, they read it; for an incoming one, we did.
+        let has_read: bool = db.query_row("SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'read'", [], |row| row.get(0))?;
+        if !has_read {
+            db.execute_batch("ALTER TABLE messages ADD COLUMN read INTEGER NOT NULL DEFAULT 0")?;
+        }
 
         let store = Store { db, path: path.to_path_buf(), salt, secret: unlock.secret(), key: RefCell::new(key) };
         if store.get("self", "identity")?.is_none() {
@@ -210,17 +216,41 @@ impl Store {
     /// ponytail: scans the account's rows to sort by time; an index on
     /// (account, time) when histories get long.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn history(&self, account: &[u8], limit: u32) -> rusqlite::Result<Vec<([u8; 16], bool, u64, String, bool)>> {
+    pub(crate) fn history(&self, account: &[u8], limit: u32) -> rusqlite::Result<Vec<([u8; 16], bool, u64, String, bool, bool)>> {
         let mut stmt = self.db.prepare(
-            "SELECT id, outgoing, time, text, delivered FROM messages WHERE account = ?1 ORDER BY time DESC LIMIT ?2",
+            "SELECT id, outgoing, time, text, delivered, read FROM messages WHERE account = ?1 ORDER BY time DESC LIMIT ?2",
         )?;
         let mut rows: Vec<_> = stmt
             .query_map(params![account, limit], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u64, row.get(3)?, row.get(4)?))
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u64, row.get(3)?, row.get(4)?, row.get(5)?))
             })?
             .collect::<rusqlite::Result<_>>()?;
         rows.reverse();
         Ok(rows)
+    }
+
+    /// Marks what `account` sent us as read; returns what was not yet.
+    pub(crate) fn read_incoming(&self, account: &[u8]) -> rusqlite::Result<Vec<[u8; 16]>> {
+        let mut stmt = self.db.prepare("SELECT id FROM messages WHERE account = ?1 AND outgoing = 0 AND read = 0 ORDER BY time")?;
+        let ids: Vec<[u8; 16]> = stmt.query_map(params![account], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+        self.db.execute("UPDATE messages SET read = 1 WHERE account = ?1 AND outgoing = 0", params![account])?;
+        Ok(ids)
+    }
+
+    /// `account` read these messages of ours; returns those not known as
+    /// read before. Ids that are not ours to them are ignored.
+    pub(crate) fn read_outgoing(&self, account: &[u8], ids: &[[u8; 16]]) -> rusqlite::Result<Vec<[u8; 16]>> {
+        let mut changed = Vec::new();
+        for id in ids {
+            let n = self.db.execute(
+                "UPDATE messages SET read = 1 WHERE account = ?1 AND id = ?2 AND outgoing = 1 AND read = 0",
+                params![account, id],
+            )?;
+            if n == 1 {
+                changed.push(*id);
+            }
+        }
+        Ok(changed)
     }
 
     /// Drops what still waits for `account`, and with `wipe` the
@@ -257,7 +287,8 @@ impl Store {
     }
 
     /// `device` acknowledged `id`. True if that was the last device waiting
-    /// for it, so the message is delivered.
+    /// for one of our messages, so it is delivered (a read receipt is not a
+    /// message: nothing to show).
     pub(crate) fn acked(&self, account: &[u8], device: u8, id: &[u8; 16]) -> rusqlite::Result<bool> {
         let removed = self.db.execute(
             "DELETE FROM outbox WHERE account = ?1 AND device = ?2 AND id = ?3",
@@ -269,11 +300,11 @@ impl Store {
             |row| row.get(0),
         )?;
         if removed == 1 && left == 0 {
-            self.db.execute(
+            let updated = self.db.execute(
                 "UPDATE messages SET delivered = 1 WHERE account = ?1 AND id = ?2",
                 params![account, id],
             )?;
-            return Ok(true);
+            return Ok(updated == 1);
         }
         Ok(false)
     }
@@ -429,5 +460,28 @@ impl SessionStore for Db<'_> {
         self.0
             .put("session", &address.to_string(), &record.serialize()?)
             .map_err(db_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dbkey::{Secret, Unlock};
+
+    /// A database from before read receipts gets the column, its messages
+    /// unread, and opening it again changes nothing.
+    #[test]
+    fn an_older_database_gains_the_read_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nightpost.db");
+        let unlock = Unlock::new(Some(Secret::new([7; 32])), None).unwrap();
+        let store = Store::open(&path, &unlock).unwrap();
+        store.add_message(b"bob", &[1; 16], true, 1, "avant").unwrap();
+        store.db.execute_batch("ALTER TABLE messages DROP COLUMN read").unwrap();
+        drop(store);
+        for _ in 0..2 {
+            let store = Store::open(&path, &unlock).unwrap();
+            assert_eq!(store.history(b"bob", 10).unwrap(), [([1; 16], true, 1, "avant".into(), false, false)]);
+        }
     }
 }

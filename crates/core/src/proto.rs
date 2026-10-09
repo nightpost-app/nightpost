@@ -132,10 +132,15 @@ pub struct Envelope {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Body {
     Text(String),
+    /// These messages of ours were read. Sent only by someone who turned
+    /// read receipts on.
+    Read(Vec<[u8; 16]>),
 }
 
 /// Longest text message, in bytes.
 pub const MAX_TEXT: usize = 64 * 1024;
+/// Most messages one read receipt names.
+pub const MAX_READ: usize = 512;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Hello {

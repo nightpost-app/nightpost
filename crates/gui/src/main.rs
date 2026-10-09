@@ -121,6 +121,8 @@ struct State {
     panel: Signal<bool>,
     /// The window fills the screen: no border, no edges to drag.
     maximized: Signal<bool>,
+    /// We send read receipts, and so see theirs (the daemon keeps it).
+    read_receipts: Signal<bool>,
 }
 
 /// How notifications behave; nothing about anyone, so a plain file.
@@ -212,6 +214,22 @@ impl State {
                 }
             });
         }
+        self.mark_read();
+    }
+
+    /// The open conversation, on screen, is read; the daemon tells them only
+    /// with read receipts on.
+    fn mark_read(self) {
+        let Some(name) = self.selected.peek().clone() else { return };
+        if !dioxus::desktop::window().window.is_focused() {
+            return;
+        }
+        spawn(async move {
+            match call(Request::MarkRead { name }).await {
+                Ok(Reply::Done) => {}
+                other => self.fail(other),
+            }
+        });
     }
 
     /// The contacts, and the history of those not loaded yet: the list
@@ -267,8 +285,11 @@ impl State {
                     }
                 });
                 let body = preview(&text);
-                self.messages.write().entry(from.clone()).or_default().push(HistoryItem { id, outgoing: false, time, text, delivered: true });
+                self.messages.write().entry(from.clone()).or_default().push(HistoryItem { id, outgoing: false, time, text, delivered: true, read: false });
                 let here = self.selected.read().as_deref() == Some(from.as_str());
+                if here {
+                    self.mark_read();
+                }
                 if !here || !dioxus::desktop::window().window.is_focused() {
                     if !here {
                         *self.unread.write().entry(from.clone()).or_default() += 1;
@@ -285,13 +306,21 @@ impl State {
                 }
             }
             Event::Sent { to, id, time, text } => {
-                self.messages.write().entry(to).or_default().push(HistoryItem { id, outgoing: true, time, text, delivered: false });
+                self.messages.write().entry(to).or_default().push(HistoryItem { id, outgoing: true, time, text, delivered: false, read: false });
             }
             Event::Delivered { to, id } => {
                 if let Some(m) = self.messages.write().get_mut(&to).and_then(|ms| ms.iter_mut().find(|m| m.id == id)) {
                     m.delivered = true;
                 }
             }
+            Event::Read { to, ids } => {
+                for m in self.messages.write().get_mut(&to).into_iter().flatten() {
+                    if ids.contains(&m.id) {
+                        m.read = true;
+                    }
+                }
+            }
+            Event::ReadReceipts { on } => self.read_receipts.set(on),
             Event::ContactAdded { name } => {
                 self.status.set(format!("{name} is now a contact"));
                 if matches!(&*self.dialog.read(), Some(Dialog::Waiting { name: n, .. } | Dialog::Invite { name: n, .. }) if *n == name) {
@@ -371,6 +400,7 @@ fn App() -> Element {
         view: Signal::new(View::Chat),
         panel: Signal::new(false),
         maximized: Signal::new(false),
+        read_receipts: Signal::new(false),
     });
 
     use_future(move || run(state, None));
@@ -381,6 +411,7 @@ fn App() -> Element {
         use dioxus::desktop::tao::event::{Event, WindowEvent};
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } if state.prefs.peek().lock_on_close => shut_down(),
+            Event::WindowEvent { event: WindowEvent::Focused(true), .. } => state.mark_read(),
             Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
                 let maximized = desktop.is_maximized();
                 if *state.maximized.peek() != maximized {
@@ -468,6 +499,10 @@ async fn run(mut state: State, passphrase: Option<String>) {
             state.network.set(network);
             state.links.set(links.into_iter().collect());
         }
+        other => state.fail(other),
+    }
+    match call(Request::ReadReceipts { on: None }).await {
+        Ok(Reply::ReadReceipts { on }) => state.read_receipts.set(on),
         other => state.fail(other),
     }
     state.reload_contacts().await;
@@ -940,9 +975,18 @@ fn Conversation() -> Element {
                                         p { class: "meta",
                                             "{clock(m.time)}"
                                             if m.outgoing && !m.delivered {
+                                                svg { class: "tick", view_box: "0 0 16 16", "aria-hidden": "true", circle { cx: "8", cy: "8", r: "6" } }
                                                 span { class: "waiting", "{waiting}" }
                                             } else if m.outgoing {
-                                                svg { view_box: "0 0 24 24", role: "img", "aria-label": "Delivered", polyline { points: "4 12.5 9.5 18 20 6.5" } }
+                                                // Signal's marks: two rings once delivered, filled once read.
+                                                svg { class: if m.read { "tick read" } else { "tick" }, view_box: "2 0 24 16", role: "img",
+                                                    "aria-label": if m.read { "Read" } else { "Delivered" },
+                                                    circle { cx: "10", cy: "8", r: "6" }
+                                                    path { d: "M7.3 8.2l1.8 1.8 3.6-3.8" }
+                                                    circle { class: "gap", cx: "18", cy: "8", r: "7.6" }
+                                                    circle { class: "front", cx: "18", cy: "8", r: "6" }
+                                                    path { d: "M15.3 8.2l1.8 1.8 3.6-3.8" }
+                                                }
                                             }
                                         }
                                     }

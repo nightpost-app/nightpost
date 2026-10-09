@@ -168,7 +168,10 @@ impl App {
                 Some(event) = keys.next() => match event? {
                     Term::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key, requests, updates).await,
                     Term::Paste(text) => self.insert(&text.replace("\r\n", "\n")),
-                    Term::FocusGained => self.focused = true,
+                    Term::FocusGained => {
+                        self.focused = true;
+                        self.mark_read(requests).await;
+                    }
                     Term::FocusLost => self.focused = false,
                     _ => {}
                 },
@@ -412,9 +415,12 @@ impl App {
             Update::Event(Event::Message { from, id, time, text }) => {
                 let selected = self.selected;
                 let focused = self.focused;
+                let mut read = false;
                 if let Some((i, c)) = self.conversations.iter_mut().enumerate().find(|(_, c)| c.name == from) {
-                    c.messages.push(HistoryItem { id, outgoing: false, time, text, delivered: true });
-                    if i != selected || !focused {
+                    c.messages.push(HistoryItem { id, outgoing: false, time, text, delivered: true, read: false });
+                    if i == selected && focused {
+                        read = true;
+                    } else {
                         c.unread += 1;
                         if c.person.muted_until.is_none_or(|until| until <= now_millis()) {
                             // The name, never the text: a notification can show on a locked screen.
@@ -422,10 +428,13 @@ impl App {
                         }
                     }
                 }
+                if read {
+                    self.mark_read(requests).await;
+                }
             }
             Update::Event(Event::Sent { to, id, time, text }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == to) {
-                    c.messages.push(HistoryItem { id, outgoing: true, time, text, delivered: false });
+                    c.messages.push(HistoryItem { id, outgoing: true, time, text, delivered: false, read: false });
                 }
             }
             Update::Event(Event::Delivered { to, id }) => {
@@ -437,6 +446,13 @@ impl App {
                     .find(|m| m.id == id)
                 {
                     m.delivered = true;
+                }
+            }
+            Update::Event(Event::Read { to, ids }) => {
+                for m in self.conversations.iter_mut().filter(|c| c.name == to).flat_map(|c| c.messages.iter_mut()) {
+                    if ids.contains(&m.id) {
+                        m.read = true;
+                    }
                 }
             }
             Update::Event(Event::ContactAdded { name }) => {
@@ -462,7 +478,7 @@ impl App {
                 }
             }
             // The route is the graphical interface's.
-            Update::Event(Event::Network { .. } | Event::Link { .. }) => {}
+            Update::Event(Event::Network { .. } | Event::Link { .. } | Event::ReadReceipts { .. }) => {}
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 self.notify = Some(format!("{name} used your invitation"));
                 self.overlay = Some(if self.codes.contains(&name) {
@@ -515,6 +531,19 @@ impl App {
                 Ok(other) => self.status = format!("unexpected reply {other:?}"),
                 Err(e) => self.status = format!("{e:#}"),
             }
+        }
+        self.mark_read(requests).await;
+    }
+
+    /// What the open conversation shows is read (the daemon tells them only
+    /// with read receipts on).
+    async fn mark_read(&mut self, requests: &mut Client) {
+        let Some(c) = self.conversations.get(self.selected) else { return };
+        match requests.call(&Request::MarkRead { name: c.name.clone() }).await {
+            Ok(Reply::Done) => {}
+            Ok(Reply::Error { message }) => self.status = message,
+            Ok(other) => self.status = format!("unexpected reply {other:?}"),
+            Err(e) => self.status = format!("{e:#}"),
         }
     }
 
@@ -711,7 +740,12 @@ fn slips(messages: &[HistoryItem], width: usize) -> Vec<Line<'static>> {
         let pending = m.outgoing && !m.delivered;
         let run_ends = messages.get(i + 1).is_none_or(|n| n.outgoing != m.outgoing || n.time.saturating_sub(m.time) > 5 * 60_000 || date(n.time) != day);
         if run_ends || pending {
-            let meta = if pending { format!("{}, not delivered yet", clock(m.time)) } else { clock(m.time) };
+            let meta = match (m.outgoing, pending, m.read) {
+                (true, true, _) => format!("{} ○ not delivered yet", clock(m.time)),
+                (true, false, false) => format!("{} ✓✓", clock(m.time)),
+                (true, false, true) => format!("{} ✓✓ read", clock(m.time)),
+                (false, ..) => clock(m.time),
+            };
             lines.push(Line::styled(meta, DIM).alignment(align));
             lines.push(Line::default());
         }

@@ -53,6 +53,12 @@ pub enum Request {
     SetPerson { name: String, person: Person },
     /// Adds, changes or removes the passphrase over the keychain secret.
     SetPassphrase { current: Option<String>, new: Option<String> },
+    /// We have seen `name`'s messages so far: with read receipts on, they
+    /// learn it.
+    MarkRead { name: String },
+    /// Whether we send read receipts, and so see theirs; `on` changes it.
+    /// Off unless turned on.
+    ReadReceipts { on: Option<bool> },
     /// Stops the daemon: the database closes and, with a passphrase, stays
     /// locked until the next start.
     Shutdown,
@@ -71,6 +77,7 @@ pub enum Reply {
     SafetyNumber { name: String, number: String },
     Listening,
     Status { network: Network, links: Vec<(String, LinkState)> },
+    ReadReceipts { on: bool },
     Error { message: String },
 }
 
@@ -82,6 +89,9 @@ pub enum Event {
     /// reply, so all of them show the same conversation.
     Sent { to: String, id: String, time: u64, text: String },
     Delivered { to: String, id: String },
+    /// They read these messages of ours.
+    Read { to: String, ids: Vec<String> },
+    ReadReceipts { on: bool },
     ContactAdded { name: String },
     /// Someone used an oral code: the two people compare this number before
     /// the inviter confirms.
@@ -129,6 +139,9 @@ pub struct HistoryItem {
     pub time: u64,
     pub text: String,
     pub delivered: bool,
+    /// Outgoing: they read it (read receipts on, on both sides).
+    #[serde(default)]
+    pub read: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -258,6 +271,16 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             Reply::SafetyNumber { name, number }
         }
         Request::Status => Reply::Status { network: daemon.network(), links: daemon.links() },
+        Request::MarkRead { name } => {
+            daemon.mark_read(&name)?;
+            Reply::Done
+        }
+        Request::ReadReceipts { on } => {
+            if let Some(on) = on {
+                daemon.set_read_receipts(on)?;
+            }
+            Reply::ReadReceipts { on: daemon.read_receipts()? }
+        }
         Request::Rename { name, to } => {
             daemon.rename(&name, &to)?;
             Reply::Done

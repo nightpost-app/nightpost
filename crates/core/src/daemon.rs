@@ -32,7 +32,7 @@ use crate::api::{ContactInfo, Event, HistoryItem, LinkState, MAX_PHOTO, Network,
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite};
-use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_TEXT, Me, Peer, Proof, Service};
+use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service};
 use crate::session::{self, WireBundle};
 use crate::store::Store;
 use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_key, onion};
@@ -361,19 +361,66 @@ impl<T: Transport + 'static> Daemon<T> {
         let envelope = postcard::to_stdvec(&Envelope { id, time, body: Body::Text(text.into()) })?;
         self.store.atomically(|| {
             self.store.add_message(&contact.identity, &id, true, time, text)?;
-            for device in devices.devices.iter().filter(|d| d.role == Role::Normal) {
-                self.store.queue(&contact.identity, device.id, &id, &envelope)?;
-            }
-            Ok(())
+            self.queue(&contact, &devices, &id, &envelope)
         })?;
         let _ = self.events.send(Event::Sent { to: to.into(), id: hex(&id), time, text: text.into() });
+        self.nudge(&contact, &devices);
+        Ok(id)
+    }
+
+    /// Puts an envelope in the outbox of each of their normal devices.
+    fn queue(&self, contact: &Contact, devices: &DeviceList, id: &[u8; 16], envelope: &[u8]) -> rusqlite::Result<()> {
+        for device in devices.devices.iter().filter(|d| d.role == Role::Normal) {
+            self.store.queue(&contact.identity, device.id, id, envelope)?;
+        }
+        Ok(())
+    }
+
+    /// Something was queued: open links send it now, the rest get dialed.
+    fn nudge(&self, contact: &Contact, devices: &DeviceList) {
         for device in &devices.devices {
             if let Some(Some(link)) = self.links.borrow().get(&(contact.identity.clone(), device.id)) {
                 let _ = link.send(());
             }
         }
         self.wake.notify_one();
-        Ok(id)
+    }
+
+    /// Whether we send read receipts, and so take theirs. Off by default:
+    /// they tell when we are at the screen, which is ours to give.
+    pub fn read_receipts(&self) -> Result<bool> {
+        Ok(self.store.get("self", "read_receipts")?.is_some_and(|v| v == [1]))
+    }
+
+    pub fn set_read_receipts(&self, on: bool) -> Result<()> {
+        self.store.put("self", "read_receipts", &[u8::from(on)])?;
+        let _ = self.events.send(Event::ReadReceipts { on });
+        Ok(())
+    }
+
+    /// We have seen what `name` wrote so far; with read receipts on, they
+    /// are told which messages.
+    pub fn mark_read(&self, name: &str) -> Result<()> {
+        let contact = self.contact_named(name)?;
+        let devices = self.devices_of(&contact)?;
+        let receipts = self.read_receipts()?;
+        let queued = self.store.atomically(|| {
+            let ids = self.store.read_incoming(&contact.identity)?;
+            if !receipts {
+                return Ok(false);
+            }
+            for chunk in ids.chunks(MAX_READ) {
+                let id: [u8; 16] = OsRng.unwrap_err().random();
+                let envelope = Envelope { id, time: now_millis(), body: Body::Read(chunk.to_vec()) };
+                let envelope = postcard::to_stdvec(&envelope).map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                self.queue(&contact, &devices, &id, &envelope)?;
+            }
+            Ok(!ids.is_empty())
+        })?;
+        if queued {
+            self.nudge(&contact, &devices);
+        }
+        Ok(())
     }
 
     /// The last `limit` messages with `name`, oldest first.
@@ -383,7 +430,7 @@ impl<T: Transport + 'static> Daemon<T> {
             .store
             .history(&contact.identity, limit)?
             .into_iter()
-            .map(|(id, outgoing, time, text, delivered)| HistoryItem { id: hex(&id), outgoing, time, text, delivered })
+            .map(|(id, outgoing, time, text, delivered, read)| HistoryItem { id: hex(&id), outgoing, time, text, delivered, read: outgoing && read })
             .collect())
     }
 
@@ -726,7 +773,21 @@ impl<T: Transport + 'static> Daemon<T> {
         let plain = session::decrypt(&self.store, &self.address(), them, &message).await?;
         let envelope: Envelope = postcard::from_bytes(&plain)?;
         ensure!(envelope.id == id, "the envelope id does not match the frame");
-        let Body::Text(text) = envelope.body;
+        let text = match envelope.body {
+            Body::Text(text) => text,
+            Body::Read(ids) => {
+                ensure!(ids.len() <= MAX_READ, "a read receipt naming too many messages");
+                // Ours off, theirs unseen: what we do not give, we do not take.
+                if !self.read_receipts()? {
+                    return Ok(None);
+                }
+                let ids = self.store.read_outgoing(&contact.identity, &ids)?;
+                if ids.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(Event::Read { to: contact.name.clone(), ids: ids.iter().map(|id| hex(id)).collect() }));
+            }
+        };
         ensure!(text.len() <= MAX_TEXT, "message too long");
         let text = crate::text::message(&text);
         // The sender's clock, unless it claims a time more than a day ahead.
@@ -994,6 +1055,68 @@ mod tests {
                 assert_eq!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().len(), 1);
                 assert!(alice.store.acked(&bob_contact.identity, DEVICE, &id).unwrap());
                 assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
+            })
+            .await;
+    }
+
+    /// Read receipts go out only when on, and are taken only from someone
+    /// who has them on too; one is never shown as a delivered message.
+    #[tokio::test]
+    async fn read_receipts_are_off_by_default_and_mutual() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+                let talk = async |text: &str, alice_events: &mut broadcast::Receiver<Event>, bob_events: &mut broadcast::Receiver<Event>| {
+                    let id = alice.send("bob", text).unwrap();
+                    assert!(message("alice", id, text)(&next(bob_events).await));
+                    assert!(sent("bob", id, text)(&next(alice_events).await));
+                    assert_eq!(next(alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
+                    bob.mark_read("alice").unwrap();
+                    sleep(Duration::from_millis(300)).await;
+                };
+                let quiet = |events: &mut broadcast::Receiver<Event>| {
+                    while let Ok(event) = events.try_recv() {
+                        assert!(matches!(event, Event::Link { .. } | Event::Network { .. }), "{event:?}");
+                    }
+                };
+
+                assert!(!alice.read_receipts().unwrap() && !bob.read_receipts().unwrap());
+                talk("un", &mut alice_events, &mut bob_events).await;
+                quiet(&mut alice_events);
+                // Bob on, Alice off: his receipt arrives and is acknowledged,
+                // but she gave none, so she sees none.
+                bob.set_read_receipts(true).unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::ReadReceipts { on: true });
+                talk("deux", &mut alice_events, &mut bob_events).await;
+                quiet(&mut alice_events);
+                quiet(&mut bob_events);
+                let bob_contact = &alice.contacts_raw().unwrap()[0];
+                let alice_contact = &bob.contacts_raw().unwrap()[0];
+                assert!(bob.store.queued(&alice_contact.identity, DEVICE).unwrap().is_empty());
+
+                alice.set_read_receipts(true).unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::ReadReceipts { on: true });
+                let id = alice.send("bob", "trois").unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+                next(&mut alice_events).await;
+                bob.mark_read("alice").unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::Read { to: "bob".into(), ids: vec![hex(&id)] });
+                let read: Vec<_> = alice.history("bob", 10).unwrap().iter().map(|m| (m.text.clone(), m.read)).collect();
+                assert_eq!(read, [("un".into(), false), ("deux".into(), false), ("trois".into(), true)]);
+                assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
+                // Nothing new to read: nothing sent.
+                bob.mark_read("alice").unwrap();
+                assert!(bob.store.queued(&alice_contact.identity, DEVICE).unwrap().is_empty());
             })
             .await;
     }

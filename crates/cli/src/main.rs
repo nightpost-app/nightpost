@@ -30,6 +30,9 @@ usage:
   nightpost contacts               list contacts and safety numbers
   nightpost verify <name>          print the safety number to compare
   nightpost status                 where Tor and each link stand, as JSON
+  nightpost read-receipts [on|off] whether they learn when you read (off
+                                   by default; off, you do not see theirs)
+  nightpost mark-read <name>       what <name> wrote so far is read
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
 passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).
@@ -69,6 +72,10 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["history", name, n] => Request::History { name: name.to_string(), limit: n.parse().context("a number of messages")? },
         ["verify", name] => Request::Verify { name: name.to_string() },
         ["status"] => Request::Status,
+        ["mark-read", name] => Request::MarkRead { name: name.to_string() },
+        ["read-receipts"] => Request::ReadReceipts { on: None },
+        ["read-receipts", "on"] => Request::ReadReceipts { on: Some(true) },
+        ["read-receipts", "off"] => Request::ReadReceipts { on: Some(false) },
         _ => {
             println!("{USAGE}");
             return Ok(());
@@ -95,6 +102,7 @@ async fn run(args: Vec<String>) -> Result<()> {
             }
         }
         status @ Reply::Status { .. } => println!("{}", serde_json::to_string(&status)?),
+        Reply::ReadReceipts { on } => println!("read receipts {}", if on { "on" } else { "off" }),
         Reply::Listening => {
             while let Some(event) = client.event().await? {
                 println!("{}", serde_json::to_string(&event)?);

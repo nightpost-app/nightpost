@@ -275,6 +275,7 @@ fn Security() -> Element {
     let mut again = use_signal(String::new);
     let mut error = use_signal(String::new);
     let mut busy = use_signal(|| false);
+    let read_receipts = *state.read_receipts.read();
 
     let mut open = move |c: Option<Change>| {
         change.set(c);
@@ -377,6 +378,27 @@ fn Security() -> Element {
                     }
                     button { class: "ghost", r#type: "button", onclick: move |_| open(None), "Cancel" }
                 }
+            }
+        }
+        section { class: "block",
+            h2 { "Read receipts" }
+            button {
+                class: "toggle-row",
+                role: "switch",
+                "aria-checked": "{read_receipts}",
+                onclick: move |_| {
+                    spawn(async move {
+                        match call(Request::ReadReceipts { on: Some(!read_receipts) }).await {
+                            Ok(Reply::ReadReceipts { on }) => state.read_receipts.set(on),
+                            other => state.fail(other),
+                        }
+                    });
+                },
+                span { class: "card-text",
+                    span { class: "card-title", "Send read receipts" }
+                    span { class: "help", "On: people see when you have read their messages, and you see when they read yours, if they have it on too. Off: neither." }
+                }
+                span { class: if read_receipts { "switch on" } else { "switch" }, span {} }
             }
         }
         section { class: "block",
