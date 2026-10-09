@@ -315,6 +315,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .toast b { font-size: 12px; font-weight: 600; color: var(--muted); }
 .about-head { display: flex; align-items: baseline; gap: 12px; }
 .wordmark.big { font-size: 32px; }
+.pre-release { margin-left: 5px; padding: 0 5px; border: 1px solid var(--main); border-radius: 5px; color: var(--main); font-size: 10px; font-weight: 600; line-height: 14px; vertical-align: 1px; }
 .kv { display: flex; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .kv span:first-child { flex: 0 0 170px; color: var(--soft); }
 .kv span:last-child { color: var(--strong); overflow-wrap: anywhere; }

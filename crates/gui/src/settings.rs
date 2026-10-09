@@ -408,7 +408,13 @@ fn About() -> Element {
         section { class: "block",
             div { class: "about-head",
                 span { class: "wordmark big", "Nightpost" }
-                span { class: "reach-count", "{env!(\"CARGO_PKG_VERSION\")}" }
+                span { class: "reach-count",
+                    {concat!(env!("CARGO_PKG_VERSION_MAJOR"), ".", env!("CARGO_PKG_VERSION_MINOR"), ".", env!("CARGO_PKG_VERSION_PATCH"))}
+                    // "alpha.1" says the version is not stable yet: it gets a mark of its own.
+                    if !env!("CARGO_PKG_VERSION_PRE").is_empty() {
+                        span { class: "pre-release", {env!("CARGO_PKG_VERSION_PRE").replace('.', " ")} }
+                    }
+                }
             }
             p { class: "help", "Messages between people who know each other, over Tor, with no server in between." }
         }
