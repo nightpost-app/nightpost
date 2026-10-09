@@ -199,6 +199,7 @@ fn Notifications() -> Element {
     let toggles = [
         ("Show notifications", "When a message arrives and Nightpost is not in front.", prefs.notify, 0),
         ("Play a sound", "A short chime with each notification.", prefs.sound, 1),
+        ("Keep in history", "Off: the system lets each one go once shown, rather than keeping it in its list of past notifications.", prefs.keep_history, 2),
     ];
     // (name, text), its label, and the notification it gives.
     let shows = [
@@ -218,7 +219,11 @@ fn Notifications() -> Element {
                     "aria-checked": "{on}",
                     onclick: move |_| {
                         let mut p = *state.prefs.read();
-                        if which == 0 { p.notify = !p.notify } else { p.sound = !p.sound }
+                        match which {
+                            0 => p.notify = !p.notify,
+                            1 => p.sound = !p.sound,
+                            _ => p.keep_history = !p.keep_history,
+                        }
                         state.prefs.set(p.save());
                     },
                     span { class: "card-text", span { class: "card-title", "{label}" } span { class: "help", "{help}" } }
@@ -248,7 +253,7 @@ fn Notifications() -> Element {
                     }
                 }
             }
-            p { class: "help", "A notification can show on a locked screen, and the system may keep a history of them." }
+            p { class: "help", "A notification can show on a locked screen." }
         }
     }
 }

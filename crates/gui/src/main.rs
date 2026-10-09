@@ -132,6 +132,8 @@ struct Prefs {
     show_name: bool,
     /// What they wrote too (with show_name).
     show_text: bool,
+    /// The system may keep notifications in its history.
+    keep_history: bool,
     /// Closing the window stops the daemon too.
     lock_on_close: bool,
     /// The list of people is folded away.
@@ -145,16 +147,17 @@ impl Prefs {
         let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
         let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
         let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
-        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), show_text: on("show_text"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
+        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), show_text: on("show_text"), keep_history: on("keep_history"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
     }
 
     fn save(self) -> Prefs {
         let text = format!(
-            "notify={}\nsound={}\nshow_name={}\nshow_text={}\nlock_on_close={}\nside_hidden={}\n",
+            "notify={}\nsound={}\nshow_name={}\nshow_text={}\nkeep_history={}\nlock_on_close={}\nside_hidden={}\n",
             u8::from(self.notify),
             u8::from(self.sound),
             u8::from(self.show_name),
             u8::from(self.show_text),
+            u8::from(self.keep_history),
             u8::from(self.lock_on_close),
             u8::from(self.side_hidden)
         );
@@ -274,9 +277,9 @@ impl State {
                     let muted = self.people.read().get(&from).is_some_and(|p| muted(p).is_some());
                     if prefs.notify && !muted {
                         match (prefs.show_name, prefs.show_text) {
-                            (true, true) => notify(&from, &body, prefs.sound),
-                            (true, false) => notify("Nightpost", &format!("Message from {from}"), prefs.sound),
-                            _ => notify("Nightpost", "New message", prefs.sound),
+                            (true, true) => notify(&from, &body, prefs),
+                            (true, false) => notify("Nightpost", &format!("Message from {from}"), prefs),
+                            _ => notify("Nightpost", "New message", prefs),
                         }
                     }
                 }
@@ -300,7 +303,7 @@ impl State {
                 });
             }
             Event::Fingerprint { name, safety_number } => {
-                notify("Nightpost", &format!("{name} used your invitation"), self.prefs.read().sound);
+                notify("Nightpost", &format!("{name} used your invitation"), *self.prefs.read());
                 let ours = self.codes.read().contains(&name);
                 self.dialog.set(Some(if ours {
                     Dialog::Confirm { name, number: safety_number }
@@ -1220,12 +1223,17 @@ fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
 
 /// Shown by the system: it can be on a locked screen and kept in a history,
 /// so what goes in is the user's choice (Settings, Notifications).
-fn notify(title: &str, body: &str, sound: bool) {
+fn notify(title: &str, body: &str, prefs: Prefs) {
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
         let mut notification = notify_rust::Notification::new();
         notification.summary(&title).body(&body);
-        if sound {
+        // Transient: shown, then let go rather than kept in the history.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if !prefs.keep_history {
+            notification.hint(notify_rust::Hint::Transient(true));
+        }
+        if prefs.sound {
             // The freedesktop sound theme's name; macOS and Windows play their default.
             notification.sound_name("message-new-instant");
         }
