@@ -132,6 +132,8 @@ struct Prefs {
     show_name: bool,
     /// Closing the window stops the daemon too.
     lock_on_close: bool,
+    /// The list of people is folded away.
+    side_hidden: bool,
 }
 
 impl Prefs {
@@ -141,16 +143,17 @@ impl Prefs {
         let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
         let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
         let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
-        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), lock_on_close: on("lock_on_close") }
+        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
     }
 
     fn save(self) -> Prefs {
         let text = format!(
-            "notify={}\nsound={}\nshow_name={}\nlock_on_close={}\n",
+            "notify={}\nsound={}\nshow_name={}\nlock_on_close={}\nside_hidden={}\n",
             u8::from(self.notify),
             u8::from(self.sound),
             u8::from(self.show_name),
-            u8::from(self.lock_on_close)
+            u8::from(self.lock_on_close),
+            u8::from(self.side_hidden)
         );
         let _ = std::fs::write(dir().join(Prefs::FILE), text);
         self
@@ -396,7 +399,8 @@ fn App() -> Element {
                 Phase::Locked(why) => rsx! { Locked { why } },
                 Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
                 Phase::Ready => rsx! {
-                    div { class: "app",
+                    div { class: if state.prefs.read().side_hidden { "app side-hidden" } else { "app" },
+                        SideToggle {}
                         Sidebar {}
                         match *state.view.read() {
                             View::Chat => rsx! { Conversation {} },
@@ -408,6 +412,30 @@ fn App() -> Element {
             }
             if !cfg!(target_os = "macos") {
                 Chrome {}
+            }
+        }
+    }
+}
+
+/// Folds the list of people away, or brings it back; remembered.
+#[component]
+fn SideToggle() -> Element {
+    let mut state = use_context::<State>();
+    let hidden = state.prefs.read().side_hidden;
+    let label = if hidden { "Show the list" } else { "Hide the list" };
+    rsx! {
+        button {
+            class: "side-toggle",
+            title: label,
+            "aria-label": label,
+            "aria-expanded": if hidden { "false" } else { "true" },
+            onclick: move |_| {
+                let p = *state.prefs.peek();
+                state.prefs.set(Prefs { side_hidden: !p.side_hidden, ..p }.save());
+            },
+            svg { width: "18", height: "18", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
+                rect { x: "3", y: "3", width: "18", height: "18", rx: "2" }
+                path { d: "M9 3v18" }
             }
         }
     }

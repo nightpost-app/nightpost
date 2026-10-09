@@ -128,10 +128,19 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; border-radiu
 .splash .warning { color: var(--fail); max-width: 56ch; }
 
 .app { display: grid; grid-template-columns: 310px 1fr; height: 100vh; }
+/* The list folds to the left; its rows keep their width and slide under the edge. */
+.app.side-hidden { grid-template-columns: 0 1fr; }
+.app > aside { min-width: 0; overflow: hidden; }
+.app > aside > * { min-width: 309px; box-sizing: border-box; }
+.app.side-hidden > aside { visibility: hidden; }
+.side-toggle { position: fixed; top: 20px; left: 14px; z-index: 60; width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--soft); }
+.side-toggle:hover { color: var(--strong); background: var(--selected); }
+.side-hidden .talk-head { padding-left: max(32px, calc(60px - max(0px, (100% - var(--col) - 64px) / 2))); }
+.side-hidden .settings-head { padding-left: 56px; }
 
 /* People. */
 aside { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-.brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 24px 14px 14px 22px; }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 24px 14px 14px 52px; }
 .reach-count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 nav { flex: 1; overflow-y: auto; padding: 0 10px; }
 .contact { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 9px 10px; border-radius: 12px; }
@@ -387,6 +396,9 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .qr { display: block; width: 232px; height: 232px; margin: 14px auto 16px; image-rendering: pixelated; border-radius: 6px; }
 
 @media (prefers-reduced-motion: no-preference) {
+  .app { transition: grid-template-columns .28s ease-in-out; }
+  .app > aside { transition: visibility 0s; }
+  .app.side-hidden > aside { transition: visibility 0s .28s; }
   .step .label { transition: opacity .3s ease-in-out; }
   .route > svg { animation: route-svg-up .45s ease-in-out both; }
   .step > button { animation: route-step-up .45s ease-in-out both; }
