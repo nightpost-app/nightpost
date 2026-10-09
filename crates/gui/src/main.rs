@@ -513,9 +513,9 @@ fn Sidebar() -> Element {
         state.contacts.read().iter().map(|n| (n.clone(), messages.get(n).and_then(|m| m.last().cloned()))).collect()
     };
     rows.sort_by(|a, b| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time)).then_with(|| a.0.cmp(&b.0)));
-    let reachable = rows.iter().filter(|(n, _)| reached(state.links.read().get(n).copied())).count();
-    let (title, _) = network_summary(&state.network.read());
     let net = state.network.read().clone();
+    let reachable = rows.iter().filter(|(n, _)| reached(&net, state.links.read().get(n).copied())).count();
+    let (title, _) = network_summary(&net);
     let dot = if net.entry == Some(false) || net.circuit == Some(false) {
         "net-dot fail"
     } else if net.percent < 100 {
@@ -543,7 +543,7 @@ fn Sidebar() -> Element {
                             None => "No messages yet".into(),
                         };
                         let when = last.as_ref().map(|m| short_time(m.time)).unwrap_or_default();
-                        let on = reached(state.links.read().get(&name).copied());
+                        let on = reached(&net, state.links.read().get(&name).copied());
                         let photo = state.people.read().get(&name).and_then(|p| p.photo.clone());
                         let pick = name.clone();
                         rsx! {
@@ -591,8 +591,10 @@ fn Sidebar() -> Element {
 }
 
 /// Reached since the daemon started: open now, or closed after use.
-fn reached(link: Option<LinkState>) -> bool {
-    matches!(link, Some(LinkState::Open | LinkState::Idle))
+/// As the conversation's header says it: a link counts only while Tor is up,
+/// not from before Tor went down and started over.
+fn reached(net: &Network, link: Option<LinkState>) -> bool {
+    reach_line("", net, link).0 == "on"
 }
 
 /// What the panel under the list says about Tor.
@@ -1318,6 +1320,14 @@ mod tests {
         let long = "é".repeat(250);
         assert_eq!(preview(&long), format!("{}…", "é".repeat(200)));
         assert_eq!(preview(&"é".repeat(200)), "é".repeat(200));
+    }
+
+    #[test]
+    fn nobody_is_reachable_while_tor_starts_over() {
+        let ready = Network { percent: 100, ..Network::default() };
+        assert!(reached(&ready, Some(LinkState::Idle)));
+        assert!(!reached(&Network { percent: 92, ..ready.clone() }, Some(LinkState::Idle)));
+        assert!(!reached(&Network { circuit: Some(false), ..ready }, Some(LinkState::Open)));
     }
 
     #[test]
