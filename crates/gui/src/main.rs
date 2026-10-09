@@ -1122,9 +1122,14 @@ fn AddDialog() -> Element {
     let mut state = use_context::<State>();
     let mut name = use_signal(String::new);
     let mut pasted = use_signal(String::new);
+    // What is missing, said here: the dialog stays open until it is fixed.
+    let mut error = use_signal(String::new);
 
     let invite = move |by_code: bool| {
         let who = name.read().trim().to_string();
+        if who.is_empty() {
+            return error.set("Give them a name first.".into());
+        }
         spawn(async move {
             let request = if by_code { Request::InviteCode { name: who.clone() } } else { Request::Invite { name: who.clone() } };
             match call(request).await {
@@ -1139,6 +1144,12 @@ fn AddDialog() -> Element {
     };
     let accept = move |_| {
         let (who, given) = (name.read().trim().to_string(), pasted.read().trim().to_string());
+        if given.is_empty() {
+            return error.set("Paste their link, or type the code they read you.".into());
+        }
+        if who.is_empty() {
+            return error.set("Give them a name first, at the top.".into());
+        }
         // A code is digits and separators; anything else is taken for a link.
         let request = if given.chars().all(|c| c.is_ascii_digit() || " -.".contains(c)) {
             Request::AcceptCode { code: given, name: who.clone() }
@@ -1156,19 +1167,20 @@ fn AddDialog() -> Element {
             }
         });
     };
-    let (by_link, by_code) = (invite, invite);
+    let (mut by_link, mut by_code) = (invite, invite);
 
     rsx! {
         h3 { "Add someone" }
         label { "Their name, as you will see it" }
-        input { autofocus: true, value: "{name}", placeholder: "Alice", oninput: move |e| name.set(e.value()) }
+        input { autofocus: true, value: "{name}", placeholder: "Alice", oninput: move |e| { name.set(e.value()); error.set(String::new()); } }
         div { class: "actions",
             button { class: "primary", onclick: move |_| by_link(false), "Create a link" }
             button { onclick: move |_| by_code(true), "Create a code to read out" }
         }
         hr {}
         label { "Or use what they gave you: their link, or the code they read you" }
-        input { value: "{pasted}", placeholder: "nightpost:1:… or 482-109-375-512", oninput: move |e| pasted.set(e.value()) }
+        input { value: "{pasted}", placeholder: "nightpost:1:… or 482-109-375-512", oninput: move |e| { pasted.set(e.value()); error.set(String::new()); } }
+        if !error.read().is_empty() { p { class: "warning", role: "alert", "{error}" } }
         div { class: "actions",
             button { class: "primary", onclick: accept, "Use it" }
             button { onclick: move |_| state.dialog.set(None), "Cancel" }
