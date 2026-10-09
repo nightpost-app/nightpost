@@ -433,3 +433,6 @@ header { display: flex; justify-content: space-between; align-items: center; gap
   @keyframes travel { 0% { stroke-dashoffset: 60; opacity: 1; } 90% { opacity: 1; } 100% { stroke-dashoffset: -1000; opacity: 0; } }
   @keyframes travel-back { 0% { stroke-dashoffset: -1000; opacity: 1; } 90% { opacity: 1; } 100% { stroke-dashoffset: 60; opacity: 0; } }
 }
+.copy { display: inline-grid; justify-items: center; }
+.copy > span { grid-area: 1 / 1; }
+.copy > .off { visibility: hidden; }

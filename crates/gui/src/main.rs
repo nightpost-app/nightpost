@@ -1046,7 +1046,7 @@ fn DialogView() -> Element {
             img { class: "qr", src: "{qr(&link)}", alt: "QR code of the invitation" }
             textarea { class: "link", readonly: true, rows: "4", "aria-label": "Invitation link", value: "{link}" }
             div { class: "actions",
-                button { class: "primary", onclick: move |_| copy(&link), "Copy the link" }
+                CopyButton { text: link.clone(), label: "Copy the link" }
                 button { onclick: close, "Done" }
             }
         },
@@ -1055,7 +1055,10 @@ fn DialogView() -> Element {
             p { "On a call or in person. It works for 10 minutes." }
             p { class: "code", "{code.replace('-', \" \")}" }
             p { "When {name} types it in, you will both compare a safety number before anything is kept." }
-            div { class: "actions", button { onclick: close, "Hide" } }
+            div { class: "actions",
+                CopyButton { text: code.clone(), label: "Copy the code" }
+                button { onclick: close, "Hide" }
+            }
         },
         Dialog::Confirm { name, number } => {
             let (keep, refuse) = (name.clone(), name.clone());
@@ -1299,10 +1302,29 @@ fn preview(text: &str) -> String {
     short.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn copy(text: &str) {
-    // Our own link (base32): Rust's quoting is a valid JS string literal.
-    let quoted = format!("{text:?}");
-    document::eval(&format!("navigator.clipboard.writeText({quoted})"));
+/// Copies `text`, and says so for four seconds once the clipboard took it.
+#[component]
+fn CopyButton(text: String, label: &'static str) -> Element {
+    let mut copied = use_signal(|| false);
+    let onclick = move |_| {
+        // Our own link or code: Rust's quoting is a valid JS string literal.
+        let quoted = format!("{text:?}");
+        spawn(async move {
+            let done = document::eval(&format!("try {{ await navigator.clipboard.writeText({quoted}); return true; }} catch {{ return false; }}")).await;
+            if done.is_ok_and(|v| v.as_bool() == Some(true)) {
+                copied.set(true);
+                tokio::time::sleep(Duration::from_secs(4)).await;
+                copied.set(false);
+            }
+        });
+    };
+    rsx! {
+        // Both labels hold the width, so the buttons beside it stay put.
+        button { class: "primary copy", "aria-live": "polite", onclick,
+            span { class: if *copied.read() { "off" }, "{label}" }
+            span { class: if !*copied.read() { "off" }, "Copied" }
+        }
+    }
 }
 
 /// The link as an SVG QR code, ink on paper: not every phone reads it inverted.
