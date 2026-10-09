@@ -59,9 +59,10 @@ pub fn SettingsPage(section: Section) -> Element {
                             key: "{label}",
                             class: if s == section { "section on" } else { "section" },
                             "aria-current": if s == section { "page" } else { "false" },
+                            title: "{label}",
                             onclick: move |_| state.view.set(View::Settings(s)),
                             span { class: "tile", {icon(s)} }
-                            "{label}"
+                            span { class: "section-label", "{label}" }
                         }
                     }
                 }
