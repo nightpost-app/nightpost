@@ -258,11 +258,16 @@ pub async fn bind(dir: &Path) -> Result<Listener> {
     write_private(&dir.join("api.token"), token.as_bytes())?;
 
     let options = ListenerOptions::new().name(socket(dir)?);
+    // Nothing still listens there (checked above): a leftover from a crash.
     #[cfg(unix)]
+    let options = options.try_overwrite(true);
+    // Where the system can (not macOS, which refuses), only we may connect;
+    // elsewhere the data directory, 0700, keeps others out, and every client
+    // needs the token besides.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
     let options = {
         use interprocess::os::unix::local_socket::ListenerOptionsExt as _;
-        // Nothing still listens there (checked above): a leftover from a crash.
-        options.try_overwrite(true).mode(0o600)
+        options.mode(0o600)
     };
     let listener = options.create_tokio().context("opening the local API socket")?;
     Ok(Listener { listener, token })
