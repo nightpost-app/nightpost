@@ -144,10 +144,11 @@ fn NetworkSection() -> Element {
 /// answers this while Tor is still starting.
 #[component]
 pub fn BridgesEditor() -> Element {
-    let mut state = use_context::<State>();
     let mut own = use_signal(|| false);
     let mut text = use_signal(String::new);
     let mut error = use_signal(String::new);
+    // Shown here: the status line is behind this page and the dialog.
+    let mut saved = use_signal(String::new);
     use_future(move || async move {
         if let Ok(Reply::Bridges { lines }) = call(Request::Bridges { lines: None }).await {
             own.set(!lines.is_empty());
@@ -160,11 +161,16 @@ pub fn BridgesEditor() -> Element {
             match call(Request::Bridges { lines: Some(lines) }).await {
                 Ok(Reply::Bridges { lines }) => {
                     error.set(String::new());
-                    state.status.set(if lines.is_empty() { "Back to the built-in bridges".into() } else { "Bridges saved: Tor reconnects through them".into() });
+                    saved.set(if lines.is_empty() { "Back to the built-in bridges.".into() } else { "Bridges saved: Tor reconnects through them.".into() });
                 }
-                Ok(Reply::Error { message }) => error.set(message),
-                Ok(other) => error.set(format!("unexpected reply {other:?}")),
-                Err(e) => error.set(format!("Nightpost's daemon does not answer: {e:#}")),
+                reply => {
+                    saved.set(String::new());
+                    error.set(match reply {
+                        Ok(Reply::Error { message }) => message,
+                        Ok(other) => format!("unexpected reply {other:?}"),
+                        Err(e) => format!("Nightpost's daemon does not answer: {e:#}"),
+                    });
+                }
             }
         });
     };
@@ -181,7 +187,10 @@ pub fn BridgesEditor() -> Element {
                     class: if *own.read() == mine { "choice on" } else { "choice" },
                     role: "radio",
                     "aria-checked": "{*own.read() == mine}",
-                    onclick: move |_| own.set(mine),
+                    onclick: move |_| {
+                        own.set(mine);
+                        saved.set(String::new());
+                    },
                     span { class: "radio" }
                     span { class: "card-text", span { class: "card-title", "{label}" } span { class: "help", "{help}" } }
                 }
@@ -189,10 +198,14 @@ pub fn BridgesEditor() -> Element {
         }
         if *own.read() {
             label { r#for: "bridges", class: "field-label", "Bridge lines, one per line" }
-            textarea { id: "bridges", class: "lines-field", rows: "4", placeholder: "webtunnel [2001:db8::1]:443 … url=https://…", value: "{text}", oninput: move |e| text.set(e.value()) }
+            textarea { id: "bridges", class: "lines-field", rows: "4", placeholder: "webtunnel [2001:db8::1]:443 … url=https://…", value: "{text}", oninput: move |e| {
+                text.set(e.value());
+                saved.set(String::new());
+            } }
         }
         if !error.read().is_empty() { p { class: "warning", "{error}" } }
         div { button { class: "primary", onclick: save, "Save bridges" } }
+        p { class: "help", role: "status", "{saved}" }
     }
 }
 
