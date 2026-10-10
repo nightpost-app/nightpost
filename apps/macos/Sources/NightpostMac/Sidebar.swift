@@ -19,7 +19,7 @@ struct Sidebar: View {
                         .foregroundStyle(Palette.muted)
                 }
             }
-            .padding(.top, Chrome.top + 12)
+            .padding(.top, Chrome.top + 4)
             .padding(.horizontal, 16)
             .padding(.bottom, 14)
             .contentShape(Rectangle())

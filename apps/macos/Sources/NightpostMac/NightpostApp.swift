@@ -16,6 +16,7 @@ struct NightpostApp: App {
         // The page reaches the top edge, as on other systems; macOS keeps
         // its own buttons in the corner.
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified(showsTitle: false))
 
         Settings {
             SettingsView().environment(model)
@@ -23,13 +24,12 @@ struct NightpostApp: App {
     }
 }
 
-/// Where the window's own buttons sit.
+/// Where the window's own buttons sit, in the toolbar's row.
 enum Chrome {
-    /// The strip they take at the top.
-    static let top: CGFloat = 28
-    /// The middle of their row, and the right end of the three of them.
-    static let middle: CGFloat = 14
-    static let end: CGFloat = 78
+    /// The row's height.
+    static let top: CGFloat = 52
+    /// The right end of the three buttons and the list's toggle.
+    static let end: CGFloat = 120
 }
 
 struct RootView: View {
@@ -125,23 +125,26 @@ struct MainView: View {
             }
             Group {
                 if let name = model.selected, model.contacts.contains(where: { $0.name == name }) {
-                    ConversationView(name: name, inset: sideHidden ? Chrome.end + 52 : 0).id(name)
+                    ConversationView(name: name, inset: sideHidden ? Chrome.end + 10 : 0).id(name)
                 } else {
                     empty
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .overlay(alignment: .topLeading) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.28)) { sideHidden.toggle() }
-            } label: {
-                Image(systemName: "sidebar.left").font(.system(size: 15))
+        // A toolbar, even this small, puts the window's buttons where other
+        // apps have them; its background stays ours.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.28)) { sideHidden.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help(sideHidden ? "Show the list" : "Hide the list")
             }
-            .buttonStyle(ToggleButton())
-            .help(sideHidden ? "Show the list" : "Hide the list")
-            .position(x: Chrome.end + 20, y: Chrome.middle)
         }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         // Back in front: the open conversation has now been read.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.markRead()
