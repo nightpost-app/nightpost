@@ -136,6 +136,11 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // Behind a dialog, the window goes out of focus, and out of reach of
+        // the keyboard: typing goes to the dialog, not the composer under it.
+        .disabled(model.dialog != nil)
+        .blur(radius: model.dialog == nil ? 0 : 7)
+        .animation(.easeOut(duration: 0.2), value: model.dialog == nil)
         .overlay { DialogLayer() }
         // A toolbar, even this small, puts the window's buttons where other
         // apps have them; its background stays ours.

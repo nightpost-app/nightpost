@@ -28,8 +28,10 @@ struct DialogLayer: View {
                 .padding(.top, 26)
                 .padding(.bottom, 24)
                 .frame(width: 520, alignment: .leading)
-                .background(Palette.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.line))
+                // Frosted: the blurred window shows through a little.
+                .background(Palette.panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.strong.opacity(0.14)))
                 .shadow(color: Palette.shadow, radius: 30, y: 30)
                 .padding(16)
             }
@@ -102,7 +104,8 @@ private struct AddSheet: View {
         }
         .onAppear {
             model.addError = ""
-            naming = true
+            // Once the field is in the window; set at once, it is lost.
+            Task { naming = true }
         }
     }
 
