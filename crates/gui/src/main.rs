@@ -415,6 +415,8 @@ fn App() -> Element {
     use_future(move || run(state, None));
     #[cfg(target_os = "linux")]
     use_hook(chrome::cut_corners);
+    #[cfg(target_os = "linux")]
+    use_hook(chrome::no_pinch_zoom);
     let desktop = dioxus::desktop::window();
     dioxus::desktop::use_wry_event_handler(move |event, _| {
         use dioxus::desktop::tao::event::{Event, WindowEvent};

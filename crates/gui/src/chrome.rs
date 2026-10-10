@@ -123,3 +123,26 @@ pub fn cut_corners() {
         Some(false.to_value())
     });
 }
+
+/// No pinch zoom on a touchpad: an app is not a page to magnify. WebKitGTK
+/// (GTK 3) handles the pinch in its class handler for `event`, which runs
+/// after ours; stopping the pinch there leaves it nothing to do.
+#[cfg(target_os = "linux")]
+pub fn no_pinch_zoom() {
+    use dioxus::desktop::tao::platform::unix::WindowExtUnix as _;
+    use gtk::prelude::*;
+
+    fn find_page(widget: &gtk::Widget) -> Option<gtk::Widget> {
+        if widget.type_().name() == "WebKitWebView" {
+            return Some(widget.clone());
+        }
+        widget.downcast_ref::<gtk::Container>()?.children().iter().find_map(find_page)
+    }
+    let gtk_window = window().window.gtk_window().clone().upcast::<gtk::Widget>();
+    if let Some(page) = find_page(&gtk_window) {
+        page.connect_event(|_, event| {
+            if event.event_type() == gtk::gdk::EventType::TouchpadPinch { gtk::glib::Propagation::Stop } else { gtk::glib::Propagation::Proceed }
+        });
+    }
+}
+
