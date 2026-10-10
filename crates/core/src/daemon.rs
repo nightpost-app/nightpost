@@ -260,7 +260,7 @@ impl<T: Transport + 'static> Daemon<T> {
                 tokio::select! {
                     Some(stream) = incoming.next() => match daemon.answer_code(stream, temp, &name).await {
                         Ok(()) => break,
-                        Err(e) => tracing::info!("code invitation for {name}: {e:#}"),
+                        Err(e) => tracing::info!("code invitation: {e:#}"),
                     },
                     _ = &mut expiry => break,
                     _ = daemon.stopped() => break,
@@ -686,7 +686,7 @@ impl<T: Transport + 'static> Daemon<T> {
         self.links.borrow_mut().insert(target.clone(), Some(wake));
         self.set_link(&contact.name, LinkState::Open);
         if let Err(e) = self.run_link(stream, &contact, device, &mut woken).await {
-            tracing::info!("link to {} closed: {e:#}", contact.name);
+            tracing::info!("link to a contact closed: {e:#}");
         }
         self.links.borrow_mut().remove(&target);
         // By the name they have now; nothing for someone just removed.
@@ -737,7 +737,7 @@ impl<T: Transport + 'static> Daemon<T> {
                             match self.receive(contact, &them, id, kind, &body).await {
                                 Ok(Some(event)) => { let _ = self.events.send(event); }
                                 Ok(None) => {}
-                                Err(e) => tracing::warn!("dropped a message from {}: {e:#}", contact.name),
+                                Err(e) => tracing::warn!("dropped a message from a contact: {e:#}"),
                             }
                             proto::send(&mut writer, &Frame::Ack { id }).await?;
                         }

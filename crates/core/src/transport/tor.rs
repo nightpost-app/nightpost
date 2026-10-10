@@ -87,6 +87,7 @@ fn bridge(line: &str) -> Result<BridgeConfigBuilder> {
 
 pub struct TorTransport {
     client: Arc<TorClient<PreferredRuntime>>,
+    state_dir: PathBuf,
 }
 
 pub struct TorService {
@@ -128,7 +129,7 @@ impl TorTransport {
         let dirs = (state_dir.to_path_buf(), cache_dir.to_path_buf());
         tokio::spawn(watch(client.clone(), events, configs, bridged, marker, bridges, dirs, progress));
         client.bootstrap().await.map_err(|e| describe(e, "bootstrapping Tor"))?;
-        Ok(TorTransport { client })
+        Ok(TorTransport { client, state_dir: state_dir.to_path_buf() })
     }
 }
 
@@ -317,7 +318,11 @@ impl super::Transport for TorTransport {
 
     async fn serve(&self, seed: &Secret, authorized: &[DiscoveryKey]) -> Result<(TorService, Self::Incoming)> {
         let onion = onion(seed);
-        let nickname: HsNickname = slug(&onion)
+        // Before 0.1.0-alpha.1 the state was named after the address itself.
+        let old = self.state_dir.join("hss").join(format!("n{}", BASE32_NOPAD.encode(&onion[..10]).to_ascii_lowercase()));
+        let _ = std::fs::remove_dir_all(&old);
+        let _ = std::fs::remove_file(old.with_extension("lock"));
+        let nickname: HsNickname = slug(&seed[..])
             .try_into()
             .map_err(|e| TransportError(format!("service nickname: {e}")))?;
         let config = service_config(&nickname, authorized)?;
@@ -407,9 +412,12 @@ fn service_config(nickname: &HsNickname, authorized: &[DiscoveryKey]) -> Result<
 }
 
 /// A name arti accepts (lowercase letters, digits), unique per key: "n" and
-/// 80 bits of the key in base32. Says nothing arti does not already hold.
-fn slug(key: &[u8; 32]) -> String {
-    format!("n{}", BASE32_NOPAD.encode(&key[..10]).to_ascii_lowercase())
+/// 80 bits of a hash of the key in base32. The service's names a folder on
+/// disk, so it must not give the address away.
+fn slug(key: &[u8]) -> String {
+    use sha2::Digest as _;
+    let hash = sha2::Sha256::new().chain_update(b"nightpost-hs-nickname").chain_update(key).finalize();
+    format!("n{}", BASE32_NOPAD.encode(&hash[..10]).to_ascii_lowercase())
 }
 
 fn create_private_dir(path: &Path) -> Result<()> {
@@ -472,6 +480,17 @@ mod tests {
         save_bridges(&file, std::slice::from_ref(&line)).unwrap();
         std::fs::write(&file, format!("# mine\n\n{line}\n")).unwrap();
         assert_eq!(read_bridges(&file), [line]);
+    }
+
+    #[test]
+    fn the_state_folder_does_not_give_the_address_away() {
+        let seed = Secret::new([1; 32]);
+        let name = slug(&seed[..]);
+        assert_eq!(name, slug(&seed[..]));
+        assert_ne!(name, slug(&[2; 32]));
+        let address = BASE32_NOPAD.encode(&onion(&seed)).to_ascii_lowercase();
+        assert!(!address.starts_with(&name[1..5]), "{name} {address}");
+        HsNickname::try_from(name).unwrap();
     }
 
     #[test]
