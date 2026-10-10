@@ -192,7 +192,10 @@ header { display: flex; justify-content: space-between; align-items: center; gap
    at cap height, so it lines up with any name, lowercase or not (centred
    on the line box, it sat above lowercase names). Measured, not derived:
    the name clips its overflow, so its flex baseline is not the text's. */
-.who-name .mark { width: 23px; height: 23px; align-self: flex-end; position: relative; top: -4px; }
+.who-name .mark-wrap { display: flex; align-self: flex-end; position: relative; top: -4px; }
+.who-name .mark { width: 23px; height: 23px; }
+.mark-wrap .tip { top: calc(100% + 10px); left: -10px; white-space: normal; font-family: var(--ui); font-weight: 400; }
+.mark-wrap:hover .tip { display: block; }
 .info { flex: none; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 10px; color: var(--muted); }
 .info:hover { color: var(--strong); background: var(--selected); }
 .info.on { color: var(--main); border-color: var(--main); background: var(--selected); }

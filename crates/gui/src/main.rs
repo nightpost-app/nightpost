@@ -946,17 +946,30 @@ fn Conversation() -> Element {
                     span { class: "who-text",
                         span { class: "who-name",
                             h2 { "{name}" }
+                            // Each mark says what it means in a bubble like the route's.
                             if person.verified {
-                                svg { class: "mark verified", view_box: "0 0 24 24", role: "img", "aria-label": "Verified",
-                                    path { d: "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z" }
-                                    path { d: "M8.5 12l2.5 2.5 4.5-5" }
+                                span { class: "mark-wrap",
+                                    svg { class: "mark verified", view_box: "0 0 24 24", role: "img", "aria-label": "Verified",
+                                        path { d: "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z" }
+                                        path { d: "M8.5 12l2.5 2.5 4.5-5" }
+                                    }
+                                    span { class: "tip", role: "tooltip",
+                                        strong { "Safety number compared" }
+                                        span { "You both read the same digits: this is really {name}." }
+                                    }
                                 }
                             }
-                            if muted(&person).is_some() {
-                                svg { class: "mark", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
-                                    path { d: "M6 8a6 6 0 0 1 9.3-5M18 8c0 7 3 9 3 9H9" }
-                                    path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" }
-                                    path { d: "M3 3l18 18" }
+                            if let Some(until) = muted(&person) {
+                                span { class: "mark-wrap",
+                                    svg { class: "mark", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
+                                        path { d: "M6 8a6 6 0 0 1 9.3-5M18 8c0 7 3 9 3 9H9" }
+                                        path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" }
+                                        path { d: "M3 3l18 18" }
+                                    }
+                                    span { class: "tip", role: "tooltip",
+                                        strong { if until == u64::MAX { "Muted" } else { "Muted until {clock(until)}" } }
+                                        span { "Messages from {name} still arrive, without a notification." }
+                                    }
                                 }
                             }
                         }
