@@ -81,30 +81,27 @@ struct LockView: View {
     }
 }
 
-/// For now: who is there, and where Tor stands. The conversation comes next.
 struct MainView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         NavigationSplitView {
-            List(model.contacts) { contact in
-                Label(contact.name, systemImage: "person.crop.circle")
-            }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 280)
-            .safeAreaInset(edge: .bottom) {
-                Label(model.network.percent < 100 ? model.network.line : "Connected to Tor", systemImage: "circle.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-            }
+            Sidebar()
         } detail: {
-            ContentUnavailableView(
-                model.contacts.isEmpty ? "Nobody here yet" : "Pick someone",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Nightpost only connects people who know each other.")
-            )
+            if let name = model.selected, model.contacts.contains(where: { $0.name == name }) {
+                ConversationView(name: name).id(name)
+            } else {
+                ContentUnavailableView(
+                    model.contacts.isEmpty ? "Nobody here yet" : "Pick someone",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("Nightpost only connects people who know each other.")
+                )
+            }
+        }
+        .tint(Palette.accent)
+        // Back in front: the open conversation has now been read.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.markRead()
         }
     }
 }
