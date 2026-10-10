@@ -14,6 +14,7 @@ cp Info.plist "$app/Contents/"
 cp .build/release/NightpostMac "$app/Contents/MacOS/"
 cp "$nightpost" "$app/Contents/MacOS/nightpost"
 if [ -n "$lyrebird" ]; then cp "$lyrebird" "$app/Contents/MacOS/lyrebird"; fi
+cp ../../crates/gui/fonts/SpaceGrotesk.ttf ../../crates/gui/fonts/OFL-SpaceGrotesk.txt "$app/Contents/Resources/"
 # Ad hoc: enough to run here; a release needs a Developer ID and notarizing.
 # lyrebird keeps the Tor Project's own signature.
 codesign --force --sign - "$app/Contents/MacOS/nightpost"

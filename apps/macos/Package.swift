@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "NightpostMac",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     targets: [
         // Not "Nightpost": the daemon, "nightpost", sits beside it in the
         // bundle, and macOS file names ignore case.

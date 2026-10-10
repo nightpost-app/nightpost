@@ -29,6 +29,8 @@ final class AppModel {
     /// The last message in, for the route to show it coming: from whom, and
     /// a count so each one plays again.
     var arrival: (name: String, count: Int)?
+    /// The Add someone sheet is open.
+    var adding = false
     /// What went wrong last, for the window to show.
     var status = ""
 

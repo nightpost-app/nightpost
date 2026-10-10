@@ -1,27 +1,94 @@
-// Colours, avatars, dates and how far a message gets: shared by the views,
-// and the same as the GUI on other systems.
+// The GUI's look on other systems (crates/gui/src/style.css), natively:
+// its colours, its typeface, its icons; and the dates and the route, worked
+// out the same way.
 
 import AppKit
 import SwiftUI
 
+/// style.css's tokens, by night and by day, following the system.
 enum Palette {
-    static let accent = dynamic(light: 0x1F5FBF, dark: 0x5CC8C2)
-    /// Text on the accent.
-    static let accentInk = dynamic(light: 0xFFFFFF, dark: 0x0B1A1A)
+    static let ground = dynamic(0x0F1522, 0xF4F5F7)
+    static let side = dynamic(0x0A0F19, 0xFFFFFF)
+    static let panel = dynamic(0x111A29, 0xF7F8FA)
+    static let line = dynamic(0x1E2A3E, 0xE2E4E8)
+    static let line2 = dynamic(0x2E3E5C, 0xC9CED6)
+    static let text = dynamic(0xDDE4F1, 0x1E2430)
+    static let strong = dynamic(0xEEF2F9, 0x10141D)
+    static let muted = dynamic(0x8A96AD, 0x646B78)
+    static let soft = dynamic(0xA3AEC2, 0x4A5160)
+    static let inBg = dynamic(0x182236, 0xFFFFFF)
+    static let inBorder = dynamic(0x22304A, 0xE2E4E8)
+    static let outBg = dynamic(0x22385A, 0xDCE7F8)
+    static let outText = dynamic(0xEEF2F9, 0x10141D)
+    static let main = dynamic(0x5CC8C2, 0x1F5FBF)
+    static let mainInk = dynamic(0x0B1A1A, 0xFFFFFF)
     /// Something under way.
-    static let live = dynamic(light: 0xE8740C, dark: 0xF28C28)
-    static let fail = dynamic(light: 0xB3261E, dark: 0xE5736A)
+    static let live = dynamic(0xF28C28, 0xE8740C)
+    static let fail = dynamic(0xE5736A, 0xB3261E)
     /// Not reached yet.
-    static let wait = dynamic(light: 0xC3C9D2, dark: 0x55585F)
+    static let wait = dynamic(0x3A4760, 0xC3C9D2)
+    static let selected = dynamic(0x182236, 0xE8EEF8)
+    static let input = dynamic(0x141C2B, 0xFFFFFF)
+    static let tip = dynamic(0x1C2740, 0xFFFFFF)
+    static let shadow = dynamic(0x000000, 0x10141D, alpha: (0.55, 0.18))
 
     static func hex(_ value: UInt32) -> Color {
-        Color(red: Double(value >> 16 & 0xFF) / 255, green: Double(value >> 8 & 0xFF) / 255, blue: Double(value & 0xFF) / 255)
+        Color(nsColor: nsHex(value))
     }
 
-    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
+    private static func nsHex(_ value: UInt32, alpha: Double = 1) -> NSColor {
+        NSColor(srgbRed: Double(value >> 16 & 0xFF) / 255, green: Double(value >> 8 & 0xFF) / 255, blue: Double(value & 0xFF) / 255, alpha: alpha)
+    }
+
+    private static func dynamic(_ night: UInt32, _ day: UInt32, alpha: (Double, Double) = (1, 1)) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
-            NSColor(hex(appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light))
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? nsHex(night, alpha: alpha.0) : nsHex(day, alpha: alpha.1)
         })
+    }
+}
+
+extension Font {
+    /// Space Grotesk, the GUI's typeface (variable, 300 to 700).
+    static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .custom("Space Grotesk", size: size).weight(weight)
+    }
+}
+
+/// style.css's `.primary`.
+struct PrimaryButton: ButtonStyle {
+    var height: CGFloat = 42
+    var radius: CGFloat = 10
+    /// Takes the row's whole width.
+    var wide = false
+    @State private var hover = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.ui(15, .semibold))
+            .foregroundStyle(Palette.mainInk)
+            .padding(.horizontal, 22)
+            .frame(maxWidth: wide ? .infinity : nil)
+            .frame(height: height)
+            .contentShape(Rectangle())
+            .background(Palette.main, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .brightness(configuration.isPressed ? -0.05 : hover ? 0.06 : 0)
+            .onHover { hover = $0 }
+    }
+}
+
+/// A square button with a line round it, like the gear under the list.
+struct OutlineButton: ButtonStyle {
+    var on = false
+    @State private var hover = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(on ? Palette.main : hover ? Palette.strong : Palette.soft)
+            .frame(width: 42, height: 42)
+            .background(on || hover ? Palette.selected : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(on ? Palette.main : Palette.line2))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
     }
 }
 
@@ -30,7 +97,7 @@ enum Palette {
 struct Avatar: View {
     let name: String
     let photo: String?
-    var size: CGFloat = 36
+    var size: CGFloat = 44
 
     private static let rings: [[UInt32]] = [
         [0xF2B880, 0xC8553D, 0x2D3047],
@@ -67,11 +134,142 @@ struct Avatar: View {
     }
 }
 
+/// A line icon drawn from SVG path data on a 24 × 24 grid, like the GUI's
+/// (Lucide style; the handshake is Lucide's, ISC licence).
+struct Icon: View {
+    enum Part {
+        case path(String, dash: [CGFloat] = [])
+        case circle(CGFloat, CGFloat, CGFloat)
+        case rect(CGFloat, CGFloat, CGFloat, CGFloat, radius: CGFloat)
+    }
+
+    let parts: [Part]
+    var weight: CGFloat = 1.7
+
+    var body: some View {
+        Canvas { context, size in
+            context.scaleBy(x: size.width / 24, y: size.height / 24)
+            for part in parts {
+                let style = StrokeStyle(lineWidth: weight, lineCap: .round, lineJoin: .round)
+                switch part {
+                case let .path(data, dash):
+                    var dashed = style
+                    dashed.dash = dash
+                    context.stroke(SVGPath.parse(data), with: .foreground, style: dashed)
+                case let .circle(x, y, r):
+                    context.stroke(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)), with: .foreground, style: style)
+                case let .rect(x, y, w, h, radius):
+                    context.stroke(Path(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerRadius: radius), with: .foreground, style: style)
+                }
+            }
+        }
+    }
+
+    static let shield = "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z"
+    static let verified: [Part] = [.path(shield), .path("M8.5 12l2.5 2.5 4.5-5")]
+    /// The route's steps: this computer, the entrance, two relays, the
+    /// meeting point, their device.
+    static let steps: [[Part]] = [
+        [.path("M5 6.5h14v8.5H5z"), .path("M3 18h18")],
+        [.path(shield, dash: [2.4, 2.2]), .circle(12, 11, 2.2), .path("M12 13.2V16")],
+        [.path(shield), .circle(12, 11.5, 2.6), .path("M5 11.5h4.4M14.6 11.5H19")],
+        [.path(shield), .circle(12, 11.5, 2.6), .path("M5 11.5h4.4M14.6 11.5H19")],
+        [
+            .path("m11 17 2 2a1 1 0 1 0 3-3"),
+            .path("m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"),
+            .path("m21 3 1 11h-2"),
+            .path("M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"),
+            .path("M3 4h8"),
+        ],
+        [.rect(7, 3, 10, 18, radius: 2.2), .path("M11 18h2")],
+    ]
+}
+
+/// Enough of SVG's path syntax for the icons above: moves, lines, cubic
+/// curves and circular arcs, absolute or relative.
+enum SVGPath {
+    static func parse(_ data: String) -> Path {
+        let tokens = data.matches(of: /[A-Za-z]|-?(?:\d+\.?\d*|\.\d+)/).map { String($0.output) }
+        var path = Path()
+        var i = 0
+        var command: Character = "M"
+        var at = CGPoint.zero
+        var start = CGPoint.zero
+        func number() -> CGFloat {
+            defer { i += 1 }
+            return CGFloat(Double(tokens[i]) ?? 0)
+        }
+        func point(_ relative: Bool) -> CGPoint {
+            let x = number(), y = number()
+            return relative ? CGPoint(x: at.x + x, y: at.y + y) : CGPoint(x: x, y: y)
+        }
+        while i < tokens.count {
+            if let letter = tokens[i].first, letter.isLetter {
+                command = letter
+                i += 1
+                if letter == "z" || letter == "Z" {
+                    path.closeSubpath()
+                    at = start
+                    continue
+                }
+            }
+            let relative = command.isLowercase
+            switch command.uppercased() {
+            case "M":
+                at = point(relative)
+                start = at
+                path.move(to: at)
+                // Further pairs are lines.
+                command = relative ? "l" : "L"
+            case "L":
+                at = point(relative)
+                path.addLine(to: at)
+            case "H":
+                let x = number()
+                at.x = relative ? at.x + x : x
+                path.addLine(to: at)
+            case "V":
+                let y = number()
+                at.y = relative ? at.y + y : y
+                path.addLine(to: at)
+            case "C":
+                let c1 = point(relative), c2 = point(relative), end = point(relative)
+                path.addCurve(to: end, control1: c1, control2: c2)
+                at = end
+            case "A":
+                let r = number()
+                _ = number() // ry: the icons' arcs are circles
+                _ = number() // rotation
+                let large = number() != 0, sweep = number() != 0
+                let end = point(relative)
+                arc(&path, from: at, to: end, radius: r, large: large, sweep: sweep)
+                at = end
+            default:
+                i += 1
+            }
+        }
+        return path
+    }
+
+    /// SVG's endpoint arc as a centre and two angles (SVG 1.1, F.6.5).
+    private static func arc(_ path: inout Path, from p0: CGPoint, to p1: CGPoint, radius: CGFloat, large: Bool, sweep: Bool) {
+        let hx = (p0.x - p1.x) / 2, hy = (p0.y - p1.y) / 2
+        let d2 = hx * hx + hy * hy
+        guard d2 > 0 else { return }
+        let r = max(radius, d2.squareRoot())
+        let k = (large == sweep ? -1 : 1) * max(0, (r * r - d2) / d2).squareRoot()
+        let center = CGPoint(x: (p0.x + p1.x) / 2 + k * hy, y: (p0.y + p1.y) / 2 - k * hx)
+        let a0 = atan2(p0.y - center.y, p0.x - center.x), a1 = atan2(p1.y - center.y, p1.x - center.x)
+        // y points down: SVG's positive sweep is SwiftUI's "not clockwise".
+        path.addArc(center: center, radius: r, startAngle: .radians(a0), endAngle: .radians(a1), clockwise: !sweep)
+    }
+}
+
 enum When {
     static func date(_ millis: UInt64) -> Date { Date(timeIntervalSince1970: Double(millis) / 1000) }
 
     static func clock(_ millis: UInt64) -> String {
-        date(millis).formatted(date: .omitted, time: .shortened)
+        date(millis).formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
     }
 
     /// "Today", "Yesterday", "Monday 5 October", "5 October 2025".
@@ -103,8 +301,7 @@ enum When {
 }
 
 /// Where a message to someone gets now: the steps reached, the one being
-/// tried, the one that failed. Steps: this computer, the entrance (a guard,
-/// or a bridge), two relays, the meeting point, their device.
+/// tried, the one that failed.
 struct Route {
     enum Stage { case done, live, fail, wait }
 
@@ -160,7 +357,7 @@ struct Route {
 extension Route.Stage {
     var color: Color {
         switch self {
-        case .done: Palette.accent
+        case .done: Palette.main
         case .live: Palette.live
         case .fail: Palette.fail
         case .wait: Palette.wait
@@ -171,6 +368,6 @@ extension Route.Stage {
 /// What the bottom of the list says about Tor.
 func networkSummary(_ net: Network) -> (Route.Stage, String) {
     if net.entry == false || net.circuit == false { return (.fail, "Tor is not getting through") }
-    if net.percent < 100 { return (.live, "Connecting to Tor, \(net.percent)%") }
-    return (.done, net.bridged ? "Connected through a bridge" : "Connected to Tor")
+    if net.percent < 100 { return (.live, "Connecting to Tor") }
+    return (.done, net.bridged ? "Through a bridge" : "Connected to Tor")
 }
