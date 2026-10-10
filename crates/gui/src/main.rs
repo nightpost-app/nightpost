@@ -68,16 +68,14 @@ fn main() {
         use dioxus::desktop::tao::platform::unix::WindowBuilderExtUnix as _;
         window.with_rgba_visual(true).with_app_paintable(true)
     };
-    // The page runs up under a see-through title bar, as in Finder or Mail:
-    // its buttons sit in the top row of the list, beside the list toggle.
+    // The page runs up under a see-through title bar, as in Signal: the
+    // system's buttons stay where it puts them, on a strip of their own.
+    // (tao only moves them when its own view redraws, which the webview
+    // covering it never lets happen.)
     #[cfg(target_os = "macos")]
     let window = {
         use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS as _;
-        window
-            .with_titlebar_transparent(true)
-            .with_title_hidden(true)
-            .with_fullsize_content_view(true)
-            .with_traffic_light_inset(dioxus::desktop::LogicalPosition::new(20.0, 28.0))
+        window.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true)
     };
     let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
@@ -474,7 +472,9 @@ fn App() -> Element {
                     DialogView {}
                 },
             }
-            if !cfg!(target_os = "macos") {
+            if cfg!(target_os = "macos") {
+                div { class: "titlebar", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
+            } else {
                 Chrome {}
             }
         }
