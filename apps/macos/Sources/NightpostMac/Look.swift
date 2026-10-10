@@ -30,6 +30,8 @@ enum Palette {
     static let selected = dynamic(0x182236, 0xE8EEF8)
     static let input = dynamic(0x141C2B, 0xFFFFFF)
     static let tip = dynamic(0x1C2740, 0xFFFFFF)
+    /// Under a dialog.
+    static let veil = dynamic(0x05080E, 0x10141D, alpha: (0.72, 0.4))
     static let shadow = dynamic(0x000000, 0x10141D, alpha: (0.55, 0.18))
 
     static func hex(_ value: UInt32) -> Color {

@@ -29,8 +29,15 @@ final class AppModel {
     /// The last message in, for the route to show it coming: from whom, and
     /// a count so each one plays again.
     var arrival: (name: String, count: Int)?
-    /// The Add someone sheet is open.
-    var adding = false
+    /// The sheet over the window, if any.
+    var dialog: Dialog?
+    /// Whom we are looking for with what they gave us, while the Add sheet
+    /// says so.
+    var looking: String?
+    /// Why the last thing tried in the Add sheet failed.
+    var addError = ""
+    /// Those we made a code for: their safety number is ours to confirm.
+    private var codes: Set<String> = []
     /// What went wrong last, for the window to show.
     var status = ""
 
@@ -164,6 +171,67 @@ final class AppModel {
         }
     }
 
+    /// A link, or a code to read out, for someone not added yet.
+    func invite(_ name: String, byCode: Bool) {
+        guard !name.isEmpty else { addError = "Give them a name first."; return }
+        Task {
+            do {
+                switch try await Daemon.call(byCode ? .inviteCode(name: name) : .invite(name: name)) {
+                case let .invite(link): dialog = .invite(name: name, link: link)
+                case let .code(code):
+                    codes.insert(name)
+                    dialog = .code(name: name, code: code)
+                case let .error(message): addError = message
+                case let other: addError = "unexpected reply \(other)"
+                }
+            } catch {
+                addError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Their link, or the code they read us. The sheet shows the search; if
+    /// it was closed meanwhile, the answer goes to the status line.
+    func accept(_ given: String, name: String) {
+        guard !given.isEmpty else { addError = "Paste their link, or type the code they read you."; return }
+        guard !name.isEmpty else { addError = "Give them a name first, at the top."; return }
+        // A code is digits and separators; anything else is taken for a link.
+        let byCode = given.allSatisfy { $0.isASCII && ($0.isNumber || " -.".contains($0)) }
+        addError = ""
+        looking = name
+        Task {
+            let reply: Reply
+            do {
+                reply = try await Daemon.call(byCode ? .acceptCode(code: given, name: name) : .accept(link: given, name: name))
+            } catch {
+                reply = .error(error.localizedDescription)
+            }
+            let shown = looking == name && dialog == .add
+            looking = nil
+            switch reply {
+            case let .added(name):
+                if dialog == .add { dialog = nil }
+                status = "\(name) added"
+            case let .error(message):
+                if shown { addError = message } else { status = message }
+            default: break
+            }
+        }
+    }
+
+    /// Someone used our code: keep them, or turn them down.
+    func confirm(_ name: String, keep: Bool) {
+        dialog = nil
+        codes.remove(name)
+        Task {
+            switch try? await Daemon.call(.confirm(name: name, keep: keep)) {
+            case .done: status = keep ? "\(name) kept" : "\(name) turned down"
+            case let .error(message): status = message
+            default: break
+            }
+        }
+    }
+
     func isMuted(_ name: String) -> Bool {
         guard let until = contacts.first(where: { $0.name == name })?.person.mutedUntil else { return false }
         return until > UInt64(Date().timeIntervalSince1970 * 1000)
@@ -187,7 +255,7 @@ final class AppModel {
                     unread[from, default: 0] += 1
                     badge()
                 }
-                if !isMuted(from) { Notifier.shared.post(from: from) }
+                if !isMuted(from) { Notifier.shared.post(title: "Nightpost", body: "Message from \(from)", name: from) }
             }
         case let .sent(to, id, time, text):
             messages[to, default: []].append(HistoryItem(id: id, outgoing: true, time: time, text: text, delivered: false, read: false))
@@ -202,6 +270,10 @@ final class AppModel {
             messages[to] = list
         case let .readReceipts(on): readReceipts = on
         case let .contactAdded(name):
+            switch dialog {
+            case let .waiting(n, _) where n == name, let .invite(n, _) where n == name: dialog = nil
+            default: break
+            }
             Task {
                 try? await reloadContacts()
                 select(name)
@@ -223,7 +295,20 @@ final class AppModel {
             if let i = contacts.firstIndex(where: { $0.name == name }) { contacts[i].person = person }
         case let .network(network): self.network = network
         case let .link(name, state): links[name] = state
-        case .fingerprint, .unknown: break
+        case let .fingerprint(name, number):
+            Notifier.shared.post(title: "Nightpost", body: "\(name) used your invitation", name: nil)
+            dialog = codes.contains(name) ? .confirm(name: name, number: number) : .waiting(name: name, number: number)
+        case .unknown: break
         }
     }
+}
+
+enum Dialog: Equatable {
+    case add
+    case invite(name: String, link: String)
+    case code(name: String, code: String)
+    /// Someone used our code: keep them only if the numbers match.
+    case confirm(name: String, number: String)
+    /// We used a code: read our number to the inviter.
+    case waiting(name: String, number: String)
 }

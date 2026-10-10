@@ -132,6 +132,7 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .overlay { DialogLayer() }
         // A toolbar, even this small, puts the window's buttons where other
         // apps have them; its background stays ours.
         .toolbar {
@@ -158,7 +159,7 @@ struct MainView: View {
                 .font(.ui(16))
                 .lineSpacing(4)
                 .foregroundStyle(Palette.soft)
-            Button("Add someone") { model.adding = true }.buttonStyle(PrimaryButton())
+            Button("Add someone") { model.dialog = .add }.buttonStyle(PrimaryButton())
         }
         .frame(maxWidth: 480, alignment: .leading)
         .padding(32)

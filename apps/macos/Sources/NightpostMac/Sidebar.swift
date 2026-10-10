@@ -51,7 +51,7 @@ struct Sidebar: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             HStack(spacing: 8) {
-                Button("Add someone") { model.adding = true }
+                Button("Add someone") { model.dialog = .add }
                     .buttonStyle(PrimaryButton(wide: true))
                 SettingsLink {
                     Image(systemName: "gearshape").font(.system(size: 17))
