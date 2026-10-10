@@ -31,6 +31,8 @@ final class AppModel {
     var arrival: (name: String, count: Int)?
     /// The sheet over the window, if any.
     var dialog: Dialog?
+    /// Their panel is open beside the conversation.
+    var panel = false
     /// Whom we are looking for with what they gave us, while the Add sheet
     /// says so.
     var looking: String?
@@ -142,13 +144,48 @@ final class AppModel {
 
     /// False if the daemon refused it (the reason is in `status`).
     func send(_ text: String, to name: String) async -> Bool {
+        // The message itself comes back as Event.sent.
+        let sent = await ask(.send(to: name, text: text))
+        if sent { status = "" }
+        return sent
+    }
+
+    /// Changes what we keep about them; the daemon announces the result.
+    func update(_ name: String, _ change: (inout Person) -> Void) {
+        var person = contacts.first { $0.name == name }?.person ?? Person()
+        change(&person)
+        Task { await ask(.setPerson(name: name, person: person)) }
+    }
+
+    func rename(_ name: String, to: String) {
+        Task { await ask(.rename(name: name, to: to)) }
+    }
+
+    func remove(_ name: String, wipe: Bool) {
+        panel = false
+        Task { if await ask(.remove(name: name, wipe: wipe)) { status = "\(name) removed" } }
+    }
+
+    /// Their safety number, over everything.
+    func compare(_ name: String) {
+        Task {
+            switch try? await Daemon.call(.verify(name: name)) {
+            case let .safetyNumber(_, number): dialog = .safety(name: name, number: number)
+            case let .error(message): status = message
+            default: break
+            }
+        }
+    }
+
+    /// False if the daemon refused it or could not be asked; why goes to
+    /// `status`.
+    @discardableResult
+    private func ask(_ request: Request) async -> Bool {
         do {
-            // The message itself comes back as Event.sent.
-            if case let .error(message) = try await Daemon.call(.send(to: name, text: text)) {
+            if case let .error(message) = try await Daemon.call(request) {
                 status = message
                 return false
             }
-            status = ""
             return true
         } catch {
             status = error.localizedDescription
@@ -311,4 +348,6 @@ enum Dialog: Equatable {
     case confirm(name: String, number: String)
     /// We used a code: read our number to the inviter.
     case waiting(name: String, number: String)
+    /// To compare with them, full screen.
+    case safety(name: String, number: String)
 }

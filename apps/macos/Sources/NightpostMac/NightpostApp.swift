@@ -135,6 +135,14 @@ struct MainView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .trailing) {
+                if model.panel, let name = model.selected, model.contacts.contains(where: { $0.name == name }) {
+                    PersonPanel(name: name)
+                        .id(name)
+                        .transition(.move(edge: .trailing))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: model.panel)
         }
         // Behind a dialog, the window goes out of focus, and out of reach of
         // the keyboard: typing goes to the dialog, not the composer under it.

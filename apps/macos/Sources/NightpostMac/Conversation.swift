@@ -38,6 +38,22 @@ struct ConversationView: View {
         let person = model.contacts.first { $0.name == name }?.person ?? Person()
         let (stage, reach) = Route.line(name, model.network, link)
         return HStack(spacing: 14) {
+            Button { model.panel.toggle() } label: { who(person, stage, reach) }
+                .buttonStyle(WhoButton(open: model.panel))
+                .help("About \(name)")
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, max(22, inset - 6))
+        .padding(.trailing, 32)
+        .padding(.top, 8)
+        .frame(maxWidth: Self.column + 64)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
+    }
+
+    private func who(_ person: Person, _ stage: Route.Stage, _ reach: String) -> some View {
+        HStack(spacing: 14) {
             Avatar(name: name, photo: person.photo, size: 48)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
@@ -51,21 +67,19 @@ struct ConversationView: View {
                             .frame(width: 23, height: 23)
                             .help("Safety number compared: you both read the same digits, this is really \(name).")
                     }
+                    if model.isMuted(name) {
+                        Icon(parts: Icon.muted, weight: 2)
+                            .foregroundStyle(Palette.muted)
+                            .frame(width: 19, height: 19)
+                            .help("Muted: messages from \(name) still arrive, without a notification.")
+                    }
                 }
                 Text(reach)
                     .font(.ui(14, stage == .wait ? .regular : .medium))
                     .foregroundStyle(stage == .wait ? Palette.muted : stage.color)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.leading, max(28, inset))
-        .padding(.trailing, 32)
-        .padding(.top, 14)
-        .frame(maxWidth: Self.column + 64)
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .gesture(WindowDragGesture())
     }
 
     private var composer: some View {
@@ -409,5 +423,19 @@ private struct Pulse: View {
                 .opacity(!loops && t >= 1 ? 0 : 1)
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// Their avatar and name open their panel.
+private struct WhoButton: ButtonStyle {
+    let open: Bool
+    @State private var hover = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(6)
+            .background(open || hover ? Palette.selected : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
     }
 }

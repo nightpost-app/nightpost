@@ -11,7 +11,12 @@ struct DialogLayer: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let dialog = model.dialog {
+        if case let .safety(name, number) = model.dialog {
+            SafetyScreen(name: name, number: number)
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .background { Button("") { model.dialog = nil }.keyboardShortcut(.cancelAction).hidden() }
+        } else if let dialog = model.dialog {
             ZStack {
                 Palette.veil
                     .onTapGesture { if dismissable(dialog) { model.dialog = nil } }
@@ -22,6 +27,7 @@ struct DialogLayer: View {
                     case let .code(name, code): CodeSheet(name: name, code: code)
                     case let .confirm(name, number): ConfirmSheet(name: name, number: number)
                     case let .waiting(name, number): WaitingSheet(name: name, number: number)
+                    case .safety: EmptyView()
                     }
                 }
                 .padding(.horizontal, 30)
@@ -318,6 +324,8 @@ private extension View {
 
 /// style.css's `.sheet button`: a line round it.
 struct SecondaryButton: ButtonStyle {
+    var height: CGFloat = 40
+    var radius: CGFloat = 8
     @State private var hover = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -325,9 +333,9 @@ struct SecondaryButton: ButtonStyle {
             .font(.ui(15))
             .foregroundStyle(Palette.text)
             .padding(.horizontal, 16)
-            .frame(height: 40)
-            .background(hover || configuration.isPressed ? Palette.selected : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.line2))
+            .frame(height: height)
+            .background(hover || configuration.isPressed ? Palette.selected : .clear, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).stroke(Palette.line2))
             .contentShape(Rectangle())
             .onHover { hover = $0 }
     }

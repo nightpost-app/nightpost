@@ -151,13 +151,16 @@ struct Icon: View {
         case path(String, dash: [CGFloat] = [])
         case circle(CGFloat, CGFloat, CGFloat)
         case rect(CGFloat, CGFloat, CGFloat, CGFloat, radius: CGFloat)
+        /// Erases a wide line through what is drawn before it.
+        case cut(String)
     }
 
     let parts: [Part]
     var weight: CGFloat = 1.7
 
     var body: some View {
-        Canvas { context, size in
+        Canvas { canvas, size in
+          canvas.drawLayer { context in
             context.scaleBy(x: size.width / 24, y: size.height / 24)
             for part in parts {
                 let style = StrokeStyle(lineWidth: weight, lineCap: .round, lineJoin: .round)
@@ -170,13 +173,23 @@ struct Icon: View {
                     context.stroke(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)), with: .foreground, style: style)
                 case let .rect(x, y, w, h, radius):
                     context.stroke(Path(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerRadius: radius), with: .foreground, style: style)
+                case let .cut(data):
+                    var eraser = context
+                    eraser.blendMode = .destinationOut
+                    eraser.stroke(SVGPath.parse(data), with: .color(.black), style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 }
             }
+          }
         }
     }
 
     static let shield = "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z"
     static let verified: [Part] = [.path(shield), .path("M8.5 12l2.5 2.5 4.5-5")]
+    /// A whole bell, struck through with room round the bar, as on other systems.
+    static let muted: [Part] = [
+        .path("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3C3 17 6 15 6 8"), .path("M10.3 21a1.94 1.94 0 0 0 3.4 0"),
+        .cut("M3 3l18 18"), .path("M3 3l18 18"),
+    ]
     /// The route's steps: this computer, the entrance, two relays, the
     /// meeting point, their device.
     static let steps: [[Part]] = [
