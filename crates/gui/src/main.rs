@@ -38,6 +38,15 @@ static STYLE: LazyLock<String> = LazyLock::new(|| {
 const HISTORY: u32 = 200;
 
 fn main() {
+    // WebKitGTK's DMA-BUF renderer hands the compositor a first frame whose
+    // size is off by a rounding error under fractional scaling (KWin 6.7 at
+    // 1920.0000000000002, then 1920): KDE takes that for a resize and drops
+    // its maximise animation. Shared memory frames come at the exact size.
+    // Still one thread here, so setting the environment is sound.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
     let dir = match api::data_dir() {
         Ok(dir) => dir,
         Err(e) => {
