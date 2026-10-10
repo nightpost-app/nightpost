@@ -8,15 +8,13 @@ import AppKit
 enum Snapshot {
     static func run() async {
         let environment = ProcessInfo.processInfo.environment
-        switch environment["NIGHTPOST_APPEARANCE"] {
-        case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
-        default: break
+        if let appearance = environment["NIGHTPOST_APPEARANCE"].flatMap(Theme.init(rawValue:)) {
+            UserDefaults.standard.set(appearance.rawValue, forKey: "theme")
         }
         guard let file = environment["NIGHTPOST_SNAPSHOT"] else { return }
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(2))
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   let view = window.contentView?.superview,
                   let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
             view.cacheDisplay(in: view.bounds, to: bitmap)

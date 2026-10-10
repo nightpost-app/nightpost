@@ -295,7 +295,7 @@ enum Photo {
     }
 }
 
-private struct PanelTitle: View {
+struct PanelTitle: View {
     let text: String
     var color = Palette.strong
     init(_ text: String, color: Color = Palette.strong) {
@@ -308,7 +308,7 @@ private struct PanelTitle: View {
     }
 }
 
-private struct Help: View {
+struct Help: View {
     let text: String
     init(_ text: String) { self.text = text }
 
@@ -322,7 +322,7 @@ private struct Help: View {
 }
 
 /// style.css's `.small-button`.
-private struct SmallButton: ButtonStyle {
+struct SmallButton: ButtonStyle {
     var color = Palette.text
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false

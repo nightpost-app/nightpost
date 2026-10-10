@@ -177,6 +177,15 @@ final class AppModel {
         }
     }
 
+    /// Stops the daemon (locking the database if it has a passphrase), then
+    /// this app.
+    func quit() {
+        Task {
+            _ = try? await Daemon.call(.shutdown)
+            NSApp.terminate(nil)
+        }
+    }
+
     /// False if the daemon refused it or could not be asked; why goes to
     /// `status`.
     @discardableResult
@@ -292,7 +301,7 @@ final class AppModel {
                     unread[from, default: 0] += 1
                     badge()
                 }
-                if !isMuted(from) { Notifier.shared.post(title: "Nightpost", body: "Message from \(from)", name: from) }
+                if !isMuted(from) { Notifier.shared.message(from: from, text: text) }
             }
         case let .sent(to, id, time, text):
             messages[to, default: []].append(HistoryItem(id: id, outgoing: true, time: time, text: text, delivered: false, read: false))

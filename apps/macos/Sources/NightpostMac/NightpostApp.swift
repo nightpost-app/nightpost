@@ -34,6 +34,8 @@ enum Chrome {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("theme") private var theme = Theme.system
+    @AppStorage("lockOnClose") private var lockOnClose = false
 
     var body: some View {
         Group {
@@ -48,6 +50,9 @@ struct RootView: View {
         .background(Palette.ground)
         .foregroundStyle(Palette.text)
         .ignoresSafeArea()
+        .onChange(of: theme, initial: true) { theme.apply() }
+        // Closing the window: the daemon stops too, if asked.
+        .onDisappear { if lockOnClose { model.quit() } }
     }
 }
 
@@ -184,39 +189,5 @@ struct MainView: View {
         .background(Palette.ground)
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
-    }
-}
-
-/// The list's toggle: quiet until pointed at.
-private struct ToggleButton: ButtonStyle {
-    @State private var hover = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(hover ? Palette.strong : Palette.soft)
-            .frame(width: 30, height: 26)
-            .background(hover ? Palette.selected : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .contentShape(Rectangle())
-            .onHover { hover = $0 }
-    }
-}
-
-/// For now: what the daemon keeps. The rest comes with the settings window.
-struct SettingsView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        Form {
-            Toggle("Send read receipts", isOn: Binding(get: { model.readReceipts }, set: { on in
-                Task {
-                    if case let .readReceipts(now) = try? await Daemon.call(.readReceipts(on: on)) { model.readReceipts = now }
-                }
-            }))
-            Text("They see when you read their messages, and you see when they read yours. Off on both sides unless both turn it on.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .formStyle(.grouped)
-        .frame(width: 440)
     }
 }
