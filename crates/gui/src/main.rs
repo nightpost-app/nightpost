@@ -68,6 +68,17 @@ fn main() {
         use dioxus::desktop::tao::platform::unix::WindowBuilderExtUnix as _;
         window.with_rgba_visual(true).with_app_paintable(true)
     };
+    // The page runs up under a see-through title bar, as in Finder or Mail:
+    // its buttons sit in the top row of the list, beside the list toggle.
+    #[cfg(target_os = "macos")]
+    let window = {
+        use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS as _;
+        window
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true)
+            .with_fullsize_content_view(true)
+            .with_traffic_light_inset(dioxus::desktop::LogicalPosition::new(20.0, 28.0))
+    };
     let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
@@ -436,7 +447,7 @@ fn App() -> Element {
     let theme = *state.theme.read();
     rsx! {
         style { {STYLE.as_str()} }
-        div { class: "root", "data-theme": theme.name(), "data-maximized": "{state.maximized}",
+        div { class: "root", "data-theme": theme.name(), "data-maximized": "{state.maximized}", "data-platform": std::env::consts::OS,
             if *state.phase.read() != Phase::Ready {
                 div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
             }
