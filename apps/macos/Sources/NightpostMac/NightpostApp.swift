@@ -78,6 +78,7 @@ struct LockView: View {
     @Environment(AppModel.self) private var model
     let why: String
     @State private var passphrase = ""
+    @FocusState private var typing: Bool
 
     var body: some View {
         VStack(spacing: 14) {
@@ -90,6 +91,8 @@ struct LockView: View {
                 .frame(width: 320, height: 46)
                 .background(Palette.input, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
+                .focused($typing)
+                .clickToFocus($typing)
                 .onSubmit(unlock)
             if !why.isEmpty {
                 Text(why).font(.ui(14, .medium)).foregroundStyle(Palette.fail)
@@ -101,6 +104,7 @@ struct LockView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { typing = true }
     }
 
     private func unlock() {

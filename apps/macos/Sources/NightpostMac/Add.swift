@@ -55,6 +55,7 @@ private struct AddSheet: View {
     @State private var name = ""
     @State private var given = ""
     @FocusState private var naming: Bool
+    @FocusState private var giving: Bool
 
     var body: some View {
         if let who = model.looking {
@@ -69,8 +70,7 @@ private struct AddSheet: View {
             Heading("Add someone")
             FieldLabel("Their name, as you will see it")
             TextField("", text: $name, prompt: Text("Alice").foregroundStyle(Palette.muted))
-                .sheetField()
-                .focused($naming)
+                .sheetField($naming)
                 .onChange(of: name) { model.addError = "" }
             HStack(spacing: 10) {
                 Button("Create a link") { model.invite(trimmed(name), byCode: false) }
@@ -82,7 +82,7 @@ private struct AddSheet: View {
             Rectangle().fill(Palette.line).frame(height: 1).padding(.top, 24).padding(.bottom, 4)
             FieldLabel("Or use what they gave you: their link, or the code they read you")
             TextField("", text: $given, prompt: Text("nightpost:1:… or 482-109-375-512").foregroundStyle(Palette.muted))
-                .sheetField()
+                .sheetField($giving)
                 .onChange(of: given) { model.addError = "" }
                 .onSubmit { model.accept(trimmed(given), name: trimmed(name)) }
             if !model.addError.isEmpty {
@@ -300,14 +300,16 @@ private struct FieldLabel: View {
 
 private extension View {
     /// style.css's `.sheet input`.
-    func sheetField() -> some View {
+    func sheetField(_ focus: FocusState<Bool>.Binding) -> some View {
         textFieldStyle(.plain)
             .font(.ui(15))
             .foregroundStyle(Palette.text)
+            .focused(focus)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(Palette.input, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.line2))
+            .clickToFocus(focus)
     }
 }
 

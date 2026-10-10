@@ -82,6 +82,7 @@ struct ConversationView: View {
                 .frame(minHeight: 48)
                 .background(Palette.input, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.line))
+                .clickToFocus($writing)
             Button("Send", action: send)
                 .buttonStyle(PrimaryButton(height: 48, radius: 14))
                 .help("Return sends; Option-Return starts a new line.")

@@ -56,6 +56,14 @@ extension Font {
     }
 }
 
+extension View {
+    /// A plain text field reacts only on its line of text; this makes the
+    /// whole box round it take the click.
+    func clickToFocus(_ focus: FocusState<Bool>.Binding) -> some View {
+        contentShape(Rectangle()).onTapGesture { focus.wrappedValue = true }
+    }
+}
+
 /// style.css's `.primary`.
 struct PrimaryButton: ButtonStyle {
     var height: CGFloat = 42
