@@ -216,6 +216,7 @@ struct RouteView: View {
     @Environment(\.accessibilityReduceMotion) private var still
     let name: String
     @State private var hovered: Int?
+    @State private var width: CGFloat = 0
 
     /// The steps on a 900 × 140 drawing, rising and falling like a route.
     private static let steps: [CGPoint] = [(80, 62), (230, 44), (390, 78), (530, 44), (670, 78), (820, 62)].map { CGPoint(x: $0.0, y: $0.1) }
@@ -232,15 +233,9 @@ struct RouteView: View {
         let tips = tips(net, route)
         GeometryReader { geo in
             let width = geo.size.width
-            // As in style.css: steps from 32 to 44 points between 464 and 704
-            // wide, the room above and below from 10 points to none, and no
-            // labels under 624 (the drawing then moves down to sit centred).
-            let side = min(44, max(32, width * 0.05 + 8.8))
-            let pad = min(10, max(0, 29.3 - width * 0.0417))
+            let (side, pad, points) = Self.layout(width)
             let labels = width >= 624
-            let drop: CGFloat = labels ? 0 : 5
             let height = width * 140 / 900
-            let points = Self.steps.map { CGPoint(x: $0.x / 900 * width, y: pad + drop + $0.y / 140 * height) }
             ZStack(alignment: .topLeading) {
                 ForEach(0..<5, id: \.self) { i in
                     let stage = route.hop(i)
@@ -268,14 +263,6 @@ struct RouteView: View {
                     .alignmentGuide(.leading) { $0.width / 2 - points[i].x }
                     .alignmentGuide(.top) { _ in side / 2 - points[i].y }
                 }
-                if let i = hovered {
-                    Tip(text: tips[i], live: route.step(i) == .fail ? Palette.fail : Palette.live)
-                        .frame(width: 240)
-                        .offset(
-                            x: i == 0 ? points[i].x - side / 2 - 10 : i == 5 ? points[i].x + side / 2 + 10 - 240 : points[i].x - 120,
-                            y: points[i].y + side / 2 + 22)
-                        .allowsHitTesting(false)
-                }
             }
             .frame(width: width, height: height + 2 * pad, alignment: .topLeading)
         }
@@ -283,8 +270,32 @@ struct RouteView: View {
         .padding(.vertical, 10)
         .background(Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
+        // Over the panel's edge and the messages, not under them.
+        .overlay(alignment: .topLeading) {
+            if let i = hovered {
+                let (side, _, points) = Self.layout(width)
+                Tip(text: tips[i], live: route.step(i) == .fail ? Palette.fail : Palette.live)
+                    .frame(width: 240)
+                    .offset(
+                        x: i == 0 ? points[i].x - side / 2 - 10 : i == 5 ? points[i].x + side / 2 + 10 - 240 : points[i].x - 120,
+                        y: 10 + points[i].y + side / 2 + 22)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Route to \(name)")
+    }
+
+    /// As in style.css: steps from 32 to 44 points between 464 and 704
+    /// wide, the room above and below from 10 points to none, and no labels
+    /// under 624 (the drawing then moves down 5 points to sit centred).
+    private static func layout(_ width: CGFloat) -> (side: CGFloat, pad: CGFloat, points: [CGPoint]) {
+        let side = min(44, max(32, width * 0.05 + 8.8))
+        let pad = min(10, max(0, 29.3 - width * 0.0417))
+        let drop: CGFloat = width >= 624 ? 0 : 5
+        let height = width * 140 / 900
+        return (side, pad, steps.map { CGPoint(x: $0.x / 900 * width, y: pad + drop + $0.y / 140 * height) })
     }
 
     private func wire(_ stage: Route.Stage) -> StrokeStyle {
