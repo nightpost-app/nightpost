@@ -347,7 +347,7 @@ impl<T: Transport + 'static> Daemon<T> {
                     Err(_) => tracing::info!("not reachable yet: timeout"),
                 }
             }
-            ensure!(started.elapsed() < ACCEPT_DEADLINE, "the inviter stayed unreachable");
+            ensure!(started.elapsed() < ACCEPT_DEADLINE, "not found in 5 minutes: is their Nightpost running?");
             sleep(RETRY).await;
         }
     }

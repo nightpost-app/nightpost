@@ -1158,6 +1158,8 @@ fn AddDialog() -> Element {
     let mut pasted = use_signal(String::new);
     // What is missing, said here: the dialog stays open until it is fixed.
     let mut error = use_signal(String::new);
+    // Using what they gave: shown here rather than in the status line, out of sight.
+    let mut looking = use_signal(|| false);
 
     let invite = move |by_code: bool| {
         let who = name.read().trim().to_string();
@@ -1190,17 +1192,42 @@ fn AddDialog() -> Element {
         } else {
             Request::Accept { link: given, name: who.clone() }
         };
-        state.dialog.set(None);
-        state.status.set(format!("Looking for {who} (up to a few minutes)…"));
-        // Not `spawn`: that task belongs to this dialog, which just closed,
-        // and would be dropped before the request even left.
+        error.set(String::new());
+        looking.set(true);
+        // Not `spawn`: the dialog may be closed (or, with a code, replaced by
+        // the safety number) while the daemon looks; then the status line
+        // gets the answer.
         dioxus::core::spawn_forever(async move {
-            match call(request).await {
-                Ok(Reply::Added { name }) => state.status.set(format!("{name} added")),
+            let reply = call(request).await;
+            let shown = looking.try_write().map(|mut l| *l = false).is_ok();
+            match reply {
+                Ok(Reply::Added { name }) => {
+                    if matches!(*state.dialog.peek(), Some(Dialog::Add)) {
+                        state.dialog.set(None);
+                    }
+                    state.status.set(format!("{name} added"));
+                }
+                Ok(Reply::Error { message }) if shown => error.set(message),
+                Err(e) if shown => error.set(format!("{e:#}")),
                 other => state.fail(other),
             }
         });
     };
+    if *looking.read() {
+        let network = state.network.read();
+        let who = name.read().trim().to_string();
+        let progress = if network.percent < 100 {
+            format!("Waiting for Tor ({}%) before looking.", network.percent)
+        } else {
+            format!("Tor is connected. {who}'s Nightpost has to be running; finding it can take up to 5 minutes.")
+        };
+        return rsx! {
+            h3 { "Looking for {who}…" }
+            p { role: "status", "{progress}" }
+            p { class: "help", "Closing this does not stop it: {who} shows up in your list once found." }
+            div { class: "actions", button { onclick: move |_| state.dialog.set(None), "Close" } }
+        };
+    }
     let (mut by_link, mut by_code) = (invite, invite);
 
     rsx! {
