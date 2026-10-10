@@ -194,6 +194,9 @@ header { display: flex; justify-content: space-between; align-items: center; gap
    the name clips its overflow, so its flex baseline is not the text's. */
 .who-name .mark-wrap { display: flex; align-self: flex-end; position: relative; top: -4px; }
 .who-name .mark { width: 23px; height: 23px; }
+/* The bell fills more of its square than the shield: smaller, to weigh the
+   same beside it, and raised to share the shield's middle (measured). */
+.who-name .mark.bell { width: 19px; height: 19px; position: relative; top: -2px; }
 .mark-wrap .tip { top: calc(100% + 10px); left: -10px; white-space: normal; font-family: var(--ui); font-weight: 400; }
 .mark-wrap:hover .tip { display: block; }
 .info { flex: none; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 10px; color: var(--muted); }

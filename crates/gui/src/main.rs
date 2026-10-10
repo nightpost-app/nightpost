@@ -961,9 +961,19 @@ fn Conversation() -> Element {
                             }
                             if let Some(until) = muted(&person) {
                                 span { class: "mark-wrap",
-                                    svg { class: "mark", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
-                                        path { d: "M6 8a6 6 0 0 1 9.3-5M18 8c0 7 3 9 3 9H9" }
-                                        path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" }
+                                    // The whole bell, cut where the bar crosses it, so the bar
+                                    // reads on any background.
+                                    svg { class: "mark bell", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
+                                        defs {
+                                            mask { id: "bell-cut",
+                                                rect { width: "24", height: "24", fill: "white", stroke: "none" }
+                                                path { d: "M3 3l18 18", stroke: "black", stroke_width: "5" }
+                                            }
+                                        }
+                                        g { "mask": "url(#bell-cut)",
+                                            path { d: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" }
+                                            path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" }
+                                        }
                                         path { d: "M3 3l18 18" }
                                     }
                                     span { class: "tip", role: "tooltip",
