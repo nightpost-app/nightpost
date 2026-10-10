@@ -61,7 +61,7 @@ final class AppModel {
             return events
         }
         // It answers, but not this yet: a daemon is starting Tor.
-        let starting = (try? Daemon.open()) != nil
+        let starting = Daemon.answers
         let asked = passphrase != nil
         if !starting && !asked && Daemon.usesPassphrase {
             phase = .locked("")

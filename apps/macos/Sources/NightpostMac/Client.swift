@@ -39,27 +39,31 @@ enum Daemon {
 
     /// One request on its own connection.
     static func call(_ request: Request) async throws -> Reply {
-        let handle = try open()
-        defer { try? handle.close() }
-        try send(request, on: handle)
-        var lines = handle.bytes.lines.makeAsyncIterator()
-        guard let line = try await lines.next() else { throw ClientError.closed }
-        return try JSONDecoder().decode(Reply.self, from: Data(line.utf8))
+        try await withCheckedThrowingContinuation { answer in
+            // Blocking reads, off the main thread. Not FileHandle.bytes: its
+            // reads all go through one serial queue, so the event stream's
+            // wait would hold every request up behind it.
+            DispatchQueue.global().async {
+                answer.resume(with: Result {
+                    let connection = try Connection(request)
+                    guard let line = try connection.nextLine() else { throw ClientError.closed }
+                    return try JSONDecoder().decode(Reply.self, from: Data(line.utf8))
+                })
+            }
+        }
     }
 
     /// The event stream, once the daemon has said it listens.
     static func listen() async throws -> AsyncThrowingStream<Event, any Error> {
-        let handle = try open()
-        try send(.listen, on: handle)
         let (stream, events) = AsyncThrowingStream<Event, any Error>.makeStream()
         try await withCheckedThrowingContinuation { (ready: CheckedContinuation<Void, any Error>) in
-            // One reader for the reply and the events after it: the bytes
-            // sequence buffers, so a second one could miss some.
-            Task.detached {
-                defer { try? handle.close() }
-                var lines = handle.bytes.lines.makeAsyncIterator()
+            // A thread of its own: it waits for the next event for as long
+            // as the app runs.
+            Thread {
+                let connection: Connection
                 do {
-                    guard let first = try await lines.next() else { throw ClientError.closed }
+                    connection = try Connection(.listen)
+                    guard let first = try connection.nextLine() else { throw ClientError.closed }
                     switch try JSONDecoder().decode(Reply.self, from: Data(first.utf8)) {
                     case .listening: ready.resume()
                     case let .error(message): throw ClientError.daemon(message)
@@ -70,7 +74,7 @@ enum Daemon {
                     return
                 }
                 do {
-                    while let line = try await lines.next() {
+                    while let line = try connection.nextLine() {
                         // A kind of event this version does not know is skipped.
                         if let event = try? JSONDecoder().decode(Event.self, from: Data(line.utf8)) {
                             events.yield(event)
@@ -80,47 +84,13 @@ enum Daemon {
                 } catch {
                     events.finish(throwing: error)
                 }
-            }
+            }.start()
         }
         return stream
     }
 
-    /// Connected and past the token.
-    static func open() throws -> FileHandle {
-        let path = Array(dir.appending(path: "api.sock").path.utf8)
-        var addr = sockaddr_un()
-        guard path.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-            throw ClientError.noDaemon("socket path too long")
-        }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw ClientError.noDaemon(String(cString: strerror(errno))) }
-        // A daemon gone mid-write is an error to report, not a signal that
-        // ends this app.
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutableBytes(of: &addr.sun_path) { $0.copyBytes(from: path) }
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connected == 0 else {
-            let why = String(cString: strerror(errno))
-            Darwin.close(fd)
-            throw ClientError.noDaemon(why)
-        }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        let token = try String(contentsOf: dir.appending(path: "api.token"), encoding: .utf8)
-        try handle.write(contentsOf: Data((token.trimmingCharacters(in: .whitespacesAndNewlines) + "\n").utf8))
-        return handle
-    }
-
-    private static func send(_ request: Request, on handle: FileHandle) throws {
-        var line = try JSONEncoder().encode(request)
-        line.append(0x0A)
-        try handle.write(contentsOf: line)
-    }
+    /// Whether a daemon answers on the socket at all (it may be starting).
+    static var answers: Bool { (try? Connection(nil)) != nil }
 
     /// `nightpost daemon`, from inside the app (or `NIGHTPOST_BIN`), its
     /// output in daemon.log. The passphrase goes on its stdin, never in its
@@ -147,5 +117,77 @@ enum Daemon {
             try input.fileHandleForWriting.close()
         }
         return process
+    }
+}
+
+/// A connection to the daemon, past the token; blocking, for one thread.
+private final class Connection {
+    private let fd: Int32
+    private var buffer = Data()
+
+    /// Connects, gives the token, then sends `request` if there is one.
+    init(_ request: Request?) throws {
+        let path = Array(Daemon.dir.appending(path: "api.sock").path.utf8)
+        var addr = sockaddr_un()
+        guard path.count < MemoryLayout.size(ofValue: addr.sun_path) else {
+            throw ClientError.noDaemon("socket path too long")
+        }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw ClientError.noDaemon(String(cString: strerror(errno))) }
+        // A daemon gone mid-write is an error to report, not a signal that
+        // ends this app.
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &addr.sun_path) { $0.copyBytes(from: path) }
+        let connected = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else {
+            let why = String(cString: strerror(errno))
+            Darwin.close(fd)
+            throw ClientError.noDaemon(why)
+        }
+        self.fd = fd
+        let token = try String(contentsOf: Daemon.dir.appending(path: "api.token"), encoding: .utf8)
+        try write(Data((token.trimmingCharacters(in: .whitespacesAndNewlines) + "\n").utf8))
+        if let request {
+            var line = try JSONEncoder().encode(request)
+            line.append(0x0A)
+            try write(line)
+        }
+    }
+
+    deinit { Darwin.close(fd) }
+
+    private func write(_ data: Data) throws {
+        try data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            var sent = 0
+            while sent < bytes.count {
+                let n = Darwin.write(fd, bytes.baseAddress! + sent, bytes.count - sent)
+                if n < 0 && errno == EINTR { continue }
+                guard n > 0 else { throw ClientError.closed }
+                sent += n
+            }
+        }
+    }
+
+    /// The next line, without its newline; nil once the daemon closes.
+    func nextLine() throws -> String? {
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            if let end = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<end], as: UTF8.self)
+                buffer.removeSubrange(buffer.startIndex...end)
+                return line
+            }
+            let n = read(fd, &chunk, chunk.count)
+            if n < 0 && errno == EINTR { continue }
+            if n < 0 { throw ClientError.daemon(String(cString: strerror(errno))) }
+            if n == 0 { return nil }
+            buffer.append(contentsOf: chunk[..<n])
+        }
     }
 }
