@@ -1253,13 +1253,15 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
     if let Ok(client) = listen().await {
         return Ok(Some(client));
     }
+    // It answers, but not this yet: a daemon is starting Tor.
+    let starting = Client::connect(dir()).await.is_ok();
     let asked = passphrase.is_some();
-    if !asked && dbkey::uses_passphrase(dir()) {
+    if !starting && !asked && dbkey::uses_passphrase(dir()) {
         phase.set(Phase::Locked(String::new()));
         return Ok(None);
     }
     phase.set(Phase::Connecting("Starting…".into()));
-    let mut daemon = start_daemon(passphrase)?;
+    let mut daemon = if starting { None } else { Some(start_daemon(passphrase)?) };
     let log = dir().join("daemon.log");
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1267,7 +1269,7 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
             return Ok(Some(client));
         }
         let text = std::fs::read_to_string(&log).unwrap_or_default();
-        if let Some(status) = daemon.try_wait()? {
+        if let Some(status) = daemon.as_mut().map(std::process::Child::try_wait).transpose()?.flatten() {
             if asked && text.contains("wrong key") {
                 phase.set(Phase::Locked("That passphrase does not open them. Try again.".into()));
                 return Ok(None);

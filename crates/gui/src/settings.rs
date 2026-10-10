@@ -4,7 +4,6 @@
 use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
 use nightpost_core::dbkey;
-use nightpost_core::transport::tor;
 
 use crate::{State, Theme, View, call, dir, network_summary};
 
@@ -140,29 +139,34 @@ fn NetworkSection() -> Element {
     }
 }
 
-/// Snowflake when needed, or lines of one's own, checked and written to
-/// the bridges file; the daemon picks the change up without a restart.
+/// Snowflake when needed, or lines of one's own, kept by the daemon in the
+/// database; Tor reconnects through them without a restart. The daemon
+/// answers this while Tor is still starting.
 #[component]
 pub fn BridgesEditor() -> Element {
     let mut state = use_context::<State>();
-    let file = dir().join(tor::BRIDGES_FILE);
-    let saved = tor::read_bridges(&file);
-    let mut own = use_signal(|| !saved.is_empty());
-    let mut text = use_signal(|| saved.join("\n"));
+    let mut own = use_signal(|| false);
+    let mut text = use_signal(String::new);
     let mut error = use_signal(String::new);
-    let save = move |_| {
-        let lines: Vec<String> = if *own.read() {
-            text.read().lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
-        } else {
-            Vec::new()
-        };
-        match tor::save_bridges(&file, &lines) {
-            Ok(()) => {
-                error.set(String::new());
-                state.status.set(if lines.is_empty() { "Back to the built-in bridges".into() } else { "Bridges saved: Tor reconnects through them".into() });
-            }
-            Err(e) => error.set(e.to_string()),
+    use_future(move || async move {
+        if let Ok(Reply::Bridges { lines }) = call(Request::Bridges { lines: None }).await {
+            own.set(!lines.is_empty());
+            text.set(lines.join("\n"));
         }
+    });
+    let save = move |_| {
+        let lines: Vec<String> = if *own.read() { text.read().lines().map(String::from).collect() } else { Vec::new() };
+        spawn(async move {
+            match call(Request::Bridges { lines: Some(lines) }).await {
+                Ok(Reply::Bridges { lines }) => {
+                    error.set(String::new());
+                    state.status.set(if lines.is_empty() { "Back to the built-in bridges".into() } else { "Bridges saved: Tor reconnects through them".into() });
+                }
+                Ok(Reply::Error { message }) => error.set(message),
+                Ok(other) => error.set(format!("unexpected reply {other:?}")),
+                Err(e) => error.set(format!("Nightpost's daemon does not answer: {e:#}")),
+            }
+        });
     };
     let modes = [
         (false, "Built-in, when needed", "Snowflake, nothing to set up. Used only if Tor does not get through."),

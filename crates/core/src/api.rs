@@ -16,6 +16,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, Buf
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::daemon::Daemon;
+use crate::store::Store;
 use crate::transport::Transport;
 
 /// No request is anywhere near this; it bounds what a stranger can make the
@@ -59,6 +60,10 @@ pub enum Request {
     /// Whether we send read receipts, and so see theirs; `on` changes it.
     /// Off unless turned on.
     ReadReceipts { on: Option<bool> },
+    /// The user's own Tor bridge lines; `lines` replaces them (none: the
+    /// built-in ones). Answered while Tor is still starting too, since a
+    /// network that blocks Tor is when they are needed.
+    Bridges { lines: Option<Vec<String>> },
     /// Stops the daemon: the database closes and, with a passphrase, stays
     /// locked until the next start.
     Shutdown,
@@ -78,6 +83,7 @@ pub enum Reply {
     Listening,
     Status { network: Network, links: Vec<(String, LinkState)> },
     ReadReceipts { on: bool },
+    Bridges { lines: Vec<String> },
     Error { message: String },
 }
 
@@ -185,8 +191,64 @@ pub fn data_dir() -> Result<PathBuf> {
     Ok(std::fs::canonicalize(&dir)?)
 }
 
-/// Answers clients until the process ends.
-pub async fn serve<T: Transport + 'static>(daemon: Rc<Daemon<T>>, dir: &Path) -> Result<()> {
+/// The daemon's socket, opened before Tor is up.
+pub struct Listener {
+    listener: LocalSocketListener,
+    token: String,
+}
+
+/// Where the bridge lines are kept, and the Tor client that follows them.
+#[derive(Clone)]
+pub struct BridgeLines {
+    pub store: Rc<Store>,
+    pub tor: tokio::sync::watch::Sender<Vec<String>>,
+}
+
+impl BridgeLines {
+    fn answer(&self, lines: Option<Vec<String>>) -> Result<Reply> {
+        if let Some(lines) = lines {
+            let lines: Vec<String> = lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
+            crate::transport::tor::check_bridges(&lines)?;
+            self.store.set_bridges(&lines)?;
+            self.tor.send_replace(lines);
+        }
+        Ok(Reply::Bridges { lines: self.store.bridges()? })
+    }
+}
+
+/// While Tor starts: the bridges, and for anything else an error that says
+/// so. Gives the socket back once `ready` fires.
+pub async fn serve_starting(listener: Listener, bridges: BridgeLines, ready: tokio::sync::oneshot::Receiver<()>) -> Listener {
+    tokio::pin!(ready);
+    loop {
+        let conn = tokio::select! {
+            _ = &mut ready => return listener,
+            conn = listener.listener.accept() => conn,
+        };
+        let Ok(conn) = conn else { continue };
+        let (bridges, token) = (bridges.clone(), listener.token.clone());
+        tokio::task::spawn_local(async move {
+            let (recv, mut send) = conn.split();
+            let mut lines = BufReader::new(recv);
+            if read_line(&mut lines).await.ok().flatten().as_deref() != Some(&*token) {
+                return;
+            }
+            while let Ok(Some(line)) = read_line(&mut lines).await {
+                let reply = match serde_json::from_str::<Request>(&line) {
+                    Ok(Request::Bridges { lines }) => bridges.answer(lines).unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
+                    Ok(_) => Reply::Error { message: "starting: Tor is not up yet".into() },
+                    Err(e) => Reply::Error { message: format!("bad request: {e}") },
+                };
+                if write_line(&mut send, &reply).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// Opens the socket clients reach the daemon on.
+pub async fn bind(dir: &Path) -> Result<Listener> {
     if Client::connect(dir).await.is_ok() {
         bail!("a daemon is already running on {}", dir.display());
     }
@@ -203,18 +265,23 @@ pub async fn serve<T: Transport + 'static>(daemon: Rc<Daemon<T>>, dir: &Path) ->
         options.try_overwrite(true).mode(0o600)
     };
     let listener = options.create_tokio().context("opening the local API socket")?;
+    Ok(Listener { listener, token })
+}
+
+/// Answers clients until the process ends.
+pub async fn serve<T: Transport + 'static>(daemon: Rc<Daemon<T>>, listener: Listener, bridges: BridgeLines) -> Result<()> {
     loop {
-        let conn = listener.accept().await?;
-        let (daemon, token) = (daemon.clone(), token.clone());
+        let conn = listener.listener.accept().await?;
+        let (daemon, token, bridges) = (daemon.clone(), listener.token.clone(), bridges.clone());
         tokio::task::spawn_local(async move {
-            if let Err(e) = answer(daemon, conn, &token).await {
+            if let Err(e) = answer(daemon, conn, &token, &bridges).await {
                 tracing::debug!("API client: {e:#}");
             }
         });
     }
 }
 
-async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocketStream, token: &str) -> Result<()> {
+async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocketStream, token: &str, bridges: &BridgeLines) -> Result<()> {
     let (recv, mut send) = conn.split();
     let mut lines = BufReader::new(recv);
     if read_line(&mut lines).await?.as_deref() != Some(token) {
@@ -239,6 +306,7 @@ async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocket
                 daemon.shut_down();
                 return Ok(());
             }
+            Ok(Request::Bridges { lines }) => bridges.answer(lines).unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
             Ok(request) => handle(&daemon, request).await.unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
             Err(e) => Reply::Error { message: format!("bad request: {e}") },
         };
@@ -298,7 +366,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             daemon.set_passphrase(bytes(current), bytes(new))?;
             Reply::Done
         }
-        Request::Listen | Request::Shutdown => unreachable!("answered by the caller"),
+        Request::Listen | Request::Shutdown | Request::Bridges { .. } => unreachable!("answered by the caller"),
     })
 }
 
@@ -383,4 +451,43 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dbkey::Unlock;
+
+    /// Before Tor is up, the bridges are already checked, kept and passed on
+    /// to it; anything else waits.
+    #[tokio::test]
+    async fn the_bridges_are_answered_while_tor_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = Unlock::new(Some(zeroize::Zeroizing::new([1; 32])), None).unwrap();
+        let store = Rc::new(Store::open(&dir.path().join("nightpost.db"), &unlock).unwrap());
+        let (tor, mut lines) = tokio::sync::watch::channel(Vec::new());
+        let bridges = BridgeLines { store: store.clone(), tor };
+        let line = "obfs4 192.0.2.5:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0".to_string();
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (ready, starting) = tokio::sync::oneshot::channel();
+                let server = tokio::task::spawn_local(serve_starting(bind(dir.path()).await.unwrap(), bridges, starting));
+                let mut client = Client::connect(dir.path()).await.unwrap();
+                assert!(matches!(client.call(&Request::Contacts).await.unwrap(), Reply::Error { .. }));
+                let bad = Request::Bridges { lines: Some(vec!["obfs4 nonsense".into()]) };
+                assert!(matches!(client.call(&bad).await.unwrap(), Reply::Error { .. }));
+                assert!(!lines.has_changed().unwrap());
+
+                let set = Request::Bridges { lines: Some(vec!["# mine".into(), String::new(), format!("  {line}")]) };
+                assert_eq!(client.call(&set).await.unwrap(), Reply::Bridges { lines: vec![line.clone()] });
+                assert_eq!(*lines.borrow_and_update(), std::slice::from_ref(&line));
+                assert_eq!(client.call(&Request::Bridges { lines: None }).await.unwrap(), Reply::Bridges { lines: vec![line.clone()] });
+                ready.send(()).unwrap();
+                server.await.unwrap();
+            })
+            .await;
+        assert_eq!(store.bridges().unwrap(), [line]);
+        store.set_bridges(&[]).unwrap();
+        assert!(store.bridges().unwrap().is_empty());
+    }
 }

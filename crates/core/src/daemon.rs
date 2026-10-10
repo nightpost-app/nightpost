@@ -53,7 +53,7 @@ const CODE_LIFETIME: Duration = Duration::from_secs(600);
 const RETRY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(10) };
 
 pub struct Daemon<T: Transport> {
-    store: Store,
+    store: Rc<Store>,
     net: T,
     identity: IdentityKeyPair,
     own: Own,
@@ -108,7 +108,8 @@ struct Pending {
 }
 
 impl<T: Transport + 'static> Daemon<T> {
-    pub fn open(store: Store, net: T) -> Result<Rc<Self>> {
+    pub fn open(store: impl Into<Rc<Store>>, net: T) -> Result<Rc<Self>> {
+        let store = store.into();
         let identity = store.identity()?;
         let own = match store.get("self", "own")? {
             Some(bytes) => postcard::from_bytes(&bytes)?,

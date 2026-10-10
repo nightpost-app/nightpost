@@ -48,37 +48,19 @@ const PROBE: Duration = Duration::from_secs(30);
 /// Onion service circuits a probe may try to build before it fails.
 const PROBE_TRIES: usize = 4;
 
-/// How often the bridges file is checked for changes.
-const RELOAD: Duration = Duration::from_secs(3);
-
-/// The file in the data directory that holds the user's own bridge lines.
-pub const BRIDGES_FILE: &str = "bridges.txt";
-
 /// For networks that block Tor (some university or company Wi-Fi): lyrebird,
 /// the Tor Project's pluggable-transport program (Snowflake, WebTunnel,
-/// obfs4), and the file of bridges to reach through it.
+/// obfs4), and the user's own bridges to reach through it.
 pub struct Bridges {
     pub lyrebird: PathBuf,
-    /// One bridge line per line, as Tor Browser or bridges.torproject.org
-    /// gives them; none (or no file) means Tor Browser's Snowflake bridges.
-    /// Read again whenever it changes.
-    pub file: PathBuf,
+    /// Bridge lines as Tor Browser or bridges.torproject.org gives them;
+    /// none means Tor Browser's Snowflake bridges. Used as soon as they change.
+    pub lines: tokio::sync::watch::Receiver<Vec<String>>,
 }
 
-/// The bridge lines of `file`, without blank lines and `#` comments.
-pub fn read_bridges(file: &Path) -> Vec<String> {
-    let text = std::fs::read_to_string(file).unwrap_or_default();
-    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
-}
-
-/// Checks `lines` and writes them to `file` for a running client to pick up.
-pub fn save_bridges(file: &Path, lines: &[String]) -> Result<()> {
-    for line in lines {
-        bridge(line)?;
-    }
-    let mut text = lines.join("\n");
-    text.push('\n');
-    std::fs::write(file, text).map_err(|e| TransportError(format!("writing {}: {e}", file.display())))
+/// Errors on the first line Tor would not take.
+pub fn check_bridges(lines: &[String]) -> Result<()> {
+    lines.iter().try_for_each(|line| bridge(line).map(drop))
 }
 
 fn bridge(line: &str) -> Result<BridgeConfigBuilder> {
@@ -114,7 +96,7 @@ impl TorTransport {
     ) -> Result<TorTransport> {
         create_private_dir(state_dir)?;
         create_private_dir(cache_dir)?;
-        let lines = bridges.as_ref().map(|b| read_bridges(&b.file));
+        let lines = bridges.as_ref().map(|b| b.lines.borrow().clone());
         let configs = configs(state_dir, cache_dir, bridges.as_ref().map(|b| (b.lyrebird.as_path(), lines.as_deref().unwrap_or_default())))?;
         let marker = state_dir.join("bridged");
         let bridged = configs.len() == 2 && marker.exists();
@@ -165,7 +147,7 @@ fn configs(state_dir: &Path, cache_dir: &Path, bridges: Option<(&Path, &[String]
 /// Reports progress, and switches between `configs` when it stalls: no
 /// progress while bootstrapping, or, once bootstrapped, two failed probes
 /// in a row. Remembers in `marker` the way that last got the client ready.
-/// New lines in the bridges file are used at once.
+/// New bridge lines are used at once.
 #[allow(clippy::too_many_arguments)]
 async fn watch(
     client: Arc<TorClient<PreferredRuntime>>,
@@ -189,17 +171,24 @@ async fn watch(
     let restart = |net: &mut Network, bridged: bool, client: &TorClient<PreferredRuntime>| {
         *net = Network { percent: percent(client.bootstrap_status().as_frac()), bridged, ..Network::default() };
     };
-    let modified = |b: &Bridges| std::fs::metadata(&b.file).and_then(|m| m.modified()).ok();
-    let mut seen = bridges.as_ref().and_then(modified);
-    let mut reload = tokio::time::interval(RELOAD);
+    let mut updates = bridges.as_ref().map(|b| b.lines.clone());
     loop {
         let stall = if bridged { STALL_BRIDGED } else { STALL };
         let next = tokio::select! {
             next = tokio::time::timeout_at((since + stall).into(), events.next()) => next,
-            _ = reload.tick() => {
-                let Some(b) = bridges.as_ref().filter(|b| modified(b) != seen) else { continue };
-                seen = modified(b);
-                let lines = read_bridges(&b.file);
+            changed = async {
+                match updates.as_mut() {
+                    Some(u) => u.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let (Some(b), Some(u)) = (bridges.as_ref(), updates.as_mut()) else { continue };
+                if changed.is_err() {
+                    // Nobody left to change them: what there is stays.
+                    updates = None;
+                    continue;
+                }
+                let lines = u.borrow_and_update().clone();
                 match configs(&state_dir, &cache_dir, Some((&b.lyrebird, &lines))) {
                     Ok(new) => both = new,
                     Err(e) => {
@@ -473,13 +462,8 @@ mod tests {
         assert_eq!(configs(dir.path(), dir.path(), None).unwrap().len(), 1);
         assert!(configs(dir.path(), dir.path(), Some((lyrebird, &["snowflake nonsense".into()]))).is_err());
 
-        // What the graphical interface saves is read back, comments aside.
-        let file = dir.path().join(BRIDGES_FILE);
-        assert!(save_bridges(&file, &["obfs4 nonsense".into()]).is_err());
-        let line = "obfs4 192.0.2.5:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0".to_string();
-        save_bridges(&file, std::slice::from_ref(&line)).unwrap();
-        std::fs::write(&file, format!("# mine\n\n{line}\n")).unwrap();
-        assert_eq!(read_bridges(&file), [line]);
+        assert!(check_bridges(&["obfs4 nonsense".into()]).is_err());
+        check_bridges(&["obfs4 192.0.2.5:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0".into()]).unwrap();
     }
 
     #[test]

@@ -5,13 +5,14 @@ mod tui;
 
 use std::io::Read as _;
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::{Context as _, Result, bail};
-use nightpost_core::api::{Client, Event, Network, Reply, Request};
+use nightpost_core::api::{self, BridgeLines, Client, Event, Network, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
-use nightpost_core::transport::tor::{BRIDGES_FILE, Bridges, TorTransport};
+use nightpost_core::transport::tor::{Bridges, TorTransport};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
@@ -33,6 +34,9 @@ usage:
   nightpost read-receipts [on|off] whether they learn when you read (off
                                    by default; off, you do not see theirs)
   nightpost mark-read <name>       what <name> wrote so far is read
+  nightpost bridges                your own Tor bridge lines
+  nightpost bridges set            replace them with the lines on stdin
+  nightpost bridges clear          back to the built-in ones (Snowflake)
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
 passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).
@@ -76,6 +80,9 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["read-receipts"] => Request::ReadReceipts { on: None },
         ["read-receipts", "on"] => Request::ReadReceipts { on: Some(true) },
         ["read-receipts", "off"] => Request::ReadReceipts { on: Some(false) },
+        ["bridges"] => Request::Bridges { lines: None },
+        ["bridges", "set"] => Request::Bridges { lines: Some(std::io::stdin().lines().collect::<std::io::Result<_>>()?) },
+        ["bridges", "clear"] => Request::Bridges { lines: Some(Vec::new()) },
         _ => {
             println!("{USAGE}");
             return Ok(());
@@ -103,6 +110,8 @@ async fn run(args: Vec<String>) -> Result<()> {
         }
         status @ Reply::Status { .. } => println!("{}", serde_json::to_string(&status)?),
         Reply::ReadReceipts { on } => println!("read receipts {}", if on { "on" } else { "off" }),
+        Reply::Bridges { lines } if lines.is_empty() => eprintln!("none: the built-in ones (Snowflake), when Tor is blocked"),
+        Reply::Bridges { lines } => println!("{}", lines.join("\n")),
         Reply::Listening => {
             while let Some(event) = client.event().await? {
                 println!("{}", serde_json::to_string(&event)?);
@@ -177,17 +186,14 @@ async fn listen(dir: &Path) -> Result<Client> {
 }
 
 
-/// lyrebird next to this program (as released) or on the PATH, and the
-/// user's own bridges in `bridges.txt` in the data directory.
-fn bridges(dir: &Path) -> Option<Bridges> {
+/// lyrebird next to this program (as released) or on the PATH.
+fn lyrebird() -> Option<std::path::PathBuf> {
     let name = format!("lyrebird{}", std::env::consts::EXE_SUFFIX);
     let beside = std::env::current_exe().ok()?.with_file_name(&name);
-    let lyrebird = if beside.is_file() {
-        beside
-    } else {
-        std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())?
-    };
-    Some(Bridges { lyrebird, file: dir.join(BRIDGES_FILE) })
+    if beside.is_file() {
+        return Some(beside);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())
 }
 
 async fn daemon(dir: &Path) -> Result<()> {
@@ -206,28 +212,44 @@ async fn daemon(dir: &Path) -> Result<()> {
     if Client::connect(dir).await.is_ok() {
         bail!("a daemon is already running on {}", dir.display());
     }
-    let store = Store::open(&dir.join("nightpost.db"), &unlock(dir)?).context("opening the database (wrong key?)")?;
-
-    eprintln!("Tor: starting (minutes the first time)");
-    let bridges = bridges(dir);
-    if bridges.is_none() {
-        eprintln!("no lyrebird next to nightpost nor on the PATH: on a network that blocks Tor, Nightpost cannot get around it");
+    let store = Rc::new(Store::open(&dir.join("nightpost.db"), &unlock(dir)?).context("opening the database (wrong key?)")?);
+    // Before 0.1.0-alpha.1 the bridges were a file, in the clear.
+    let file = dir.join("bridges.txt");
+    if let Ok(text) = std::fs::read_to_string(&file) {
+        let lines: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
+        store.set_bridges(&lines)?;
+        std::fs::remove_file(&file).with_context(|| format!("removing {}", file.display()))?;
     }
-    let mut shown = String::new();
-    // The daemon only exists once Tor is up; until then the latest state waits here.
-    let (status, mut status_changes) = tokio::sync::watch::channel(Network::default());
-    let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges, move |network| {
-        if network.line != shown {
-            eprintln!("{}", network.line);
-            shown = network.line.clone();
-        }
-        status.send_replace(network.clone());
-    })
-    .await?;
+    let (tor, lines) = tokio::sync::watch::channel(store.bridges()?);
+    let bridges = BridgeLines { store: store.clone(), tor };
 
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
+            // Open before Tor is up: the bridges are set while it is blocked.
+            let (ready, starting) = tokio::sync::oneshot::channel();
+            let listener = tokio::task::spawn_local(api::serve_starting(api::bind(dir).await?, bridges.clone(), starting));
+
+            eprintln!("Tor: starting (minutes the first time)");
+            let lyrebird = lyrebird();
+            if lyrebird.is_none() {
+                eprintln!("no lyrebird next to nightpost nor on the PATH: on a network that blocks Tor, Nightpost cannot get around it");
+            }
+            let mut shown = String::new();
+            // The daemon only exists once Tor is up; until then the latest state waits here.
+            let (status, mut status_changes) = tokio::sync::watch::channel(Network::default());
+            let bridges_config = lyrebird.map(|lyrebird| Bridges { lyrebird, lines });
+            let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges_config, move |network| {
+                if network.line != shown {
+                    eprintln!("{}", network.line);
+                    shown = network.line.clone();
+                }
+                status.send_replace(network.clone());
+            })
+            .await?;
+            let _ = ready.send(());
+            let listener = listener.await?;
+
             let daemon = Daemon::open(store, net)?;
             daemon.set_network(status_changes.borrow_and_update().clone());
             let forward = daemon.clone();
@@ -239,7 +261,7 @@ async fn daemon(dir: &Path) -> Result<()> {
             daemon.start().await?;
             eprintln!("ready");
             tokio::select! {
-                result = nightpost_core::api::serve(daemon.clone(), dir) => result,
+                result = api::serve(daemon.clone(), listener, bridges) => result,
                 _ = tokio::signal::ctrl_c() => Ok(()),
                 _ = daemon.stopped() => Ok(()),
             }

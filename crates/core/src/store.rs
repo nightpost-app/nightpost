@@ -162,6 +162,16 @@ impl Store {
         Ok(u32::from_le_bytes(bytes))
     }
 
+    /// The user's own Tor bridge lines; none means the built-in ones.
+    pub fn bridges(&self) -> rusqlite::Result<Vec<String>> {
+        let text = self.get("self", "bridges")?.map(String::from_utf8).transpose().ok().flatten().unwrap_or_default();
+        Ok(text.lines().map(String::from).collect())
+    }
+
+    pub fn set_bridges(&self, lines: &[String]) -> rusqlite::Result<()> {
+        self.put("self", "bridges", lines.join("\n").as_bytes())
+    }
+
     pub(crate) fn get(&self, kind: &str, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
         self.db
             .query_row(

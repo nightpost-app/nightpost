@@ -21,17 +21,21 @@ If Snowflake does not get through, give Nightpost other bridges:
 - **Graphical app:** the *Bridges* button at the bottom of the list of people,
   or *Tor blocked here? Bridges* on the start screen while Tor connects. Paste
   the lines, *Save*: they are used at once.
-- **Terminal:** put the lines in `bridges.txt` in the data directory. They
-  are used within seconds, no restart needed.
+- **Terminal:** with the daemon running (even while Tor is still trying to
+  connect):
 
-  | System  | Data directory                              |
-  |---------|---------------------------------------------|
-  | Linux   | `~/.local/share/nightpost/`                 |
-  | macOS   | `~/Library/Application Support/Nightpost/`  |
-  | Windows | `%APPDATA%\Nightpost\data\`                 |
+  ```sh
+  nightpost bridges set < my-bridges.txt   # one bridge per line
+  nightpost bridges                        # what is set
+  nightpost bridges clear                  # Snowflake again
+  ```
 
-  One bridge per line; blank lines and lines starting with `#` are skipped.
-  An empty file (or none) means Snowflake again.
+  Blank lines and lines starting with `#` are skipped, and a line Tor would
+  not take is refused. They are used at once, no restart needed.
+
+The bridges are kept in Nightpost's encrypted database, like your messages: a
+bridge of your own says where you connect from. A `bridges.txt` left by an
+older version is moved into the database, then deleted.
 
 Where to get bridges:
 
