@@ -188,6 +188,11 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .who h2 { font: 600 28px/1.1 var(--display); color: var(--strong); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mark { flex: none; width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .mark.verified { stroke: var(--main); }
+/* Sized and set like a capital: its foot on the name's baseline, its top
+   at cap height, so it lines up with any name, lowercase or not (centred
+   on the line box, it sat above lowercase names). Measured, not derived:
+   the name clips its overflow, so its flex baseline is not the text's. */
+.who-name .mark { width: 23px; height: 23px; align-self: flex-end; position: relative; top: -4px; }
 .info { flex: none; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 10px; color: var(--muted); }
 .info:hover { color: var(--strong); background: var(--selected); }
 .info.on { color: var(--main); border-color: var(--main); background: var(--selected); }
