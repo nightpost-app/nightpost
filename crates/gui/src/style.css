@@ -25,7 +25,7 @@
   --selected: #182236;
   --input: #141c2b;
   --tip: #1c2740;
-  --veil: rgba(5, 8, 14, .72);
+  --veil: rgba(5, 8, 14, .5);
   --shadow: rgba(0, 0, 0, .55);
   --ui: "Space Grotesk", system-ui, sans-serif;
   --display: "Space Grotesk", system-ui, sans-serif;
@@ -53,7 +53,7 @@
   --selected: #e8eef8;
   --input: #ffffff;
   --tip: #ffffff;
-  --veil: rgba(16, 20, 29, .4);
+  --veil: rgba(16, 20, 29, .25);
   --shadow: rgba(16, 20, 29, .18);
   color-scheme: light;
 }
@@ -80,7 +80,7 @@
     --selected: #e8eef8;
     --input: #ffffff;
     --tip: #ffffff;
-    --veil: rgba(16, 20, 29, .4);
+    --veil: rgba(16, 20, 29, .25);
     --shadow: rgba(16, 20, 29, .18);
     color-scheme: light;
   }
@@ -407,7 +407,10 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 
 /* Dialogs. */
 .overlay { position: fixed; inset: 0; z-index: 61; background: var(--veil); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.sheet { width: min(520px, 100%); max-height: 100%; overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 26px 30px 24px; box-shadow: 0 30px 60px -20px var(--shadow); }
+/* Behind a dialog, the page goes out of focus. A filter on the page itself:
+   WebKitGTK does not always draw backdrop-filter. */
+:is(.app, .splash):has(~ .overlay) { filter: blur(7px); }
+.sheet { width: min(520px, 100%); max-height: 100%; overflow: auto; background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); color: var(--text); border: 1px solid color-mix(in srgb, var(--strong) 14%, transparent); border-radius: 14px; padding: 26px 30px 24px; box-shadow: 0 30px 60px -20px var(--shadow); }
 .sheet h3 { font: 600 25px/1.2 var(--display); color: var(--strong); margin: 0 0 10px; }
 .sheet p { color: var(--soft); line-height: 1.5; margin-bottom: 8px; }
 .sheet label { display: block; color: var(--soft); font-size: 13.5px; margin: 16px 0 6px; }
@@ -426,7 +429,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .qr { display: block; width: 232px; height: 232px; margin: 14px auto 16px; image-rendering: pixelated; border-radius: 6px; }
 
 @media (prefers-reduced-motion: no-preference) {
-  .app { transition: grid-template-columns .28s ease-in-out; }
+  .app, .splash { transition: grid-template-columns .28s ease-in-out, filter .2s ease-out; }
   .app > aside { transition: visibility 0s; }
   .app.side-hidden > aside { transition: visibility 0s .28s; }
   .step .label { transition: opacity .3s ease-in-out; }
