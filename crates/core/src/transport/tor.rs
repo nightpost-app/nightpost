@@ -100,6 +100,7 @@ impl TorTransport {
         let configs = configs(state_dir, cache_dir, bridges.as_ref().map(|b| (b.lyrebird.as_path(), lines.as_deref().unwrap_or_default())))?;
         let marker = state_dir.join("bridged");
         let bridged = configs.len() == 2 && marker.exists();
+        forget_removed_bridges(&state_dir.join("state").join("guards.json"));
 
         let client = TorClient::builder()
             .config(configs[usize::from(bridged)].clone())
@@ -112,6 +113,38 @@ impl TorTransport {
         tokio::spawn(watch(client.clone(), events, configs, bridged, marker, bridges, dirs, progress));
         client.bootstrap().await.map_err(|e| describe(e, "bootstrapping Tor"))?;
         Ok(TorTransport { client, state_dir: state_dir.to_path_buf() })
+    }
+}
+
+/// Drops from arti's saved guards the bridges it marked as no longer
+/// configured. arti never takes such a bridge back once its lines are set
+/// again: it only fetches the descriptors of bridges still listed, and
+/// without one cannot tell the line from the bridge it knew, so Tor stays
+/// stuck, restart after restart (bridges set, cleared, then set again).
+/// Forgotten, the bridge is taken from its line like a new one. Before
+/// the client starts: arti keeps the file to itself while it runs.
+fn forget_removed_bridges(guards: &Path) {
+    let Ok(text) = std::fs::read_to_string(guards) else { return };
+    let Ok(mut state) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    let Some(bridges) = state.get_mut("bridges") else { return };
+    let removed: Vec<serde_json::Value> = bridges["guards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|g| !g["unlisted_since"].is_null())
+        .map(|g| g["id"].clone())
+        .collect();
+    if removed.is_empty() {
+        return;
+    }
+    for list in ["guards", "confirmed"] {
+        if let Some(list) = bridges[list].as_array_mut() {
+            list.retain(|g| !removed.contains(&g["id"]) && !removed.contains(g));
+        }
+    }
+    let new = guards.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&new, state.to_string()).and_then(|()| std::fs::rename(&new, guards)) {
+        tracing::warn!("forgetting removed bridges in {}: {e}", guards.display());
     }
 }
 
@@ -464,6 +497,31 @@ mod tests {
 
         assert!(check_bridges(&["obfs4 nonsense".into()]).is_err());
         check_bridges(&["obfs4 192.0.2.5:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0".into()]).unwrap();
+    }
+
+    #[test]
+    fn removed_bridges_are_forgotten_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("guards.json");
+        let guard = |id: &str, unlisted: Option<&str>| serde_json::json!({ "id": { "rsa": id }, "unlisted_since": unlisted });
+        let state = serde_json::json!({
+            "default": { "guards": [guard("d", Some("2026-10-11T16:18:51Z"))], "confirmed": [] },
+            "bridges": {
+                "guards": [guard("a", None), guard("b", Some("2026-10-11T16:18:51Z"))],
+                "confirmed": [{ "rsa": "a" }, { "rsa": "b" }],
+            },
+        });
+        std::fs::write(&file, state.to_string()).unwrap();
+        forget_removed_bridges(&file);
+        let after: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(after["bridges"]["guards"], serde_json::json!([guard("a", None)]));
+        assert_eq!(after["bridges"]["confirmed"], serde_json::json!([{ "rsa": "a" }]));
+        assert_eq!(after["default"], state["default"]);
+        // No file, or not arti's: left alone.
+        forget_removed_bridges(&dir.path().join("none.json"));
+        std::fs::write(&file, "not json").unwrap();
+        forget_removed_bridges(&file);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "not json");
     }
 
     #[test]
