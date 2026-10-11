@@ -183,6 +183,11 @@ impl<T: Transport + 'static> Daemon<T> {
         let _ = self.stopping.subscribe().wait_for(|stop| *stop).await;
     }
 
+    /// How many are following the events: interfaces, `nightpost listen`.
+    pub fn listeners(&self) -> usize {
+        self.events.receiver_count()
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
     }

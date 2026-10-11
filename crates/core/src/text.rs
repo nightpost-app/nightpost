@@ -49,6 +49,18 @@ pub fn message(raw: &str) -> String {
     lines.join("\n")
 }
 
+/// A message as a notification's body: short, and markup-free. Some servers
+/// (Plasma) read the body as HTML, and an <img> in a message would load a
+/// picture from wherever the sender likes, giving our address away.
+pub fn notification(text: &str) -> String {
+    const MAX: usize = 200;
+    let mut short: String = text.chars().take(MAX).collect();
+    if text.chars().nth(MAX).is_some() {
+        short.push('…');
+    }
+    short.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +74,13 @@ mod tests {
         assert_eq!(message("\n\nun\r\n\n\n\ndeux\n\n"), "un\n\ndeux");
         assert_eq!(message(&"x\n".repeat(80)).lines().count(), 50);
         assert_eq!(message("été 日本 🙂"), "été 日本 🙂");
+    }
+
+    #[test]
+    fn a_message_in_a_notification_is_short_and_inert() {
+        assert_eq!(notification("<img src=\"http://x/\"> & co"), "&lt;img src=\"http://x/\"&gt; &amp; co");
+        let long = "é".repeat(250);
+        assert_eq!(notification(&long), format!("{}…", "é".repeat(200)));
+        assert_eq!(notification(&"é".repeat(200)), "é".repeat(200));
     }
 }

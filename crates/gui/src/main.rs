@@ -302,7 +302,7 @@ impl State {
                         self.arrival.set(None);
                     }
                 });
-                let body = preview(&text);
+                let body = nightpost_core::text::notification(&text);
                 self.messages.write().entry(from.clone()).or_default().push(HistoryItem { id, outgoing: false, time, text, delivered: true, read: false });
                 let here = self.selected.read().as_deref() == Some(from.as_str());
                 if here {
@@ -1376,18 +1376,6 @@ fn notify(title: &str, body: &str, prefs: Prefs) {
     });
 }
 
-/// A message as a notification's body: short, and markup-free. Some servers
-/// (Plasma) read the body as HTML, and an <img> in a message would load a
-/// picture from wherever the sender likes, giving our address away.
-fn preview(text: &str) -> String {
-    const MAX: usize = 200;
-    let mut short: String = text.chars().take(MAX).collect();
-    if text.chars().nth(MAX).is_some() {
-        short.push('…');
-    }
-    short.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
 /// Copies `text`, and says so for four seconds once the clipboard took it.
 #[component]
 fn CopyButton(text: String, label: &'static str) -> Element {
@@ -1465,14 +1453,6 @@ fn groups(number: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_message_in_a_notification_is_short_and_inert() {
-        assert_eq!(preview("<img src=\"http://x/\"> & co"), "&lt;img src=\"http://x/\"&gt; &amp; co");
-        let long = "é".repeat(250);
-        assert_eq!(preview(&long), format!("{}…", "é".repeat(200)));
-        assert_eq!(preview(&"é".repeat(200)), "é".repeat(200));
-    }
 
     #[test]
     fn nobody_is_reachable_while_tor_starts_over() {

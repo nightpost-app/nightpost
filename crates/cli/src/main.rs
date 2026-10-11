@@ -259,6 +259,8 @@ async fn daemon(dir: &Path) -> Result<()> {
                 }
             });
             daemon.start().await?;
+            #[cfg(not(target_os = "macos"))]
+            tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf()));
             eprintln!("ready");
             tokio::select! {
                 result = api::serve(daemon.clone(), listener, bridges) => result,
@@ -267,6 +269,63 @@ async fn daemon(dir: &Path) -> Result<()> {
             }
         })
         .await
+}
+
+/// With no interface open, the daemon tells of messages itself, as the
+/// graphical interface's notification settings say (its file in the data
+/// folder). On macOS the app stays open for that.
+#[cfg(not(target_os = "macos"))]
+async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::PathBuf) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut events = daemon.subscribe();
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(RecvError::Lagged(_)) => continue,
+            Err(RecvError::Closed) => return,
+        };
+        // This receiver is ours; any other is an interface, which tells of it.
+        if daemon.listeners() > 1 {
+            continue;
+        }
+        let settings = std::fs::read_to_string(dir.join("gui-settings")).unwrap_or_default();
+        let set = |key: &str, default: bool| settings.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).map_or(default, |v| v == "1");
+        if !set("notify", true) {
+            continue;
+        }
+        let (title, body) = match event {
+            Event::Message { from, text, .. } => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                let person = daemon.contacts().ok().and_then(|all| all.into_iter().find(|c| c.name == from)).map(|c| c.person);
+                if person.and_then(|p| p.muted_until).is_some_and(|until| until > now) {
+                    continue;
+                }
+                match (set("show_name", true), set("show_text", false)) {
+                    (true, true) => (from, nightpost_core::text::notification(&text)),
+                    (true, false) => ("Nightpost".to_string(), format!("Message from {from}")),
+                    _ => ("Nightpost".to_string(), "New message".to_string()),
+                }
+            }
+            Event::Fingerprint { name, .. } => ("Nightpost".to_string(), format!("{name} used your invitation")),
+            _ => continue,
+        };
+        // Kept in the system's history only if asked (a hint of freedesktop servers).
+        #[cfg_attr(not(unix), allow(unused_variables))]
+        let (sound, keep) = (set("sound", false), set("keep_history", false));
+        // Blocking (D-Bus): on a thread of its own. No session bus (a server): nothing shown.
+        std::thread::spawn(move || {
+            let mut notification = notify_rust::Notification::new();
+            notification.summary(&title).body(&body);
+            #[cfg(unix)]
+            if !keep {
+                notification.hint(notify_rust::Hint::Transient(true));
+            }
+            if sound {
+                notification.sound_name("message-new-instant");
+            }
+            let _ = notification.show();
+        });
+    }
 }
 
 /// The keychain secret, plus the passphrase if one is configured. Without a

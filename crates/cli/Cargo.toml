@@ -28,3 +28,8 @@ data-encoding = "2"
 # The passphrase typed at a terminal, without echo.
 rpassword = "7"
 zeroize = "1"
+
+# The daemon's own notifications while no interface is open (on macOS the app
+# stays open instead).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify-rust = "4"

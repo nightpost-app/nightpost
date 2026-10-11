@@ -5102,6 +5102,7 @@ dependencies = [
  "futures",
  "jiff",
  "nightpost-core",
+ "notify-rust",
  "qrcode",
  "ratatui",
  "rpassword",
