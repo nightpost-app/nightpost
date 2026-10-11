@@ -247,6 +247,12 @@ pub async fn serve_starting(listener: Listener, bridges: BridgeLines, ready: tok
     }
 }
 
+/// The version of the daemon running on `dir`, as it wrote it at start
+/// (none from a daemon older than this file).
+pub fn running_version(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(dir.join("api.version")).ok()
+}
+
 /// Opens the socket clients reach the daemon on.
 pub async fn bind(dir: &Path) -> Result<Listener> {
     if Client::connect(dir).await.is_ok() {
@@ -256,6 +262,7 @@ pub async fn bind(dir: &Path) -> Result<Listener> {
     OsRng.try_fill_bytes(&mut token)?;
     let token = hex(&token);
     write_private(&dir.join("api.token"), token.as_bytes())?;
+    write_private(&dir.join("api.version"), crate::VERSION.as_bytes())?;
 
     let options = ListenerOptions::new().name(socket(dir)?);
     // Nothing still listens there (checked above): a leftover from a crash.
@@ -478,6 +485,7 @@ mod tests {
                 let (ready, starting) = tokio::sync::oneshot::channel();
                 let server = tokio::task::spawn_local(serve_starting(bind(dir.path()).await.unwrap(), bridges, starting));
                 let mut client = Client::connect(dir.path()).await.unwrap();
+                assert_eq!(running_version(dir.path()).as_deref(), Some(crate::VERSION));
                 assert!(matches!(client.call(&Request::Contacts).await.unwrap(), Reply::Error { .. }));
                 let bad = Request::Bridges { lines: Some(vec!["obfs4 nonsense".into()]) };
                 assert!(matches!(client.call(&bad).await.unwrap(), Reply::Error { .. }));

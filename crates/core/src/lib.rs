@@ -12,5 +12,8 @@ pub mod store;
 pub mod text;
 pub mod transport;
 
+/// Nightpost's version, the same for the daemon and every interface.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Version of the wire protocol. Peers must match exactly.
 pub const PROTOCOL_VERSION: u16 = 1;

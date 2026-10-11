@@ -1288,6 +1288,18 @@ async fn call(request: Request) -> Result<Reply> {
 /// The event stream, starting the daemon first if none answers. `None`:
 /// the daemon needs the passphrase (again) and the phase now asks for it.
 async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<Option<Client>> {
+    // A daemon left running from before an update: it would not know what
+    // this window asks. Stop it; the one next to this program takes over.
+    if api::running_version(dir()).as_deref() != Some(nightpost_core::VERSION) && Client::connect(dir()).await.is_ok() {
+        phase.set(Phase::Connecting("Restarting Nightpost after the update…".into()));
+        call(Request::Shutdown).await.ok();
+        for _ in 0..20 {
+            if Client::connect(dir()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
     if let Ok(client) = listen().await {
         return Ok(Some(client));
     }
