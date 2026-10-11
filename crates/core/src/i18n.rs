@@ -111,22 +111,26 @@ mod tests {
         }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut sources = Vec::new();
-        for dir in ["core/src", "core/src/transport", "cli/src", "gui/src"] {
+        // The macOS app reads the same files, through t("key") in Swift.
+        for dir in ["core/src", "core/src/transport", "cli/src", "gui/src", "../apps/macos/Sources/NightpostMac"] {
             for entry in std::fs::read_dir(root.join(dir)).unwrap() {
                 let path = entry.unwrap().path();
-                if path.extension().is_some_and(|e| e == "rs") {
-                    sources.push(std::fs::read_to_string(path).unwrap());
-                }
+                let call = match path.extension().and_then(|e| e.to_str()) {
+                    Some("rs") => "t!(\"",
+                    Some("swift") => "t(\"",
+                    _ => continue,
+                };
+                sources.push((call, std::fs::read_to_string(path).unwrap()));
             }
         }
         let mut used = 0;
-        for source in &sources {
-            for (at, _) in source.match_indices("t!(\"") {
+        for (call, source) in &sources {
+            for (at, _) in source.match_indices(call) {
                 // Not format!(" and the like.
                 if source[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') {
                     continue;
                 }
-                let key = source[at + 4..].split('"').next().unwrap();
+                let key = source[at + call.len()..].split('"').next().unwrap();
                 if key == "key" {
                     continue;
                 }

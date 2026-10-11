@@ -22,8 +22,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .all:
             let line = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
             post(title: name, body: line.count > 200 ? String(line.prefix(200)) + "…" : line, name: name)
-        case .who: post(title: "Nightpost", body: "Message from \(name)", name: name)
-        case .nothing: post(title: "Nightpost", body: "New message", name: name)
+        case .who: post(title: "Nightpost", body: t("notify-from", ["name": name]), name: name)
+        case .nothing: post(title: "Nightpost", body: t("notify-new"), name: name)
         }
     }
 

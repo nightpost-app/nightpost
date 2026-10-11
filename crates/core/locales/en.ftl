@@ -216,8 +216,8 @@ choose-photo = Choose a photo
 use-rings = Use the rings
 photo-help = The photo stays on this computer. { $name } never sees it.
 photo-failed = That picture could not be used: { $error }
-photo-too-big = That file is over 30 MB.
-photo-too-detailed = That picture is too detailed to keep.
+photo-too-big = that file is over 30 MB
+photo-too-detailed = that picture is too detailed to keep
 name = Name
 rename = Rename
 name-help = Only you see this name.
@@ -367,3 +367,20 @@ help-verify = the safety number of this conversation
 help-rename = only you see it
 help-mute = no notification from them (until /unmute)
 help-remove = they can no longer reach you
+
+## The macOS app
+
+mac-locked = Your messages are locked with a passphrase.
+mac-passphrase = Passphrase
+mac-message = Message
+mac-return-sends = Return sends; Option-Return starts a new line.
+mac-verified-help = Safety number compared: you both read the same digits, this is really { $name }.
+mac-muted-help = Muted: messages from { $name } still arrive, without a notification.
+mac-theme-help = “As the system” follows your Mac’s light or dark mode, and changes with it.
+mac-locked-keychain-help = Your messages and keys are stored encrypted. The key opens when you log in to this Mac.
+mac-passphrase-warning = Forget it and your messages are gone: nobody can recover it, not even with this Mac.
+mac-daemon-silent = Nightpost's daemon does not answer.
+mac-show-in-finder = Show in Finder
+mac-photo-not-picture = it is not a picture
+mac-photo-resize = it could not be resized
+mac-photo-reencode = it could not be re-encoded

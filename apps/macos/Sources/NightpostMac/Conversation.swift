@@ -21,7 +21,7 @@ struct ConversationView: View {
                 .padding(.horizontal, 32)
                 .frame(maxWidth: Self.column + 64)
                 .zIndex(1)
-            MessageList(name: name, waiting: link == .unreachable ? "Will be sent once \(name) is reachable" : "Sending…")
+            MessageList(name: name, waiting: link == .unreachable ? t("waiting-reachable", ["name": name]) : t("sending"))
             composer
             Text(verbatim: model.status)
                 .font(.ui(12.5))
@@ -40,7 +40,7 @@ struct ConversationView: View {
         return HStack(spacing: 14) {
             Button { model.panel.toggle() } label: { who(person, stage, reach) }
                 .buttonStyle(WhoButton(open: model.panel))
-                .help("About \(name)")
+                .help(t("about-name", ["name": name]))
             Spacer(minLength: 0)
         }
         .padding(.leading, max(22, inset - 6))
@@ -65,13 +65,13 @@ struct ConversationView: View {
                         Icon(parts: Icon.verified, weight: 2)
                             .foregroundStyle(Palette.main)
                             .frame(width: 23, height: 23)
-                            .help("Safety number compared: you both read the same digits, this is really \(name).")
+                            .help(t("mac-verified-help", ["name": name]))
                     }
                     if model.isMuted(name) {
                         Icon(parts: Icon.muted, weight: 2)
                             .foregroundStyle(Palette.muted)
                             .frame(width: 19, height: 19)
-                            .help("Muted: messages from \(name) still arrive, without a notification.")
+                            .help(t("mac-muted-help", ["name": name]))
                     }
                 }
                 Text(reach)
@@ -84,7 +84,7 @@ struct ConversationView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Message", text: $draft, prompt: Text(verbatim: "Write to \(name)").foregroundStyle(Palette.muted), axis: .vertical)
+            TextField(t("mac-message"), text: $draft, prompt: Text(verbatim: t("write-to", ["name": name])).foregroundStyle(Palette.muted), axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.ui(15.5))
                 .foregroundStyle(Palette.text)
@@ -97,9 +97,9 @@ struct ConversationView: View {
                 .background(Palette.input, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.line))
                 .clickToFocus($writing)
-            Button("Send", action: send)
+            Button(t("send"), action: send)
                 .buttonStyle(PrimaryButton(height: 48, radius: 14))
-                .help("Return sends; Option-Return starts a new line.")
+                .help(t("mac-return-sends"))
         }
         .padding(.horizontal, 32)
         .padding(.top, 10)
@@ -220,7 +220,7 @@ private struct Ticks: View {
             }
         }
         .frame(width: 13 * 24 / 16, height: 13)
-        .accessibilityLabel(read ? "Read" : "Delivered")
+        .accessibilityLabel(read ? t("read") : t("delivered"))
     }
 }
 
@@ -299,7 +299,7 @@ struct RouteView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Route to \(name)")
+        .accessibilityLabel(t("route-label", ["name": name]))
     }
 
     /// As in style.css: steps from 32 to 44 points between 464 and 704
@@ -358,22 +358,22 @@ struct RouteView: View {
     }
 
     private func label(_ i: Int, _ net: Network) -> String {
-        ["You", net.bridged ? "Private entrance" : "Entrance", "Relay", "Relay", "Meeting point", name][i]
+        [t("step-you"), net.bridged ? t("step-private-entrance") : t("step-entrance"), t("step-relay"), t("step-relay"), t("step-meeting"), name][i]
     }
 
     private func tips(_ net: Network, _ route: Route) -> [(String, String, String)] {
         let line = net.line.hasPrefix("Tor: ") ? String(net.line.dropFirst(5)) : net.line
         // What the step in orange or red is doing.
-        let now = route.fail != nil || route.live == 0 ? line : route.live != nil ? "Reaching \(name)…" : ""
+        let now = route.fail != nil || route.live == 0 ? line : route.live != nil ? t("reaching", ["name": name]) : ""
         let tips = [
-            ("Your computer", "Messages are locked here before they leave. Only \(name)’s device can open them."),
+            (t("step-computer"), t("step-computer-help", ["name": name])),
             net.bridged
-                ? ("Private entrance", "A bridge: a way into Tor that is not on the public list, so this network cannot tell it apart.")
-                : ("Entrance", "The first Tor relay. It sees your address, never where messages go."),
-            ("Relay", "Kept for weeks: it guards your side of the route. It cannot read the message."),
-            ("Relay", "Changes every few hours. It knows neither who writes nor to whom."),
-            ("Meeting point", "Where your route and \(name)’s meet. Neither of you learns where the other is."),
-            (name, "\(name)’s device, the only one that can open your messages."),
+                ? (t("step-private-entrance"), t("step-bridge-help"))
+                : (t("step-entrance"), t("step-guard-help")),
+            (t("step-relay"), t("step-relay-1-help")),
+            (t("step-relay"), t("step-relay-2-help")),
+            (t("step-meeting"), t("step-meeting-help", ["name": name])),
+            (name, t("step-device-help", ["name": name])),
         ]
         return tips.enumerated().map { i, tip in
             let stage = route.step(i)

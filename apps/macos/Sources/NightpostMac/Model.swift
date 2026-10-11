@@ -81,7 +81,7 @@ final class AppModel {
                 apply(event)
             }
         } catch {}
-        phase = .failed("The daemon stopped. Reopen Nightpost to start it again.")
+        phase = .failed(t("daemon-stopped"))
     }
 
     /// The event stream, starting the daemon first if none answers. nil:
@@ -108,7 +108,7 @@ final class AppModel {
             let lines = text.split(separator: "\n").map(String.init)
             if let daemon, !daemon.isRunning {
                 if asked && text.contains("wrong key") {
-                    phase = .locked("That passphrase does not open them. Try again.")
+                    phase = .locked(t("wrong-passphrase"))
                     return nil
                 }
                 throw ClientError.daemon("the daemon stopped (\(daemon.terminationStatus)): \(lines.last ?? "")")
@@ -219,7 +219,7 @@ final class AppModel {
 
     /// A link, or a code to read out, for someone not added yet.
     func invite(_ name: String, byCode: Bool) {
-        guard !name.isEmpty else { addError = "Give them a name first."; return }
+        guard !name.isEmpty else { addError = t("need-name"); return }
         Task {
             do {
                 switch try await Daemon.call(byCode ? .inviteCode(name: name) : .invite(name: name)) {
@@ -228,7 +228,7 @@ final class AppModel {
                     codes.insert(name)
                     dialog = .code(name: name, code: code)
                 case let .error(message): addError = message
-                case let other: addError = "unexpected reply \(other)"
+                case let other: addError = t("err-unexpected", ["reply": other])
                 }
             } catch {
                 addError = error.localizedDescription
@@ -239,8 +239,8 @@ final class AppModel {
     /// Their link, or the code they read us. The sheet shows the search; if
     /// it was closed meanwhile, the answer goes to the status line.
     func accept(_ given: String, name: String) {
-        guard !given.isEmpty else { addError = "Paste their link, or type the code they read you."; return }
-        guard !name.isEmpty else { addError = "Give them a name first, at the top."; return }
+        guard !given.isEmpty else { addError = t("need-given"); return }
+        guard !name.isEmpty else { addError = t("need-name-top"); return }
         // A code is digits and separators; anything else is taken for a link.
         let byCode = given.allSatisfy { $0.isASCII && ($0.isNumber || " -.".contains($0)) }
         addError = ""
@@ -271,7 +271,7 @@ final class AppModel {
         codes.remove(name)
         Task {
             switch try? await Daemon.call(.confirm(name: name, keep: keep)) {
-            case .done: status = keep ? "\(name) kept" : "\(name) turned down"
+            case .done: status = keep ? t("kept", ["name": name]) : t("turned-down", ["name": name])
             case let .error(message): status = message
             default: break
             }
@@ -342,7 +342,7 @@ final class AppModel {
         case let .network(network): self.network = network
         case let .link(name, state): links[name] = state
         case let .fingerprint(name, number):
-            Notifier.shared.post(title: "Nightpost", body: "\(name) used your invitation", name: nil)
+            Notifier.shared.post(title: "Nightpost", body: t("notify-used-invite", ["name": name]), name: nil)
             dialog = codes.contains(name) ? .confirm(name: name, number: number) : .waiting(name: name, number: number)
         case .unknown: break
         }

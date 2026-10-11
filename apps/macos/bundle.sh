@@ -18,6 +18,8 @@ if [ -n "$lyrebird" ]; then
   cp ../../docs/lyrebird.txt "$app/Contents/Resources/LICENSE-lyrebird.txt"
 fi
 cp ../../LICENSE "$app/Contents/Resources/LICENSE.txt"
+# The words, in the same files as the other interfaces (Words.swift).
+cp ../../crates/core/locales/*.ftl "$app/Contents/Resources/"
 cp ../../crates/gui/fonts/SpaceGrotesk.ttf ../../crates/gui/fonts/OFL-SpaceGrotesk.txt "$app/Contents/Resources/"
 # The icon, drawn by icon.swift at every size macOS asks for.
 icons=build/Nightpost.iconset

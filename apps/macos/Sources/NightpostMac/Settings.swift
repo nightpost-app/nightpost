@@ -19,11 +19,11 @@ enum Theme: String {
 struct SettingsView: View {
     var body: some View {
         TabView {
-            Tab("Appearance", systemImage: "circle.lefthalf.filled") { Pane { AppearancePane() } }
-            Tab("Network", systemImage: "chart.bar") { Pane { NetworkPane() } }
-            Tab("Notifications", systemImage: "bell") { Pane { NotificationsPane() } }
-            Tab("Security", systemImage: "lock") { Pane { SecurityPane() } }
-            Tab("About", systemImage: "info.circle") { Pane { AboutPane() } }
+            Tab(t("appearance"), systemImage: "circle.lefthalf.filled") { Pane { AppearancePane() } }
+            Tab(t("network"), systemImage: "chart.bar") { Pane { NetworkPane() } }
+            Tab(t("notifications"), systemImage: "bell") { Pane { NotificationsPane() } }
+            Tab(t("security"), systemImage: "lock") { Pane { SecurityPane() } }
+            Tab(t("about"), systemImage: "info.circle") { Pane { AboutPane() } }
         }
         .frame(width: 560)
         .foregroundStyle(Palette.text)
@@ -159,13 +159,13 @@ private struct AppearancePane: View {
     @AppStorage("theme") private var theme = Theme.system
 
     var body: some View {
-        Block(title: "Theme") {
+        Block(title: t("theme")) {
             HStack(spacing: 10) {
-                swatch(.system, "As the system", 0x0F1522, 0xF4F5F7)
-                swatch(.dark, "Dark", 0x0F1522, 0x111A29)
-                swatch(.light, "Light", 0xF4F5F7, 0xFFFFFF)
+                swatch(.system, t("theme-system"), 0x0F1522, 0xF4F5F7)
+                swatch(.dark, t("theme-dark"), 0x0F1522, 0x111A29)
+                swatch(.light, t("theme-light"), 0xF4F5F7, 0xFFFFFF)
             }
-            Help("“As the system” follows your Mac’s light or dark mode, and changes with it.")
+            Help(t("mac-theme-help"))
         }
     }
 
@@ -199,14 +199,14 @@ private struct NetworkPane: View {
         let detail = switch stage {
         case .fail: line
         case .live: line.isEmpty ? "\(net.percent)%" : line
-        default: net.bridged ? "This network does not see that you use Tor." : "Messages pass three relays before they reach anyone."
+        default: net.bridged ? t("net-bridged-help") : t("net-connected-help")
         }
-        Block(title: "Connection") {
+        Block(title: t("connection")) {
             Card(title: title, help: detail) {
                 Circle().fill(stage.color).frame(width: 12, height: 12).padding(.top, 5)
             }
         }
-        Block(title: "Bridges") { BridgesEditor() }
+        Block(title: t("bridges")) { BridgesEditor() }
     }
 }
 
@@ -219,15 +219,15 @@ private struct BridgesEditor: View {
     @State private var saved = ""
 
     var body: some View {
-        Help("Some networks (university or work Wi-Fi) block Tor. Nightpost then goes in through a bridge, an entrance that is not on the public list.")
-        Choice(title: "Built-in, when needed", on: !own, pick: { pick(false) }) {
-            Help("Snowflake, nothing to set up. Used only if Tor does not get through.")
+        Help(t("bridges-help"))
+        Choice(title: t("bridges-builtin"), on: !own, pick: { pick(false) }) {
+            Help(t("bridges-builtin-help"))
         }
-        Choice(title: "Bridges of your own", on: own, pick: { pick(true) }) {
-            Help("From a friend, bridges.torproject.org (WebTunnel gets through most often), or your own server. Used all the time.")
+        Choice(title: t("bridges-own"), on: own, pick: { pick(true) }) {
+            Help(t("bridges-own-help"))
         }
         if own {
-            Text("Bridge lines, one per line").font(.ui(13.5)).foregroundStyle(Palette.soft)
+            Text(t("bridges-lines")).font(.ui(13.5)).foregroundStyle(Palette.soft)
             TextEditor(text: $text)
                 .font(.ui(13))
                 .scrollContentBackground(.hidden)
@@ -238,7 +238,7 @@ private struct BridgesEditor: View {
                 .onChange(of: text) { saved = "" }
         }
         if !error.isEmpty { Warning(error) }
-        Button("Save bridges", action: save).buttonStyle(PrimaryButton())
+        Button(t("bridges-save"), action: save).buttonStyle(PrimaryButton())
         if !saved.isEmpty { Help(saved).accessibilityAddTraits(.updatesFrequently) }
         Color.clear.frame(height: 0).task {
             if case let .bridges(lines) = try? await Daemon.call(.bridges(lines: nil)) {
@@ -260,16 +260,16 @@ private struct BridgesEditor: View {
                 switch try await Daemon.call(.bridges(lines: lines)) {
                 case let .bridges(kept):
                     error = ""
-                    saved = kept.isEmpty ? "Back to the built-in bridges." : "Bridges saved: Tor reconnects through them."
+                    saved = kept.isEmpty ? t("bridges-reset") : t("bridges-saved")
                 case let .error(message):
                     saved = ""
                     error = message
                 case let other:
-                    error = "unexpected reply \(other)"
+                    error = t("err-unexpected", ["reply": other])
                 }
             } catch {
                 saved = ""
-                self.error = "Nightpost's daemon does not answer: \(error.localizedDescription)"
+                self.error = t("daemon-silent", ["error": error.localizedDescription])
             }
         }
     }
@@ -281,15 +281,15 @@ private struct NotificationsPane: View {
     @AppStorage("shown") private var shown = Shown.who.rawValue
 
     var body: some View {
-        Block(title: "Notifications") {
-            ToggleRow(title: "Show notifications", help: "When a message arrives and Nightpost is not in front.", on: $notify)
-            ToggleRow(title: "Play a sound", help: "A short chime with each notification.", on: $sound)
+        Block(title: t("notifications")) {
+            ToggleRow(title: t("notify-show"), help: t("notify-show-help"), on: $notify)
+            ToggleRow(title: t("notify-sound"), help: t("notify-sound-help"), on: $sound)
         }
-        Block(title: "What a notification shows") {
-            choice(.all, "Who and what", "Léa", "See you at eight?")
-            choice(.who, "Who wrote", "Nightpost", "Message from Léa")
-            choice(.nothing, "Nothing", "Nightpost", "New message")
-            Help("A notification can show on a locked screen.")
+        Block(title: t("notify-shows")) {
+            choice(.all, t("notify-who-what"), t("notify-example-name"), t("notify-example-text"))
+            choice(.who, t("notify-who"), "Nightpost", t("notify-from", ["name": t("notify-example-name")]))
+            choice(.nothing, t("notify-nothing"), "Nightpost", t("notify-new"))
+            Help(t("notify-locked"))
         }
     }
 
@@ -322,12 +322,12 @@ private struct SecurityPane: View {
     @State private var done = ""
 
     var body: some View {
-        Block(title: "How your messages are locked") {
+        Block(title: t("how-locked")) {
             Card(
-                title: has ? "With your keychain and a passphrase" : "With your system keychain",
+                title: has ? t("locked-both") : t("locked-keychain"),
                 help: has
-                    ? "Your messages and keys are stored encrypted. Nightpost asks for the passphrase each time it starts."
-                    : "Your messages and keys are stored encrypted. The key opens when you log in to this Mac."
+                    ? t("locked-both-help")
+                    : t("mac-locked-keychain-help")
             ) {
                 Icon(parts: [.rect(5, 11, 14, 10, radius: 2), .path("M8 11V8a4 4 0 0 1 8 0v3")], weight: 1.8)
                     .foregroundStyle(Palette.main)
@@ -336,20 +336,20 @@ private struct SecurityPane: View {
             if change == nil {
                 HStack(spacing: 8) {
                     if has {
-                        Button("Change the passphrase") { open(.replace) }.buttonStyle(SecondaryButton())
-                        Button("Remove the passphrase") { open(.remove) }.buttonStyle(SecondaryButton())
+                        Button(t("passphrase-change")) { open(.replace) }.buttonStyle(SecondaryButton())
+                        Button(t("passphrase-remove")) { open(.remove) }.buttonStyle(SecondaryButton())
                     } else {
-                        Button("Add a passphrase") { open(.add) }.buttonStyle(SecondaryButton())
+                        Button(t("passphrase-add")) { open(.add) }.buttonStyle(SecondaryButton())
                     }
                 }
                 if !done.isEmpty { Help(done) }
             }
         }
         if let change { form(change) }
-        Block(title: "Read receipts") {
+        Block(title: t("read-receipts")) {
             ToggleRow(
-                title: "Send read receipts",
-                help: "On: people see when you have read their messages, and you see when they read yours, if they have it on too. Off: neither.",
+                title: t("read-receipts-send"),
+                help: t("read-receipts-help"),
                 on: Binding(get: { model.readReceipts }, set: { on in
                     Task {
                         switch try? await Daemon.call(.readReceipts(on: on)) {
@@ -361,39 +361,39 @@ private struct SecurityPane: View {
                 })
             )
         }
-        Block(title: "Leaving") {
+        Block(title: t("leaving")) {
             ToggleRow(
-                title: has ? "Closing the window locks Nightpost" : "Closing the window quits Nightpost",
+                title: has ? t("close-locks") : t("close-quits"),
                 help: has
-                    ? "Messages stop arriving, and your passphrase is asked for when you open Nightpost again."
-                    : "Messages stop arriving until you open Nightpost again. Add a passphrase above for this to lock it.",
+                    ? t("leave-lock-help")
+                    : t("leave-quit-help"),
                 on: $lockOnClose
             )
-            Button(has ? "Quit and lock" : "Quit Nightpost") { model.quit() }.buttonStyle(SecondaryButton())
+            Button(has ? t("quit-lock") : t("quit")) { model.quit() }.buttonStyle(SecondaryButton())
         }
     }
 
     private func form(_ change: Change) -> some View {
         let (title, action) = switch change {
-        case .add: ("Add a passphrase", "Add the passphrase")
-        case .replace: ("Change the passphrase", "Change it")
-        case .remove: ("Remove the passphrase", "Remove it")
+        case .add: (t("passphrase-add"), t("passphrase-add-it"))
+        case .replace: (t("passphrase-change"), t("change-it"))
+        case .remove: (t("passphrase-remove"), t("remove-it"))
         }
         return Block(title: title) {
-            if change != .add { field("Current passphrase", $current) }
+            if change != .add { field(t("passphrase-current"), $current) }
             if change != .remove {
-                field("New passphrase", $new)
-                field("The same again", $again)
-                Warning("Forget it and your messages are gone: nobody can recover it, not even with this Mac.")
+                field(t("passphrase-new"), $new)
+                field(t("passphrase-again"), $again)
+                Warning(t("mac-passphrase-warning"))
             } else {
-                Help("The keychain alone will open your messages again.")
+                Help(t("passphrase-remove-help"))
             }
             if !error.isEmpty { Warning(error) }
             HStack(spacing: 8) {
                 Button(action) { save(change) }
                 .buttonStyle(PrimaryButton(height: 40, radius: 8))
                 .disabled(busy)
-                Button("Cancel") { open(nil) }.buttonStyle(SecondaryButton())
+                Button(t("cancel")) { open(nil) }.buttonStyle(SecondaryButton())
             }
         }
     }
@@ -418,8 +418,8 @@ private struct SecurityPane: View {
 
     private func save(_ change: Change) {
         let wants = change != .remove
-        if wants && new.isEmpty { error = "Choose a passphrase."; return }
-        if wants && new != again { error = "The two passphrases differ."; return }
+        if wants && new.isEmpty { error = t("need-passphrase"); return }
+        if wants && new != again { error = t("passphrases-differ"); return }
         busy = true
         let request = Request.setPassphrase(current: change == .add ? nil : current, new: wants ? new : nil)
         Task {
@@ -427,9 +427,9 @@ private struct SecurityPane: View {
             case .done:
                 has = wants
                 open(nil)
-                done = wants ? "Passphrase saved." : "Passphrase removed."
+                done = wants ? t("passphrase-saved") : t("passphrase-removed")
             case let .error(message): error = message
-            default: error = "Nightpost's daemon does not answer."
+            default: error = t("mac-daemon-silent")
             }
             busy = false
         }
@@ -441,18 +441,18 @@ private struct AboutPane: View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         Block(title: "Nightpost") {
             Text(verbatim: version).font(.ui(14)).monospacedDigit().foregroundStyle(Palette.muted)
-            Help("Messages between people who know each other, over Tor, with no server in between.")
+            Help(t("tagline"))
         }
-        Block(title: "Your data") {
-            row("Folder", Daemon.dir.path)
-            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Daemon.dir]) }
+        Block(title: t("your-data")) {
+            row(t("folder"), Daemon.dir.path)
+            Button(t("mac-show-in-finder")) { NSWorkspace.shared.activateFileViewerSelecting([Daemon.dir]) }
                 .buttonStyle(SecondaryButton())
         }
-        Block(title: "Licences") {
+        Block(title: t("licences")) {
             row("Nightpost", "AGPL-3.0")
             row("Space Grotesk", "SIL Open Font License 1.1")
-            row("lyrebird (bridges)", "BSD-3-Clause, Tor Project")
-            row("Icons", "Lucide, ISC")
+            row(t("licence-bridges"), "BSD-3-Clause, Tor Project")
+            row(t("licence-icons"), "Lucide, ISC")
         }
     }
 

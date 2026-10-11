@@ -88,8 +88,8 @@ struct LockView: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("Nightpost").font(.ui(46, .bold)).foregroundStyle(Palette.strong)
-            Text("Your messages are locked with a passphrase.").font(.ui(15)).foregroundStyle(Palette.muted)
-            SecureField("Passphrase", text: $passphrase)
+            Text(t("mac-locked")).font(.ui(15)).foregroundStyle(Palette.muted)
+            SecureField(t("mac-passphrase"), text: $passphrase)
                 .textFieldStyle(.plain)
                 .font(.ui(15.5))
                 .padding(.horizontal, 16)
@@ -102,7 +102,7 @@ struct LockView: View {
             if !why.isEmpty {
                 Text(why).font(.ui(14, .medium)).foregroundStyle(Palette.fail)
             }
-            Button("Unlock", action: unlock)
+            Button(t("unlock"), action: unlock)
                 .buttonStyle(PrimaryButton())
                 .keyboardShortcut(.defaultAction)
                 .disabled(passphrase.isEmpty)
@@ -164,7 +164,7 @@ struct MainView: View {
                 } label: {
                     Image(systemName: "sidebar.left")
                 }
-                .help(sideHidden ? "Show the list" : "Hide the list")
+                .help(sideHidden ? t("show-list") : t("hide-list"))
             }
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
@@ -176,12 +176,12 @@ struct MainView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Nobody here yet").font(.ui(30, .semibold)).foregroundStyle(Palette.strong)
-            Text("Nightpost only connects people who know each other. Send someone a one-time link, or read them a code on the phone.")
+            Text(t("empty-title")).font(.ui(30, .semibold)).foregroundStyle(Palette.strong)
+            Text(t("empty-help"))
                 .font(.ui(16))
                 .lineSpacing(4)
                 .foregroundStyle(Palette.soft)
-            Button("Add someone") { model.dialog = .add }.buttonStyle(PrimaryButton())
+            Button(t("add-someone")) { model.dialog = .add }.buttonStyle(PrimaryButton())
         }
         .frame(maxWidth: 480, alignment: .leading)
         .padding(32)

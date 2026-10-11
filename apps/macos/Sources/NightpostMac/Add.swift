@@ -75,21 +75,21 @@ private struct AddSheet: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Heading("Add someone")
-            FieldLabel("Their name, as you will see it")
-            TextField("", text: $name, prompt: Text("Alice").foregroundStyle(Palette.muted))
+            Heading(t("add-title"))
+            FieldLabel(t("add-name-label"))
+            TextField("", text: $name, prompt: Text(t("add-name-placeholder")).foregroundStyle(Palette.muted))
                 .sheetField($naming)
                 .onChange(of: name) { model.addError = "" }
             HStack(spacing: 10) {
-                Button("Create a link") { model.invite(trimmed(name), byCode: false) }
+                Button(t("create-link")) { model.invite(trimmed(name), byCode: false) }
                     .buttonStyle(PrimaryButton(height: 40, radius: 8))
-                Button("Create a code to read out") { model.invite(trimmed(name), byCode: true) }
+                Button(t("create-code")) { model.invite(trimmed(name), byCode: true) }
                     .buttonStyle(SecondaryButton())
             }
             .padding(.top, 18)
             Rectangle().fill(Palette.line).frame(height: 1).padding(.top, 24).padding(.bottom, 4)
-            FieldLabel("Or use what they gave you: their link, or the code they read you")
-            TextField("", text: $given, prompt: Text("nightpost:1:… or 482-109-375-512").foregroundStyle(Palette.muted))
+            FieldLabel(t("add-use-label"))
+            TextField("", text: $given, prompt: Text(verbatim: "nightpost:1:… / 482-109-375-512").foregroundStyle(Palette.muted))
                 .sheetField($giving)
                 .onChange(of: given) { model.addError = "" }
                 .onSubmit { model.accept(trimmed(given), name: trimmed(name)) }
@@ -101,9 +101,9 @@ private struct AddSheet: View {
                     .accessibilityAddTraits(.updatesFrequently)
             }
             HStack(spacing: 10) {
-                Button("Use it") { model.accept(trimmed(given), name: trimmed(name)) }
+                Button(t("use-it")) { model.accept(trimmed(given), name: trimmed(name)) }
                     .buttonStyle(PrimaryButton(height: 40, radius: 8))
-                Button("Cancel") { model.dialog = nil }
+                Button(t("cancel")) { model.dialog = nil }
                     .buttonStyle(SecondaryButton())
             }
             .padding(.top, 18)
@@ -118,21 +118,21 @@ private struct AddSheet: View {
     private func looking(_ who: String) -> some View {
         let network = model.network
         let progress = network.percent < 100
-            ? "Waiting for Tor (\(network.percent)%) before looking."
-            : "Tor is connected. \(who)’s Nightpost has to be running; finding it can take up to 5 minutes."
+            ? t("looking-tor", ["percent": network.percent])
+            : t("looking-help", ["name": who])
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Heading("Looking for \(who)…")
+                Heading(t("looking-title", ["name": who]))
                 Spacer()
                 ProgressView().controlSize(.small).padding(.bottom, 10)
             }
             Paragraph(progress)
-            Text("Closing this does not stop it: \(who) shows up in your list once found.")
+            Text(t("looking-close", ["name": who]))
                 .font(.ui(13.5))
                 .lineSpacing(3)
                 .foregroundStyle(Palette.soft)
             HStack {
-                Button("Close") { model.dialog = nil }.buttonStyle(SecondaryButton())
+                Button(t("close")) { model.dialog = nil }.buttonStyle(SecondaryButton())
             }
             .padding(.top, 18)
         }
@@ -150,8 +150,8 @@ private struct InviteSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Heading("An invitation for \(name)")
-            Paragraph("Give it to \(name) only, through a channel you trust. It works once, for 7 days.")
+            Heading(t("invite-title", ["name": name]))
+            Paragraph(t("invite-help", ["name": name]))
             if let qr = QR.image(link) {
                 Image(nsImage: qr)
                     .interpolation(.none)
@@ -161,7 +161,7 @@ private struct InviteSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 6)
                     .padding(.bottom, 16)
-                    .accessibilityLabel("QR code of the invitation")
+                    .accessibilityLabel(t("invite-qr"))
             }
             Text(verbatim: link)
                 .font(.ui(12.5))
@@ -173,8 +173,8 @@ private struct InviteSheet: View {
                 .background(Palette.input, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.line2))
             HStack(spacing: 10) {
-                CopyButton(text: link, label: "Copy the link")
-                Button("Done") { model.dialog = nil }.buttonStyle(SecondaryButton())
+                CopyButton(text: link, label: t("copy-link"))
+                Button(t("done")) { model.dialog = nil }.buttonStyle(SecondaryButton())
             }
             .padding(.top, 18)
         }
@@ -188,8 +188,8 @@ private struct CodeSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Heading("Read this code to \(name)")
-            Paragraph("On a call or in person. It works for 10 minutes.")
+            Heading(t("code-title", ["name": name]))
+            Paragraph(t("code-help"))
             Text(verbatim: code.replacingOccurrences(of: "-", with: " "))
                 .font(.ui(46, .semibold))
                 .monospacedDigit()
@@ -198,10 +198,10 @@ private struct CodeSheet: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 22)
-            Paragraph("When \(name) types it in, you will both compare a safety number before anything is kept.")
+            Paragraph(t("code-after", ["name": name]))
             HStack(spacing: 10) {
-                CopyButton(text: code, label: "Copy the code")
-                Button("Hide") { model.dialog = nil }.buttonStyle(SecondaryButton())
+                CopyButton(text: code, label: t("copy-code"))
+                Button(t("hide")) { model.dialog = nil }.buttonStyle(SecondaryButton())
             }
             .padding(.top, 10)
         }
@@ -215,16 +215,16 @@ private struct ConfirmSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Heading("Someone used your code for \(name)")
-            Paragraph("Ask them to read their safety number aloud. Yours is:")
+            Heading(t("confirm-title", ["name": name]))
+            Paragraph(t("confirm-help"))
             SafetyDigits(number: number)
-            Text("Keep them only if every digit matches. Otherwise it is not \(name).")
+            Text(t("confirm-warning", ["name": name]))
                 .font(.ui(15, .semibold))
                 .foregroundStyle(Palette.fail)
             HStack(spacing: 10) {
-                Button("The digits match") { model.confirm(name, keep: true) }
+                Button(t("digits-match")) { model.confirm(name, keep: true) }
                     .buttonStyle(PrimaryButton(height: 40, radius: 8))
-                Button("They differ, turn down") { model.confirm(name, keep: false) }
+                Button(t("digits-differ")) { model.confirm(name, keep: false) }
                     .buttonStyle(DangerButton())
             }
             .padding(.top, 18)
@@ -238,10 +238,10 @@ private struct WaitingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Heading("Waiting for \(name)")
-            Paragraph("Read this safety number to \(name). They check that it matches theirs:")
+            Heading(t("waiting-title", ["name": name]))
+            Paragraph(t("waiting-help", ["name": name]))
             SafetyDigits(number: number)
-            Paragraph("\(name) is added as soon as they confirm.")
+            Paragraph(t("waiting-after", ["name": name]))
         }
     }
 }
@@ -371,11 +371,11 @@ struct CopyButton: View {
         } label: {
             ZStack {
                 Text(label).opacity(copied ? 0 : 1)
-                Text("Copied").opacity(copied ? 1 : 0)
+                Text(t("copied")).opacity(copied ? 1 : 0)
             }
         }
         .buttonStyle(PrimaryButton(height: 40, radius: 8))
-        .accessibilityLabel(copied ? "Copied" : label)
+        .accessibilityLabel(copied ? t("copied") : label)
     }
 }
 

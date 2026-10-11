@@ -304,8 +304,8 @@ enum When {
     /// "Today", "Yesterday", "Monday 5 October", "5 October 2025".
     static func day(_ millis: UInt64) -> String {
         let then = date(millis), calendar = Calendar.current
-        if calendar.isDateInToday(then) { return "Today" }
-        if calendar.isDateInYesterday(then) { return "Yesterday" }
+        if calendar.isDateInToday(then) { return t("today") }
+        if calendar.isDateInYesterday(then) { return t("yesterday") }
         if calendar.isDate(then, equalTo: .now, toGranularity: .year) {
             return then.formatted(.dateTime.weekday(.wide).day().month(.wide))
         }
@@ -318,7 +318,7 @@ enum When {
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: then), to: calendar.startOfDay(for: .now)).day ?? 0
         switch days {
         case ...0: return clock(millis)
-        case 1: return "Yesterday"
+        case 1: return t("yesterday")
         case 2...6: return then.formatted(.dateTime.weekday(.wide))
         default: return then.formatted(.dateTime.day().month(.abbreviated))
         }
@@ -366,14 +366,14 @@ struct Route {
     /// Under the name: how things stand with them, and in which colour.
     static func line(_ name: String, _ net: Network, _ link: LinkState?) -> (Stage, String) {
         let route = Route(net, link)
-        if route.fail != nil { return (.fail, "Tor is not getting through") }
-        if route.live == 0 { return (.live, "Connecting to Tor, \(net.percent)%") }
+        if route.fail != nil { return (.fail, t("net-blocked")) }
+        if route.live == 0 { return (.live, t("connecting-percent", ["percent": net.percent])) }
         switch link {
-        case .open: return (.done, "Connected")
-        case .idle: return (.done, "Reachable")
-        case .trying: return (.live, "Reaching \(name)…")
-        case .unreachable: return (.wait, "Not reachable right now")
-        case nil: return (.wait, "Reached when you write")
+        case .open: return (.done, t("link-open"))
+        case .idle: return (.done, t("link-idle"))
+        case .trying: return (.live, t("reaching", ["name": name]))
+        case .unreachable: return (.wait, t("link-away"))
+        case nil: return (.wait, t("link-unknown"))
         }
     }
 
@@ -396,7 +396,7 @@ extension Route.Stage {
 
 /// What the bottom of the list says about Tor.
 func networkSummary(_ net: Network) -> (Route.Stage, String) {
-    if net.entry == false || net.circuit == false { return (.fail, "Tor is not getting through") }
-    if net.percent < 100 { return (.live, "Connecting to Tor") }
-    return (.done, net.bridged ? "Through a bridge" : "Connected to Tor")
+    if net.entry == false || net.circuit == false { return (.fail, t("net-blocked")) }
+    if net.percent < 100 { return (.live, t("net-connecting")) }
+    return (.done, net.bridged ? t("net-bridged") : t("net-connected"))
 }

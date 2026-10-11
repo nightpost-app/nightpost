@@ -13,7 +13,7 @@ struct Sidebar: View {
                 Text("Nightpost").font(.ui(24, .bold)).foregroundStyle(Palette.strong)
                 Spacer()
                 if !people.isEmpty {
-                    Text("\(reachable) reachable of \(people.count)")
+                    Text(t("reachable-count", ["reachable": reachable, "total": people.count]))
                         .font(.ui(13))
                         .monospacedDigit()
                         .foregroundStyle(Palette.muted)
@@ -51,13 +51,13 @@ struct Sidebar: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             HStack(spacing: 8) {
-                Button("Add someone") { model.dialog = .add }
+                Button(t("add-someone")) { model.dialog = .add }
                     .buttonStyle(PrimaryButton(wide: true))
                 SettingsLink {
                     Image(systemName: "gearshape").font(.system(size: 17))
                 }
                 .buttonStyle(OutlineButton())
-                .help("Settings")
+                .help(t("settings"))
             }
         }
         .padding(.horizontal, 12)
@@ -127,8 +127,8 @@ struct ContactRow: View {
     }
 
     private func preview(_ last: HistoryItem?) -> String {
-        guard let last else { return "No messages yet" }
+        guard let last else { return t("no-messages") }
         let line = last.text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
-        return last.outgoing ? "You: \(line)" : line
+        return last.outgoing ? t("preview-you", ["text": line]) : line
     }
 }

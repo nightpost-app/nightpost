@@ -39,7 +39,7 @@ struct PersonPanel: View {
                 Icon(parts: [.path("M6 6l12 12M18 6L6 18")], weight: 2).frame(width: 18, height: 18)
             }
             .buttonStyle(QuietButton())
-            .help("Close")
+            .help(t("close"))
             .padding(.leading, 12)
             .padding(.top, 14)
         }
@@ -54,14 +54,14 @@ struct PersonPanel: View {
         VStack(spacing: 12) {
             Avatar(name: name, photo: person.photo, size: 96)
             HStack(spacing: 8) {
-                Button(person.photo == nil ? "Choose a photo" : "Change photo", action: choosePhoto)
+                Button(person.photo == nil ? t("choose-photo") : t("change-photo"), action: choosePhoto)
                     .buttonStyle(SmallButton())
                 if person.photo != nil {
-                    Button("Use the rings") { model.update(name) { $0.photo = nil } }
+                    Button(t("use-rings")) { model.update(name) { $0.photo = nil } }
                         .buttonStyle(SmallButton())
                 }
             }
-            Help("The photo stays on this computer. \(name) never sees it.")
+            Help(t("photo-help", ["name": name]))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -70,9 +70,9 @@ struct PersonPanel: View {
     private var renaming: some View {
         let to = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 12) {
-            PanelTitle("Name")
+            PanelTitle(t("name"))
             HStack(spacing: 8) {
-                TextField("Name", text: $newName)
+                TextField(t("name"), text: $newName)
                     .textFieldStyle(.plain)
                     .font(.ui(15))
                     .foregroundStyle(Palette.strong)
@@ -84,20 +84,20 @@ struct PersonPanel: View {
                     .clickToFocus($naming)
                     .onChange(of: newName) { if newName.count > 32 { newName = String(newName.prefix(32)) } }
                     .onSubmit { if !to.isEmpty && to != name { model.rename(name, to: to) } }
-                Button("Rename") { model.rename(name, to: to) }
+                Button(t("rename")) { model.rename(name, to: to) }
                     .buttonStyle(SmallButton())
                     .disabled(to.isEmpty || to == name)
             }
-            Help("Only you see this name.")
+            Help(t("name-help"))
         }
     }
 
     private func safety(_ person: Person) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                PanelTitle("Safety number")
+                PanelTitle(t("safety-number"))
                 Spacer()
-                Text(person.verified ? "Verified" : "Not compared yet")
+                Text(person.verified ? t("verified") : t("not-compared"))
                     .font(.ui(12.5, .semibold))
                     .foregroundStyle(person.verified ? Palette.main : Palette.muted)
                     .padding(.horizontal, 9)
@@ -106,9 +106,9 @@ struct PersonPanel: View {
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(person.verified ? Palette.main : Palette.line2))
             }
             Help(person.verified
-                ? "You compared it with \(name) in person or on a call."
-                : "Compare it once with \(name) to be sure nobody sits in between.")
-            Button("Compare safety number") { model.compare(name) }
+                ? t("compared-help", ["name": name])
+                : t("compare-help", ["name": name]))
+            Button(t("compare")) { model.compare(name) }
                 .buttonStyle(SmallButton())
         }
     }
@@ -121,13 +121,13 @@ struct PersonPanel: View {
         case let until?: until - now() > 2 * hour ? 8 * hour : hour
         }
         let help = switch quiet {
-        case nil: "A notification for each message from \(name)."
-        case UInt64.max: "No notification from \(name) until you turn them back on. Messages still arrive."
-        case let until?: "Quiet until \(When.clock(until)), then back on."
+        case nil: t("mute-on-help", ["name": name])
+        case UInt64.max: t("mute-off-help", ["name": name])
+        case let until?: t("mute-until-help", ["time": When.clock(until)])
         }
-        let choices: [(String, UInt64?)] = [("On", nil), ("1 hour", hour), ("8 hours", 8 * hour), ("Off", .max)]
+        let choices: [(String, UInt64?)] = [(t("mute-on"), nil), (t("mute-1h"), hour), (t("mute-8h"), 8 * hour), (t("mute-off"), .max)]
         return VStack(alignment: .leading, spacing: 12) {
-            PanelTitle("Notifications")
+            PanelTitle(t("notifications"))
             HStack(spacing: 4) {
                 ForEach(choices, id: \.0) { label, length in
                     Button(label) {
@@ -147,8 +147,8 @@ struct PersonPanel: View {
     private var removal: some View {
         VStack(alignment: .leading, spacing: 12) {
             if removing {
-                PanelTitle("Remove \(name)?", color: Palette.fail)
-                Help("\(name) can no longer reach you or see when you are online. To talk again, one of you sends a new invitation.")
+                PanelTitle(t("remove-title", ["name": name]), color: Palette.fail)
+                Help(t("remove-help", ["name": name]))
                 Button { wipe.toggle() } label: {
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -156,7 +156,7 @@ struct PersonPanel: View {
                             .strokeBorder(wipe ? Palette.fail : Palette.muted, lineWidth: 2)
                             .frame(width: 18, height: 18)
                             .overlay { if wipe { Text("✓").font(.system(size: 13, weight: .bold)).foregroundStyle(.white) } }
-                        Text("Also delete the conversation from this computer")
+                        Text(t("remove-wipe"))
                             .font(.ui(14))
                             .foregroundStyle(Palette.text)
                             .multilineTextAlignment(.leading)
@@ -166,15 +166,15 @@ struct PersonPanel: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(wipe ? [.isSelected] : [])
                 HStack(spacing: 8) {
-                    Button("Remove") { model.remove(name, wipe: wipe) }.buttonStyle(DangerButton())
-                    Button("Cancel") {
+                    Button(t("remove")) { model.remove(name, wipe: wipe) }.buttonStyle(DangerButton())
+                    Button(t("cancel")) {
                         removing = false
                         wipe = false
                     }
                     .buttonStyle(SmallButton())
                 }
             } else {
-                Button("Remove \(name)") { removing = true }.buttonStyle(SmallButton(color: Palette.fail))
+                Button(t("remove-name", ["name": name])) { removing = true }.buttonStyle(SmallButton(color: Palette.fail))
             }
         }
         .padding(.top, 18)
@@ -191,7 +191,7 @@ struct PersonPanel: View {
                 let uri = try Photo.uri(url)
                 model.update(name) { $0.photo = uri }
             } catch {
-                model.status = "That picture could not be used: \(error.localizedDescription)"
+                model.status = t("photo-failed", ["error": error.localizedDescription])
             }
         }
     }
@@ -207,11 +207,11 @@ struct SafetyScreen: View {
         let photo = model.contacts.first { $0.name == name }?.person.photo
         VStack(spacing: 20) {
             Avatar(name: name, photo: photo, size: 64)
-            Text("Your safety number with \(name)")
+            Text(t("safety-title", ["name": name]))
                 .font(.ui(30, .bold))
                 .foregroundStyle(Palette.strong)
                 .multilineTextAlignment(.center)
-            Text("Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between.")
+            Text(t("safety-help"))
                 .font(.ui(16))
                 .lineSpacing(4)
                 .foregroundStyle(Palette.soft)
@@ -227,14 +227,14 @@ struct SafetyScreen: View {
                 .shadow(color: Palette.shadow, radius: 30, y: 24)
                 .padding(.vertical, 6)
             HStack(spacing: 10) {
-                Button("They match") {
+                Button(t("they-match")) {
                     model.dialog = nil
                     model.update(name) { $0.verified = true }
                 }
                 .buttonStyle(PrimaryButton(height: 48, radius: 12))
-                Button("Not now") { model.dialog = nil }.buttonStyle(SecondaryButton(height: 48, radius: 12))
+                Button(t("not-now")) { model.dialog = nil }.buttonStyle(SecondaryButton(height: 48, radius: 12))
             }
-            Text("If even one digit differs, it is not \(name) at the other end: do not mark it.")
+            Text(t("safety-warning", ["name": name]))
                 .font(.ui(14, .medium))
                 .foregroundStyle(Palette.fail)
                 .multilineTextAlignment(.center)
@@ -249,7 +249,7 @@ struct SafetyScreen: View {
                 Icon(parts: [.path("M6 6l12 12M18 6L6 18")], weight: 2).frame(width: 22, height: 22)
             }
             .buttonStyle(OutlineButton())
-            .help("Close")
+            .help(t("close"))
             .padding(18)
         }
     }
@@ -267,7 +267,7 @@ enum Photo {
 
     static func uri(_ url: URL) throws -> String {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size <= 30 << 20 else { throw Unusable(errorDescription: "that file is over 30 MB") }
+        guard size <= 30 << 20 else { throw Unusable(errorDescription: t("photo-too-big")) }
         // A thumbnail: ImageIO never decodes more than this many pixels.
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -276,21 +276,21 @@ enum Photo {
         ] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
-            throw Unusable(errorDescription: "it is not a picture")
+            throw Unusable(errorDescription: t("mac-photo-not-picture"))
         }
         let side = min(image.width, image.height)
         guard let square = image.cropping(to: CGRect(x: (image.width - side) / 2, y: (image.height - side) / 2, width: side, height: side)),
               let context = CGContext(data: nil, width: 256, height: 256, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { throw Unusable(errorDescription: "it could not be resized") }
+        else { throw Unusable(errorDescription: t("mac-photo-resize")) }
         context.interpolationQuality = .high
         context.draw(square, in: CGRect(x: 0, y: 0, width: 256, height: 256))
         guard let resized = context.makeImage(),
               let png = NSBitmapImageRep(cgImage: resized).representation(using: .png, properties: [:]) else {
-            throw Unusable(errorDescription: "it could not be re-encoded")
+            throw Unusable(errorDescription: t("mac-photo-reencode"))
         }
         let uri = "data:image/png;base64," + png.base64EncodedString()
-        guard uri.utf8.count <= limit else { throw Unusable(errorDescription: "that picture is too detailed to keep") }
+        guard uri.utf8.count <= limit else { throw Unusable(errorDescription: t("photo-too-detailed")) }
         return uri
     }
 }
