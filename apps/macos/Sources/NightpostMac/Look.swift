@@ -7,7 +7,9 @@ import SwiftUI
 
 /// style.css's tokens, by night and by day, following the system.
 enum Palette {
-    static let ground = dynamic(0x0F1522, 0xF4F5F7)
+    static let ground = Color(nsColor: groundNS)
+    /// For AppKit: a window's own background.
+    static let groundNS = dynamicNS(0x0F1522, 0xF4F5F7)
     static let side = dynamic(0x0A0F19, 0xFFFFFF)
     static let panel = dynamic(0x111A29, 0xF7F8FA)
     static let line = dynamic(0x1E2A3E, 0xE2E4E8)
@@ -43,9 +45,13 @@ enum Palette {
     }
 
     private static func dynamic(_ night: UInt32, _ day: UInt32, alpha: (Double, Double) = (1, 1)) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        Color(nsColor: dynamicNS(night, day, alpha: alpha))
+    }
+
+    private static func dynamicNS(_ night: UInt32, _ day: UInt32, alpha: (Double, Double) = (1, 1)) -> NSColor {
+        NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? nsHex(night, alpha: alpha.0) : nsHex(day, alpha: alpha.1)
-        })
+        }
     }
 }
 

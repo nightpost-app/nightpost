@@ -27,6 +27,21 @@ struct SettingsView: View {
         }
         .frame(width: 560)
         .foregroundStyle(Palette.text)
+        .background(WindowGround())
+    }
+}
+
+/// The tabs' bar in the page's colour rather than the system's grey.
+private struct WindowGround: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Host() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    final class Host: NSView {
+        override func viewDidMoveToWindow() {
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = Palette.groundNS
+        }
     }
 }
 
