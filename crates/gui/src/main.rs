@@ -1081,7 +1081,7 @@ fn DialogView() -> Element {
         Dialog::Add => rsx! { AddDialog {} },
         Dialog::Bridges => rsx! {
             h3 { "Bridges" }
-            BridgesEditor {}
+            div { class: "block", BridgesEditor {} }
             div { class: "actions", button { onclick: close, "Close" } }
         },
         Dialog::Safety { name, number } => return rsx! { SafetyNumber { name, number } },

@@ -413,6 +413,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .sheet { width: min(520px, 100%); max-height: 100%; overflow: auto; background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); color: var(--text); border: 1px solid color-mix(in srgb, var(--strong) 14%, transparent); border-radius: 14px; padding: 26px 30px 24px; box-shadow: 0 30px 60px -20px var(--shadow); }
 .sheet h3 { font: 600 25px/1.2 var(--display); color: var(--strong); margin: 0 0 10px; }
 .sheet p { color: var(--soft); line-height: 1.5; margin-bottom: 8px; }
+.sheet .block :is(p, label) { margin: 0; }
 .sheet label { display: block; color: var(--soft); font-size: 13.5px; margin: 16px 0 6px; }
 .sheet input, .sheet textarea { font: 15px/1.4 var(--ui); width: 100%; color: var(--text); background: var(--input); border: 1px solid var(--line2); border-radius: 8px; padding: 10px 12px; }
 .sheet input::placeholder, .sheet textarea::placeholder { color: var(--muted); }
