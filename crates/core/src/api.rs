@@ -305,10 +305,16 @@ async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocket
                 let mut events = daemon.subscribe();
                 write_line(&mut send, &Reply::Listening).await?;
                 loop {
-                    match events.recv().await {
-                        Ok(event) => write_line(&mut send, &event).await?,
-                        Err(RecvError::Lagged(n)) => tracing::warn!("a listener missed {n} events"),
-                        Err(RecvError::Closed) => return Ok(()),
+                    tokio::select! {
+                        event = events.recv() => match event {
+                            Ok(event) => write_line(&mut send, &event).await?,
+                            Err(RecvError::Lagged(n)) => tracing::warn!("a listener missed {n} events"),
+                            Err(RecvError::Closed) => return Ok(()),
+                        },
+                        // A listener sends nothing more: this is it hanging
+                        // up. Noticed now, not at the next event, so the
+                        // daemon knows at once that no window is open.
+                        _ = read_line(&mut lines) => return Ok(()),
                     }
                 }
             }
@@ -502,5 +508,32 @@ mod tests {
         assert_eq!(store.bridges().unwrap(), [line]);
         store.set_bridges(&[]).unwrap();
         assert!(store.bridges().unwrap().is_empty());
+    }
+
+    /// A window that closes stops counting as a listener at once, not at the
+    /// next event: the daemon then tells of messages itself.
+    #[tokio::test]
+    async fn a_listener_that_hangs_up_is_gone_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = Unlock::new(Some(zeroize::Zeroizing::new([1; 32])), None).unwrap();
+        let store = Rc::new(Store::open(&dir.path().join("nightpost.db"), &unlock).unwrap());
+        let daemon = Daemon::open(store.clone(), crate::transport::memory::Network::default().node()).unwrap();
+        let bridges = BridgeLines { store, tor: tokio::sync::watch::channel(Vec::new()).0 };
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                tokio::task::spawn_local(serve(daemon.clone(), bind(dir.path()).await.unwrap(), bridges));
+                let mut client = Client::connect(dir.path()).await.unwrap();
+                assert_eq!(client.call(&Request::Listen).await.unwrap(), Reply::Listening);
+                assert_eq!(daemon.listeners(), 1);
+                drop(client);
+                for _ in 0..100 {
+                    if daemon.listeners() == 0 {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                panic!("still counted as listening 2 s after hanging up");
+            })
+            .await;
     }
 }
