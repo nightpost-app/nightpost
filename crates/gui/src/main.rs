@@ -54,6 +54,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+    #[cfg(windows)]
+    nightpost_core::register_app_id(&dir);
     DIR.set(dir).expect("set once");
     // Our own frame (chrome.rs): no system title bar; macOS keeps its own
     // buttons. The page is never see-through (WebKitGTK then keeps only what
@@ -1375,6 +1377,8 @@ fn notify(title: &str, body: &str, prefs: Prefs) {
     std::thread::spawn(move || {
         let mut notification = notify_rust::Notification::new();
         notification.summary(&title).body(&body);
+        #[cfg(windows)]
+        notification.app_id(nightpost_core::APP_ID);
         // Transient: shown, then let go rather than kept in the history.
         #[cfg(all(unix, not(target_os = "macos")))]
         if !prefs.keep_history {

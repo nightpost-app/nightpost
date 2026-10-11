@@ -259,6 +259,8 @@ async fn daemon(dir: &Path) -> Result<()> {
                 }
             });
             daemon.start().await?;
+            #[cfg(windows)]
+            nightpost_core::register_app_id(dir);
             #[cfg(not(target_os = "macos"))]
             tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf()));
             eprintln!("ready");
@@ -316,6 +318,8 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
         std::thread::spawn(move || {
             let mut notification = notify_rust::Notification::new();
             notification.summary(&title).body(&body);
+            #[cfg(windows)]
+            notification.app_id(nightpost_core::APP_ID);
             #[cfg(unix)]
             if !keep {
                 notification.hint(notify_rust::Hint::Transient(true));
