@@ -2,9 +2,15 @@
 Type=Application
 Name=Nightpost
 Comment=Messages over Tor, with no server in the middle
+Comment[fr]=Des messages par Tor, sans serveur au milieu
+Comment[es]=Mensajes a través de Tor, sin ningún servidor en medio
+Comment[de]=Nachrichten über Tor, ohne Server dazwischen
 Exec=nightpost-gui
 Icon=io.github.nightpost-app.Nightpost
 Terminal=false
 Categories=Network;InstantMessaging;
 Keywords=chat;tor;signal;encrypted;
+Keywords[fr]=discussion;messagerie;tor;signal;chiffré;
+Keywords[es]=chat;mensajería;tor;signal;cifrado;
+Keywords[de]=Chat;Messenger;Tor;Signal;verschlüsselt;
 StartupWMClass=nightpost-gui

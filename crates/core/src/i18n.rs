@@ -63,6 +63,16 @@ fn fill(template: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     out
 }
 
+/// "Monday", or "Mon" when `short`; `day` from 1 (Monday) to 7.
+pub fn weekday(day: i8, short: bool) -> String {
+    text(&format!("weekday-{}{day}", if short { "short-" } else { "" }), &[])
+}
+
+/// "October", or "Oct" when `short`; `month` from 1 to 12.
+pub fn month(month: i8, short: bool) -> String {
+    text(&format!("month-{}{month}", if short { "short-" } else { "" }), &[])
+}
+
 /// `t!("key")`, or `t!("key", name = value, …)` for its placeables.
 #[macro_export]
 macro_rules! t {

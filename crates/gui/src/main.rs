@@ -1457,11 +1457,11 @@ fn short_time(millis: u64) -> String {
 }
 
 fn weekday(day: &jiff::Zoned) -> String {
-    i18n::text(&format!("weekday-{}", day.weekday().to_monday_one_offset()), &[])
+    i18n::weekday(day.weekday().to_monday_one_offset(), false)
 }
 
 fn month(day: &jiff::Zoned, short: bool) -> String {
-    i18n::text(&format!("month-{}{}", if short { "short-" } else { "" }, day.month()), &[])
+    i18n::month(day.month(), short)
 }
 
 /// 60 digits as 3 lines of 4 groups, the way they are read out.

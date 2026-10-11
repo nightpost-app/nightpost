@@ -13,6 +13,7 @@ use crossterm::event::{
 };
 use futures::StreamExt as _;
 use nightpost_core::api::{Client, Event, HistoryItem, Person, Reply, Request};
+use nightpost_core::{i18n, t};
 use ratatui::DefaultTerminal;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -39,24 +40,31 @@ const DIM: Style = Style::new().fg(LAMP);
 const PAPER: Style = Style::new().fg(INK).bg(ONIONSKIN);
 const SIDEBAR: u16 = 28;
 const HISTORY: u32 = 200;
-const HELP: &str = "\
-Enter            send
-Alt+Enter        new line
-Tab, Shift+Tab   next, previous conversation
-PgUp, PgDn       scroll
-Esc              close this, or clear the box
-Ctrl+C           quit (the daemon keeps running)
-
-/invite <name>               a one-time link, with its QR code
-/code <name>                 a 12-digit code to read out
-/accept <link> <name>        use a link
-/acceptcode <code> <name>    use a code read out to you
-/verify                      the safety number of this conversation
-/rename <new name>           only you see it
-/mute [1h | 8h]              no notification from them (until /unmute)
-/unmute
-/remove                      they can no longer reach you
-/quit";
+fn help() -> Vec<String> {
+    let keys = [
+        ("Enter", t!("help-send")),
+        ("Alt+Enter", t!("help-newline")),
+        ("Tab, Shift+Tab", t!("help-tab")),
+        ("PgUp, PgDn", t!("help-scroll")),
+        ("Esc", t!("help-esc")),
+        ("Ctrl+C", t!("help-quit")),
+    ];
+    let commands = [
+        ("/invite <name>", t!("help-invite")),
+        ("/code <name>", t!("help-code")),
+        ("/accept <link> <name>", t!("help-accept")),
+        ("/acceptcode <code> <name>", t!("help-acceptcode")),
+        ("/verify", t!("help-verify")),
+        ("/rename <new name>", t!("help-rename")),
+        ("/mute [1h | 8h]", t!("help-mute")),
+        ("/unmute", String::new()),
+        ("/remove", t!("help-remove")),
+        ("/quit", String::new()),
+    ];
+    let keys = keys.iter().map(|(k, v)| format!("{k:<17}{v}"));
+    let commands = commands.iter().map(|(c, v)| format!("{c:<29}{v}").trim_end().to_string());
+    keys.chain([String::new()]).chain(commands).collect()
+}
 
 struct Conversation {
     name: String,
@@ -106,10 +114,10 @@ struct App {
 pub async fn run(dir: &Path) -> Result<()> {
     let mut requests = Client::connect(dir)
         .await
-        .context("no daemon running: start `nightpost daemon` first (in tmux, for one)")?;
+        .with_context(|| t!("tui-no-daemon"))?;
     let mut events = Client::connect(dir).await?;
     if events.call(&Request::Listen).await? != Reply::Listening {
-        bail!("the daemon did not accept to stream events");
+        bail!(t!("tui-no-stream"));
     }
     let (updates, mut updated) = mpsc::unbounded_channel();
     let forward = updates.clone();
@@ -129,7 +137,7 @@ pub async fn run(dir: &Path) -> Result<()> {
         input: String::new(),
         cursor: 0,
         scroll: 0,
-        status: "/help for keys and commands".into(),
+        status: t!("tui-help-hint"),
         overlay: None,
         codes: Vec::new(),
         focused: true,
@@ -196,8 +204,8 @@ impl App {
             self.status = match requests.call(&Request::Confirm { name: name.clone(), keep }).await {
                 Ok(Reply::Error { message }) => message,
                 Err(e) => format!("{e:#}"),
-                Ok(_) if keep => format!("{name} kept"),
-                Ok(_) => format!("{name} turned down"),
+                Ok(_) if keep => t!("kept", name = name),
+                Ok(_) => t!("turned-down", name = name),
             };
             return;
         }
@@ -227,7 +235,7 @@ impl App {
         }
         if let (Some(Overlay::Invite { link, .. }), KeyCode::Char('c')) = (&self.overlay, key.code) {
             copy(link);
-            self.status = "link copied (if the terminal allows it)".into();
+            self.status = t!("tui-link-copied");
             return;
         }
         match key.code {
@@ -283,7 +291,7 @@ impl App {
             return;
         }
         let Some(to) = self.conversations.get(self.selected).map(|c| c.name.clone()) else {
-            self.status = "no conversation yet: /invite or /code someone".into();
+            self.status = t!("tui-no-conversation");
             self.input = input;
             self.cursor = self.input.len();
             return;
@@ -296,7 +304,7 @@ impl App {
                 self.input = input;
                 self.cursor = self.input.len();
             }
-            Ok(other) => self.status = format!("unexpected reply {other:?}"),
+            Ok(other) => self.status = t!("err-unexpected", reply = format!("{other:?}")),
             Err(e) => self.status = format!("{e:#}"),
         }
     }
@@ -304,13 +312,13 @@ impl App {
     async fn command(&mut self, command: &str, requests: &mut Client, updates: &mpsc::UnboundedSender<Update>) -> Result<()> {
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
-            ["help"] => self.overlay = Some(Overlay::Text { title: "Keys and commands".into(), body: HELP.lines().map(Into::into).collect() }),
+            ["help"] => self.overlay = Some(Overlay::Text { title: t!("tui-help-title"), body: help() }),
             ["quit"] => self.quit = true,
             ["invite", name] => {
                 let link = match requests.call(&Request::Invite { name: name.to_string() }).await? {
                     Reply::Invite { link } => link,
                     Reply::Error { message } => bail!("{message}"),
-                    other => bail!("unexpected reply {other:?}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
                 let qr = qr(&link.to_ascii_uppercase());
                 self.overlay = Some(Overlay::Invite { name: name.to_string(), link, qr });
@@ -319,28 +327,28 @@ impl App {
                 let code = match requests.call(&Request::InviteCode { name: name.to_string() }).await? {
                     Reply::Code { code } => code,
                     Reply::Error { message } => bail!("{message}"),
-                    other => bail!("unexpected reply {other:?}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
                 self.codes.push(name.to_string());
                 self.overlay = Some(Overlay::Text {
-                    title: format!("Read this code to {name}"),
+                    title: t!("code-title", name = name),
                     body: vec![
-                        "On a call or in person. It works for 10 minutes.".into(),
+                        t!("code-help"),
                         String::new(),
                         format!("    {}", code.replace('-', "  ")),
                         String::new(),
-                        format!("When {name} types it in, you will both compare a safety number before anything is kept."),
+                        t!("code-after", name = name),
                     ],
                 });
             }
             ["accept", link, name] => self.long(Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
             ["acceptcode", code, name] => self.long(Request::AcceptCode { code: code.to_string(), name: name.to_string() }, updates),
             ["verify"] => {
-                let name = self.conversations.get(self.selected).context("no conversation selected")?.name.clone();
+                let name = self.conversations.get(self.selected).with_context(|| t!("tui-no-selection"))?.name.clone();
                 let number = match requests.call(&Request::Verify { name: name.clone() }).await? {
                     Reply::SafetyNumber { number, .. } => number,
                     Reply::Error { message } => bail!("{message}"),
-                    other => bail!("unexpected reply {other:?}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
                 self.overlay = Some(Overlay::Verify { name, number });
             }
@@ -354,25 +362,25 @@ impl App {
                     [] => u64::MAX,
                     ["1h"] => now_millis() + HOUR,
                     ["8h"] => now_millis() + 8 * HOUR,
-                    _ => bail!("/mute, /mute 1h or /mute 8h"),
+                    _ => bail!(t!("tui-mute-usage")),
                 };
                 let name = self.current()?;
                 self.set_person(&name, |p| p.muted_until = Some(until), requests).await;
-                self.status = if until == u64::MAX { format!("{name} muted until /unmute") } else { format!("{name} muted until {}", clock(until)) };
+                self.status = if until == u64::MAX { t!("tui-muted-forever", name = name) } else { t!("tui-muted-until", name = name, time = clock(until)) };
             }
             ["unmute"] => {
                 let name = self.current()?;
                 self.set_person(&name, |p| p.muted_until = None, requests).await;
-                self.status = format!("notifications from {name} are back on");
+                self.status = t!("tui-unmuted", name = name);
             }
             ["remove"] => self.overlay = Some(Overlay::Remove { name: self.current()? }),
-            _ => bail!("unknown command: /help lists them"),
+            _ => bail!(t!("tui-unknown-command")),
         }
         Ok(())
     }
 
     fn current(&self) -> Result<String> {
-        Ok(self.conversations.get(self.selected).context("no conversation selected")?.name.clone())
+        Ok(self.conversations.get(self.selected).with_context(|| t!("tui-no-selection"))?.name.clone())
     }
 
     /// Changes what we keep about them; the daemon's PersonChanged event
@@ -389,14 +397,14 @@ impl App {
     /// A request that can take minutes runs on its own connection, so the
     /// interface stays usable meanwhile.
     fn long(&mut self, request: Request, updates: &mpsc::UnboundedSender<Update>) {
-        self.status = "looking for them (up to a few minutes)…".into();
+        self.status = t!("tui-looking");
         let (dir, updates) = (self.dir.clone(), updates.clone());
         tokio::spawn(async move {
             let status = match Client::connect(&dir).await {
                 Ok(mut client) => match client.call(&request).await {
-                    Ok(Reply::Added { name }) => format!("{name} added"),
+                    Ok(Reply::Added { name }) => t!("added", name = name),
                     Ok(Reply::Error { message }) => message,
-                    Ok(other) => format!("unexpected reply {other:?}"),
+                    Ok(other) => t!("err-unexpected", reply = format!("{other:?}")),
                     Err(e) => format!("{e:#}"),
                 },
                 Err(e) => format!("{e:#}"),
@@ -409,7 +417,7 @@ impl App {
         match update {
             Update::Done(status) => self.status = status,
             Update::DaemonGone => {
-                self.status = "the daemon stopped".into();
+                self.status = t!("daemon-stopped");
                 self.quit = true;
             }
             Update::Event(Event::Message { from, id, time, text }) => {
@@ -424,7 +432,7 @@ impl App {
                         c.unread += 1;
                         if c.person.muted_until.is_none_or(|until| until <= now_millis()) {
                             // The name, never the text: a notification can show on a locked screen.
-                            self.notify = Some(format!("Message from {from}"));
+                            self.notify = Some(t!("notify-from", name = from));
                         }
                     }
                 }
@@ -456,21 +464,21 @@ impl App {
                 }
             }
             Update::Event(Event::ContactAdded { name }) => {
-                self.status = format!("{name} is now a contact");
+                self.status = t!("now-contact", name = name);
                 if let Err(e) = self.reload_contacts(requests).await {
                     self.status = format!("{e:#}");
                 }
             }
             Update::Event(Event::ContactRenamed { name, to }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
-                    self.status = format!("{name} is now {to}");
+                    self.status = t!("tui-renamed", name = name, to = to);
                     c.name = to;
                 }
             }
             Update::Event(Event::ContactRemoved { name }) => {
                 self.conversations.retain(|c| c.name != name);
                 self.selected = self.selected.min(self.conversations.len().saturating_sub(1));
-                self.status = format!("{name} removed");
+                self.status = t!("removed", name = name);
             }
             Update::Event(Event::PersonChanged { name, person }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
@@ -480,13 +488,13 @@ impl App {
             // The route is the graphical interface's.
             Update::Event(Event::Network { .. } | Event::Link { .. } | Event::ReadReceipts { .. }) => {}
             Update::Event(Event::Fingerprint { name, safety_number }) => {
-                self.notify = Some(format!("{name} used your invitation"));
+                self.notify = Some(t!("notify-used-invite", name = name));
                 self.overlay = Some(if self.codes.contains(&name) {
                     Overlay::Confirm { name, number: safety_number }
                 } else {
                     Overlay::Text {
-                        title: format!("Waiting for {name} to confirm"),
-                        body: [vec![format!("Read this safety number to {name}. They check that it matches theirs:"), String::new()], number_lines(&safety_number)].concat(),
+                        title: t!("waiting-title", name = name),
+                        body: [vec![t!("waiting-help", name = name), String::new()], number_lines(&safety_number)].concat(),
                     }
                 });
             }
@@ -497,7 +505,7 @@ impl App {
         let contacts = match requests.call(&Request::Contacts).await? {
             Reply::Contacts { contacts } => contacts,
             Reply::Error { message } => bail!("{message}"),
-            other => bail!("unexpected reply {other:?}"),
+            other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
         };
         for c in contacts {
             if !self.conversations.iter().any(|known| known.name == c.name) {
@@ -505,7 +513,7 @@ impl App {
                 let messages = match requests.call(&Request::History { name: c.name.clone(), limit: HISTORY }).await? {
                     Reply::History { messages } => messages,
                     Reply::Error { message } => bail!("{message}"),
-                    other => bail!("unexpected reply {other:?}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
                 self.conversations.push(Conversation { name: c.name, person: c.person, unread: 0, messages, loaded: true });
             }
@@ -528,7 +536,7 @@ impl App {
                     c.loaded = true;
                 }
                 Ok(Reply::Error { message }) => self.status = message,
-                Ok(other) => self.status = format!("unexpected reply {other:?}"),
+                Ok(other) => self.status = t!("err-unexpected", reply = format!("{other:?}")),
                 Err(e) => self.status = format!("{e:#}"),
             }
         }
@@ -542,7 +550,7 @@ impl App {
         match requests.call(&Request::MarkRead { name: c.name.clone() }).await {
             Ok(Reply::Done) => {}
             Ok(Reply::Error { message }) => self.status = message,
-            Ok(other) => self.status = format!("unexpected reply {other:?}"),
+            Ok(other) => self.status = t!("err-unexpected", reply = format!("{other:?}")),
             Err(e) => self.status = format!("{e:#}"),
         }
     }
@@ -598,7 +606,7 @@ impl App {
         let (row, col) = cursor_at(&self.input, self.cursor, text_width as usize);
         let first = row.saturating_sub(input_lines as usize - 1);
         if self.input.is_empty() {
-            let hint = current.map_or("Type /help".to_string(), |c| format!("Write to {}", c.name));
+            let hint = current.map_or_else(|| t!("tui-type-help"), |c| t!("write-to", name = c.name));
             frame.render_widget(Paragraph::new(Span::styled(hint, DIM)), text);
         } else {
             let visible: Vec<Line> = wrap(&self.input, text_width as usize).into_iter().skip(first).map(Line::from).collect();
@@ -607,7 +615,8 @@ impl App {
         if self.overlay.is_none() {
             frame.set_cursor_position(Position::new(text.x + col as u16, text.y + (row - first) as u16));
         }
-        let status_text = if self.status.is_empty() { "Enter sends, Alt+Enter starts a new line, Tab changes conversation" } else { self.status.as_str() };
+        let keys_hint = t!("tui-keys-hint");
+        let status_text = if self.status.is_empty() { keys_hint.as_str() } else { self.status.as_str() };
         frame.render_widget(Paragraph::new(Span::styled(status_text, DIM)), margin(status));
 
         match &self.overlay {
@@ -618,7 +627,7 @@ impl App {
                     qr.iter().map(|l| Line::from(l.as_str())).collect()
                 } else {
                     vec![Line::styled(
-                        format!("The QR code needs a {}×{} terminal: enlarge it, or copy the link.", qr_width + 6, qr.len() + 10),
+                        t!("tui-qr-too-small", width = qr_width + 6, height = qr.len() + 10),
                         Style::new().fg(INK_SOFT),
                     )]
                 };
@@ -626,45 +635,45 @@ impl App {
                     Line::default(),
                     Line::from(link.as_str()),
                     Line::default(),
-                    Line::styled(format!("Give it to {name} only. It works once, for 7 days. c copies the link."), Style::new().fg(INK_SOFT)),
+                    Line::styled(t!("tui-invite-help", name = name), Style::new().fg(INK_SOFT)),
                 ]);
-                popup(frame, &format!("An invitation for {name}"), lines);
+                popup(frame, &t!("invite-title", name = name), lines);
             }
             Some(Overlay::Confirm { name, number }) => {
-                let mut lines = vec![Line::from("Ask them to read their safety number aloud. Yours is:"), Line::default()];
+                let mut lines = vec![Line::from(t!("confirm-help")), Line::default()];
                 lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, Style::new().add_modifier(Modifier::BOLD))));
                 lines.extend([
                     Line::default(),
-                    Line::styled(format!("Keep them only if every digit matches. Otherwise it is not {name}."), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
+                    Line::styled(t!("confirm-warning", name = name), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
                     Line::default(),
-                    Line::from("y  the digits match, keep them"),
-                    Line::from("n  they differ, turn down"),
+                    Line::from(t!("tui-confirm-keep")),
+                    Line::from(t!("tui-confirm-refuse")),
                 ]);
-                popup(frame, &format!("Someone used your code for {name}"), lines);
+                popup(frame, &t!("confirm-title", name = name), lines);
             }
             Some(Overlay::Verify { name, number }) => {
                 let mut lines = vec![
-                    Line::from("Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between."),
+                    Line::from(t!("safety-help")),
                     Line::default(),
                 ];
                 lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, Style::new().add_modifier(Modifier::BOLD))));
                 lines.extend([
                     Line::default(),
-                    Line::styled(format!("If even one digit differs, it is not {name} at the other end."), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
+                    Line::styled(t!("safety-warning", name = name), Style::new().fg(POST_ON_PAPER).add_modifier(Modifier::BOLD)),
                     Line::default(),
-                    Line::from("y  they match, mark as verified"),
+                    Line::from(t!("tui-verify-yes")),
                 ]);
-                popup(frame, &format!("Safety number with {name}"), lines);
+                popup(frame, &t!("safety-label", name = name), lines);
             }
             Some(Overlay::Remove { name }) => popup(
                 frame,
-                &format!("Remove {name}?"),
+                &t!("remove-title", name = name),
                 vec![
-                    Line::from(format!("{name} can no longer reach you or see when you are online. To talk again, one of you sends a new invitation.")),
+                    Line::from(t!("remove-help", name = name)),
                     Line::default(),
-                    Line::from("y    remove, keep the conversation on this computer"),
-                    Line::styled("w    remove and delete the conversation", Style::new().fg(POST_ON_PAPER)),
-                    Line::from("n    keep them"),
+                    Line::from(t!("tui-remove-keep")),
+                    Line::styled(t!("tui-remove-wipe"), Style::new().fg(POST_ON_PAPER)),
+                    Line::from(t!("tui-remove-no")),
                 ],
             ),
             None => {}
@@ -690,9 +699,9 @@ impl App {
                 Span::styled(format!(" {when} "), row.fg(LAMP)),
             ]));
             let preview = match last {
-                Some(m) if m.outgoing => format!("You: {}", m.text.lines().next().unwrap_or_default()),
+                Some(m) if m.outgoing => t!("preview-you", text = m.text.lines().next().unwrap_or_default()),
                 Some(m) => m.text.lines().next().unwrap_or_default().to_string(),
-                None => "No messages yet".into(),
+                None => t!("no-messages"),
             };
             let count = if c.unread > 0 { format!(" {} ", c.unread) } else { String::new() };
             let preview_style = if c.unread > 0 { row.fg(ONIONSKIN) } else { row.fg(LAMP) };
@@ -741,9 +750,9 @@ fn slips(messages: &[HistoryItem], width: usize) -> Vec<Line<'static>> {
         let run_ends = messages.get(i + 1).is_none_or(|n| n.outgoing != m.outgoing || n.time.saturating_sub(m.time) > 5 * 60_000 || date(n.time) != day);
         if run_ends || pending {
             let meta = match (m.outgoing, pending, m.read) {
-                (true, true, _) => format!("{} ○ not delivered yet", clock(m.time)),
-                (true, false, false) => format!("{} ✓✓", clock(m.time)),
-                (true, false, true) => format!("{} ✓✓ read", clock(m.time)),
+                (true, true, _) => t!("tui-not-delivered", time = clock(m.time)),
+                (true, false, false) => t!("tui-delivered", time = clock(m.time)),
+                (true, false, true) => t!("tui-read", time = clock(m.time)),
                 (false, ..) => clock(m.time),
             };
             lines.push(Line::styled(meta, DIM).alignment(align));
@@ -759,7 +768,7 @@ fn popup(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line>) {
     let area = frame.area();
     let mut all = vec![Line::styled(title.to_string(), Style::new().add_modifier(Modifier::BOLD)), Line::default()];
     all.extend(lines);
-    all.extend([Line::default(), Line::styled("Esc closes", Style::new().fg(INK_SOFT))]);
+    all.extend([Line::default(), Line::styled(t!("tui-esc-closes"), Style::new().fg(INK_SOFT))]);
     let width = (all.iter().map(Line::width).max().unwrap_or(0) as u16 + 6).min(area.width);
     let paragraph = Paragraph::new(all).wrap(Wrap { trim: false });
     let height = (paragraph.line_count(width.saturating_sub(6)) as u16 + 2).min(area.height);
@@ -905,7 +914,7 @@ fn expect_done(reply: Result<Reply>) -> Result<()> {
     match reply? {
         Reply::Done => Ok(()),
         Reply::Error { message } => bail!("{message}"),
-        other => bail!("unexpected reply {other:?}"),
+        other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
     }
 }
 
@@ -921,10 +930,12 @@ fn today() -> Option<jiff::Zoned> {
 fn day_label(millis: u64) -> String {
     let (Some(then), Some(today)) = (zoned(millis), today()) else { return String::new() };
     match (today.date() - then.date()).get_days() {
-        0 => "Today".into(),
-        1 => "Yesterday".into(),
-        _ if then.year() == today.year() => then.strftime("%A %-d %B").to_string(),
-        _ => then.strftime("%-d %B %Y").to_string(),
+        0 => t!("today"),
+        1 => t!("yesterday"),
+        _ if then.year() == today.year() => {
+            t!("date-this-year", weekday = i18n::weekday(then.weekday().to_monday_one_offset(), false), day = then.day(), month = i18n::month(then.month(), false))
+        }
+        _ => t!("date-other-year", day = then.day(), month = i18n::month(then.month(), false), year = then.year()),
     }
 }
 
@@ -933,9 +944,9 @@ fn short_time(millis: u64) -> String {
     let (Some(then), Some(today)) = (zoned(millis), today()) else { return String::new() };
     match (today.date() - then.date()).get_days() {
         0 => then.strftime("%H:%M").to_string(),
-        1 => "Yesterday".into(),
-        2..=6 => then.strftime("%a").to_string(),
-        _ => then.strftime("%-d %b").to_string(),
+        1 => t!("yesterday"),
+        2..=6 => i18n::weekday(then.weekday().to_monday_one_offset(), true),
+        _ => t!("date-short", day = then.day(), month = i18n::month(then.month(), true)),
     }
 }
 
