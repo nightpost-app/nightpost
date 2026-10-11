@@ -2,7 +2,6 @@
 Type=Application
 Name=Nightpost
 Comment=Messages over Tor, with no server in the middle
-Comment[fr]=Messagerie par Tor, sans serveur au milieu
 Exec=nightpost-gui
 Icon=io.github.nightpost-app.Nightpost
 Terminal=false
