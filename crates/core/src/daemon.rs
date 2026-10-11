@@ -31,10 +31,11 @@ use zeroize::Zeroizing;
 use crate::api::{ContactInfo, Event, HistoryItem, LinkState, MAX_PHOTO, Network, Person, hex};
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
-use crate::invite::{self, Code, CodeError, Invite};
+use crate::invite::{self, Code, CodeError, Invite, InviteError};
 use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service};
 use crate::session::{self, WireBundle};
 use crate::store::Store;
+use crate::t;
 use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_key, onion};
 
 /// v1 has one device per account.
@@ -229,8 +230,16 @@ impl<T: Transport + 'static> Daemon<T> {
     /// Uses `link` to become the inviter's contact, known here as `name`.
     pub async fn accept(self: &Rc<Self>, link: &str, name: &str) -> Result<()> {
         self.check_name(name)?;
-        let invite = Invite::parse(link, now_secs()).map_err(|e| anyhow::anyhow!("invitation: {e:?}"))?;
-        ensure!(self.contact(&invite.identity.serialize())?.is_none(), "already a contact");
+        let invite = Invite::parse(link, now_secs()).map_err(|e| {
+            anyhow::anyhow!(match e {
+                InviteError::NotAnInvite => t!("err-invite-not"),
+                InviteError::Version => t!("err-invite-version"),
+                InviteError::Malformed => t!("err-invite-malformed"),
+                InviteError::BadSignature => t!("err-invite-signature"),
+                InviteError::Expired => t!("err-invite-expired"),
+            })
+        })?;
+        ensure!(self.contact(&invite.identity.serialize())?.is_none(), t!("err-already-contact"));
         self.net.present(invite.onion, &Secret::new(invite.discovery))?;
 
         let (mut stream, _) = self.dial_until(&[invite.onion]).await?;
@@ -250,7 +259,7 @@ impl<T: Transport + 'static> Daemon<T> {
     /// uses it is kept only once [`Daemon::confirm`]ed.
     pub async fn invite_code(self: &Rc<Self>, name: &str) -> Result<String> {
         self.check_name(name)?;
-        ensure!(!self.confirming.borrow().contains_key(name), "a code for {name} is already waiting");
+        ensure!(!self.confirming.borrow().contains_key(name), t!("err-code-waiting", name = name));
         let code = Code::generate();
         let window = invite::window(now_secs());
         let derive = code.clone();
@@ -280,7 +289,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let me = self.me();
         let hello: Hello = timeout(STEP, proto::receive(&mut stream)).await??;
         let (service, challenge) = Service::on_hello(&me, temp, hello).map_err(handshake)?;
-        ensure!(self.contact(&service.hello().account)?.is_none(), "already a contact");
+        ensure!(self.contact(&service.hello().account)?.is_none(), t!("err-already-contact"));
         proto::send(&mut stream, &challenge).await?;
         let proof: Proof = timeout(STEP, proto::receive(&mut stream)).await??;
         let peer = service.on_proof(&proof, None).map_err(handshake)?;
@@ -291,7 +300,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let _ = self.events.send(Event::Fingerprint { name: name.into(), safety_number: self.safety_number(&contact)? });
         let kept = timeout(CODE_LIFETIME, kept).await;
         self.confirming.borrow_mut().remove(name);
-        ensure!(matches!(kept, Ok(Ok(true))), "not confirmed");
+        ensure!(matches!(kept, Ok(Ok(true))), t!("err-not-confirmed"));
 
         self.add_contact(&contact, &bundle, peer.device).await?;
         proto::send(&mut stream, &Frame::Welcome).await?;
@@ -301,7 +310,7 @@ impl<T: Transport + 'static> Daemon<T> {
 
     /// Keeps, or turns down, whoever used the code given to `name`.
     pub fn confirm(&self, name: &str, keep: bool) -> Result<()> {
-        let waiting = self.confirming.borrow_mut().remove(name).context("nobody is waiting under that name")?;
+        let waiting = self.confirming.borrow_mut().remove(name).with_context(|| t!("err-nobody-waiting"))?;
         let _ = waiting.send(keep);
         Ok(())
     }
@@ -311,8 +320,8 @@ impl<T: Transport + 'static> Daemon<T> {
     pub async fn accept_code(self: &Rc<Self>, code: &str, name: &str) -> Result<()> {
         self.check_name(name)?;
         let code = Code::parse(code).map_err(|e| match e {
-            CodeError::Length => anyhow::anyhow!("a code is 12 digits"),
-            CodeError::Typo => anyhow::anyhow!("this code has a typo: one digit is wrong or two are swapped"),
+            CodeError::Length => anyhow::anyhow!(t!("err-code-length")),
+            CodeError::Typo => anyhow::anyhow!(t!("err-code-typo")),
         })?;
         let windows = invite::windows(now_secs());
         let keys = tokio::task::spawn_blocking(move || windows.map(|w| code.derive(w))).await?;
@@ -327,13 +336,13 @@ impl<T: Transport + 'static> Daemon<T> {
         proto::send(&mut stream, caller.hello()).await?;
         let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
         let (proof, peer) = caller.on_challenge_by_code(&me, &challenge).map_err(handshake)?;
-        ensure!(self.contact(&peer.account.serialize())?.is_none(), "already a contact");
+        ensure!(self.contact(&peer.account.serialize())?.is_none(), t!("err-already-contact"));
         proto::send(&mut stream, &proof).await?;
         let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
         let _ = self.events.send(Event::Fingerprint { name: name.into(), safety_number: self.safety_number(&contact)? });
         match timeout(CODE_LIFETIME, proto::receive::<Frame>(&mut stream)).await {
             Ok(Ok(Frame::Welcome)) => {}
-            _ => bail!("{name} did not confirm"),
+            _ => bail!(t!("err-did-not-confirm", name = name)),
         }
         self.add_contact(&contact, &bundle, peer.device).await?;
         spawn_local(self.clone().link(stream, contact, peer.device));
@@ -352,7 +361,7 @@ impl<T: Transport + 'static> Daemon<T> {
                     Err(_) => tracing::info!("not reachable yet: timeout"),
                 }
             }
-            ensure!(started.elapsed() < ACCEPT_DEADLINE, "not found in 5 minutes: is their Nightpost running?");
+            ensure!(started.elapsed() < ACCEPT_DEADLINE, t!("err-not-found"));
             sleep(RETRY).await;
         }
     }
@@ -360,7 +369,7 @@ impl<T: Transport + 'static> Daemon<T> {
     /// Queues `text` for every device of `to`; returns the message id.
     pub fn send(&self, to: &str, text: &str) -> Result<[u8; 16]> {
         ensure!(!text.is_empty() && text.len() <= MAX_TEXT, "a message is 1 to {MAX_TEXT} bytes");
-        let contact = self.contacts_raw()?.into_iter().find(|c| c.name == to).context("no such contact")?;
+        let contact = self.contacts_raw()?.into_iter().find(|c| c.name == to).with_context(|| t!("err-no-contact"))?;
         let devices = self.devices_of(&contact)?;
         let id: [u8; 16] = OsRng.unwrap_err().random();
         let time = now_millis();
@@ -835,7 +844,7 @@ impl<T: Transport + 'static> Daemon<T> {
     }
 
     fn contact_named(&self, name: &str) -> Result<Contact> {
-        self.contacts_raw()?.into_iter().find(|c| c.name == name).context("no such contact")
+        self.contacts_raw()?.into_iter().find(|c| c.name == name).with_context(|| t!("err-no-contact"))
     }
 
     fn contacts_raw(&self) -> Result<Vec<Contact>> {
@@ -870,7 +879,7 @@ impl<T: Transport + 'static> Daemon<T> {
             !name.trim().is_empty() && name.chars().count() <= MAX_NAME && !name.chars().any(char::is_control),
             "a name is 1 to {MAX_NAME} characters, without control characters"
         );
-        ensure!(self.contacts_raw()?.iter().all(|c| c.name != name), "{name} is already a contact");
+        ensure!(self.contacts_raw()?.iter().all(|c| c.name != name), t!("err-name-taken", name = name));
         Ok(())
     }
 }

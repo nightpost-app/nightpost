@@ -17,6 +17,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::daemon::Daemon;
 use crate::store::Store;
+use crate::t;
 use crate::transport::Transport;
 
 /// No request is anywhere near this; it bounds what a stranger can make the
@@ -236,7 +237,7 @@ pub async fn serve_starting(listener: Listener, bridges: BridgeLines, ready: tok
             while let Ok(Some(line)) = read_line(&mut lines).await {
                 let reply = match serde_json::from_str::<Request>(&line) {
                     Ok(Request::Bridges { lines }) => bridges.answer(lines).unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
-                    Ok(_) => Reply::Error { message: "starting: Tor is not up yet".into() },
+                    Ok(_) => Reply::Error { message: t!("err-starting") },
                     Err(e) => Reply::Error { message: format!("bad request: {e}") },
                 };
                 if write_line(&mut send, &reply).await.is_err() {
@@ -353,7 +354,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
         Request::Contacts => Reply::Contacts { contacts: daemon.contacts()? },
         Request::History { name, limit } => Reply::History { messages: daemon.history(&name, limit.min(1000))? },
         Request::Verify { name } => {
-            let number = daemon.contacts()?.into_iter().find(|c| c.name == name).context("no such contact")?.safety_number;
+            let number = daemon.contacts()?.into_iter().find(|c| c.name == name).with_context(|| t!("err-no-contact"))?.safety_number;
             Reply::SafetyNumber { name, number }
         }
         Request::Status => Reply::Status { network: daemon.network(), links: daemon.links() },

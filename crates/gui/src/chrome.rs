@@ -7,6 +7,8 @@ use dioxus::desktop::window;
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
 
+use nightpost_core::t;
+
 use crate::State;
 
 /// For a top row's empty part: pressed, it moves the window; double-clicked,
@@ -51,14 +53,14 @@ pub fn Chrome() -> Element {
             }
         }
         div { class: "window-controls",
-            button { title: "Minimise", "aria-label": "Minimise", onclick: move |_| window().set_minimized(true),
+            button { title: t!("minimise"), "aria-label": t!("minimise"), onclick: move |_| window().set_minimized(true),
                 svg { width: "16", height: "16", view_box: "0 0 16 16", fill: "none", stroke: "currentColor", stroke_width: "1.6", stroke_linecap: "round", "aria-hidden": "true",
                     path { d: "M3.5 8.5h9" }
                 }
             }
             button {
-                title: if maximized { "Restore" } else { "Maximise" },
-                "aria-label": if maximized { "Restore" } else { "Maximise" },
+                title: if maximized { t!("restore") } else { t!("maximise") },
+                "aria-label": if maximized { t!("restore") } else { t!("maximise") },
                 onclick: toggle_maximized,
                 svg { width: "16", height: "16", view_box: "0 0 16 16", fill: "none", stroke: "currentColor", stroke_width: "1.6", stroke_linejoin: "round", "aria-hidden": "true",
                     if maximized {
@@ -71,8 +73,8 @@ pub fn Chrome() -> Element {
             }
             button {
                 class: "quit",
-                title: "Close",
-                "aria-label": "Close",
+                title: t!("close"),
+                "aria-label": t!("close"),
                 onclick: move |_| {
                     // Closing from here is not the system's close request,
                     // which the app listens to: the choice is honoured here.

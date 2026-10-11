@@ -4,6 +4,7 @@
 pub mod api;
 pub mod daemon;
 pub mod dbkey;
+pub mod i18n;
 pub mod identity;
 pub mod invite;
 pub mod proto;

@@ -1,0 +1,314 @@
+# Nightpost, français.
+# Un message par ligne ; { $name } est rempli par le programme.
+
+## Dates
+
+today = Aujourd’hui
+yesterday = Hier
+date-this-year = { $weekday } { $day } { $month }
+date-other-year = { $day } { $month } { $year }
+date-short = { $day } { $month }
+weekday-1 = lundi
+weekday-2 = mardi
+weekday-3 = mercredi
+weekday-4 = jeudi
+weekday-5 = vendredi
+weekday-6 = samedi
+weekday-7 = dimanche
+month-1 = janvier
+month-2 = février
+month-3 = mars
+month-4 = avril
+month-5 = mai
+month-6 = juin
+month-7 = juillet
+month-8 = août
+month-9 = septembre
+month-10 = octobre
+month-11 = novembre
+month-12 = décembre
+month-short-1 = janv.
+month-short-2 = févr.
+month-short-3 = mars
+month-short-4 = avr.
+month-short-5 = mai
+month-short-6 = juin
+month-short-7 = juil.
+month-short-8 = août
+month-short-9 = sept.
+month-short-10 = oct.
+month-short-11 = nov.
+month-short-12 = déc.
+
+## Tor, tel que le daemon le décrit (« Tor: » reste tel quel : l’interface le reconnaît)
+
+tor-percent = Tor: { $percent } %
+tor-stuck = Tor: bloqué ? { $why }
+tor-error = Tor: { $error }
+tor-switch-failed = Tor: le changement a échoué : { $error }
+tor-reconnecting = Tor: reconnexion…
+tor-reconnecting-bridges = Tor: reconnexion par les ponts…
+tor-to-bridge = Tor: bloqué sur ce réseau ? Passage par un pont…
+tor-from-bridge = Tor: le pont ne passe pas ; essai sans lui…
+
+## Les réponses du daemon
+
+err-starting = Tor n’est pas encore prêt : réessaie dans un instant.
+err-already-contact = Déjà dans tes contacts.
+err-name-taken = { $name } est déjà dans tes contacts.
+err-code-waiting = Un code pour { $name } attend déjà.
+err-not-confirmed = Pas confirmé.
+err-did-not-confirm = { $name } n’a pas confirmé.
+err-nobody-waiting = Personne n’attend sous ce nom.
+err-code-length = Un code fait 12 chiffres.
+err-code-typo = Ce code contient une faute de frappe : un chiffre est faux ou deux sont inversés.
+err-not-found = Introuvable en 5 minutes : son Nightpost est-il ouvert ?
+err-no-contact = Ce contact n’existe pas.
+err-invite-not = Ce n’est pas une invitation Nightpost.
+err-invite-version = Cette invitation vient d’une autre version de Nightpost : l’un de vous doit mettre à jour.
+err-invite-malformed = Cette invitation est incomplète ou mal recopiée.
+err-invite-signature = Cette invitation a été modifiée.
+err-invite-expired = Cette invitation a expiré : demandes-en une nouvelle.
+err-passphrase-keychain = Sans trousseau, la phrase de passe ne peut pas être changée ici.
+err-passphrase-empty = Une phrase de passe vide ne protège rien.
+err-passphrase-wrong = Ce n’est pas la phrase de passe actuelle.
+err-unexpected = Réponse inattendue : { $reply }
+
+## Démarrage
+
+connecting-daemon = Connexion au daemon…
+starting = Démarrage…
+restarting-update = Redémarrage de Nightpost après la mise à jour…
+daemon-stopped = Le daemon s’est arrêté. Rouvre Nightpost pour le relancer.
+daemon-silent = Le daemon de Nightpost ne répond pas : { $error }
+bridges-button = Tor bloqué ici ? Ponts
+unlock-prompt = Ta phrase de passe ouvre tes messages.
+unlock = Déverrouiller
+wrong-passphrase = Cette phrase de passe ne les ouvre pas. Réessaie.
+
+## Fenêtre
+
+minimise = Réduire
+maximise = Agrandir
+restore = Restaurer
+close = Fermer
+show-list = Afficher la liste
+hide-list = Masquer la liste
+
+## La liste des personnes
+
+reachable-count = { $reachable } sur { $total } en ligne
+preview-you = Toi : { $text }
+no-messages = Pas encore de message
+add-someone = Ajouter quelqu’un
+settings = Réglages
+net-blocked = Tor ne passe pas
+net-connecting = Connexion à Tor
+net-bridged = Par un pont
+net-bridged-help = Ce réseau ne voit pas que tu utilises Tor.
+net-connected = Connecté à Tor
+net-connected-help = Les messages passent par trois relais avant d’arriver.
+
+## Le trajet
+
+route-label = Trajet vers { $name }
+step-you = Toi
+step-computer = Ton ordinateur
+step-computer-help = Les messages sont verrouillés ici avant de partir. Seul l’appareil de { $name } peut les ouvrir.
+step-entrance = Entrée
+step-private-entrance = Entrée privée
+step-bridge-help = Un pont : une entrée dans Tor absente de la liste publique, que ce réseau ne sait donc pas reconnaître.
+step-guard-help = Le premier relais Tor. Il voit ton adresse, jamais où vont les messages.
+step-relay = Relais
+step-relay-1-help = Gardé des semaines : il protège ton côté du trajet. Il ne peut pas lire le message.
+step-relay-2-help = Change toutes les quelques heures. Il ne sait ni qui écrit, ni à qui.
+step-meeting = Point de rendez-vous
+step-meeting-help = Là où ton trajet et celui de { $name } se rejoignent. Aucun de vous n’apprend où est l’autre.
+step-device-help = L’appareil de { $name }, le seul qui peut ouvrir tes messages.
+reaching = Recherche de { $name }…
+connecting-percent = Connexion à Tor, { $percent } %
+link-open = Connecté
+link-idle = Joignable
+link-away = Injoignable pour l’instant
+link-unknown = Joint quand tu écris
+
+## La conversation
+
+empty-title = Personne pour l’instant
+empty-help = Nightpost ne relie que des gens qui se connaissent. Envoie à quelqu’un un lien à usage unique, ou lis-lui un code au téléphone.
+waiting-reachable = Sera envoyé dès que { $name } sera joignable
+sending = Envoi…
+about-name = À propos de { $name }
+verified = Vérifié
+verified-title = Numéro de sécurité comparé
+verified-help = Vous avez lu les mêmes chiffres : c’est bien { $name }.
+muted = En sourdine
+muted-until = En sourdine jusqu’à { $time }
+muted-help = Les messages de { $name } arrivent toujours, sans notification.
+read = Lu
+delivered = Distribué
+message-to = Message à { $name }
+write-to = Écrire à { $name }
+send = Envoyer
+notify-from = Message de { $name }
+notify-new = Nouveau message
+notify-used-invite = { $name } a utilisé ton invitation
+now-contact = { $name } est maintenant dans tes contacts
+added = { $name } ajouté
+kept = { $name } gardé
+turned-down = { $name } refusé
+removed = { $name } retiré
+
+## Ajouter quelqu’un
+
+add-title = Ajouter quelqu’un
+add-name-label = Son nom, tel que tu le verras
+add-name-placeholder = Alice
+create-link = Créer un lien
+create-code = Créer un code à lire
+add-use-label = Ou utilise ce qu’on t’a donné : un lien, ou le code qu’on t’a lu
+use-it = Utiliser
+cancel = Annuler
+need-name = Donne-lui d’abord un nom.
+need-name-top = Donne-lui d’abord un nom, en haut.
+need-given = Colle son lien, ou tape le code qu’on t’a lu.
+looking-title = Recherche de { $name }…
+looking-tor = En attente de Tor ({ $percent } %) avant de chercher.
+looking-help = Tor est connecté. Le Nightpost de { $name } doit être ouvert ; le trouver peut prendre jusqu’à 5 minutes.
+looking-close = Fermer ceci ne l’arrête pas : { $name } apparaîtra dans ta liste une fois trouvé.
+invite-title = Une invitation pour { $name }
+invite-help = Donne-la à { $name } seulement, par un moyen de confiance. Elle sert une fois, pendant 7 jours.
+invite-qr = QR code de l’invitation
+invite-link = Lien d’invitation
+copy-link = Copier le lien
+copy-code = Copier le code
+copied = Copié
+done = Terminé
+hide = Masquer
+code-title = Lis ce code à { $name }
+code-help = Au téléphone ou en personne. Il est valable 10 minutes.
+code-after = Quand { $name } l’aura tapé, vous comparerez un numéro de sécurité avant que quoi que ce soit soit gardé.
+confirm-title = Quelqu’un a utilisé ton code pour { $name }
+confirm-help = Demande-lui de lire son numéro de sécurité à voix haute. Le tien est :
+confirm-warning = Garde ce contact seulement si chaque chiffre correspond. Sinon, ce n’est pas { $name }.
+digits-match = Les chiffres correspondent
+digits-differ = Ils diffèrent, refuser
+waiting-title = En attente de { $name }
+waiting-help = Lis ce numéro de sécurité à { $name }, qui vérifie qu’il correspond au sien :
+waiting-after = { $name } sera ajouté dès sa confirmation.
+
+## Numéro de sécurité
+
+safety-label = Numéro de sécurité avec { $name }
+safety-title = Ton numéro de sécurité avec { $name }
+safety-help = Lisez-le-vous au téléphone ou en personne. Les mêmes chiffres des deux côtés veulent dire que personne ne s’est glissé entre vous.
+they-match = Ils correspondent
+not-now = Pas maintenant
+safety-warning = Si un seul chiffre diffère, ce n’est pas { $name } à l’autre bout : ne le marque pas.
+
+## Le panneau d’une personne
+
+change-photo = Changer la photo
+choose-photo = Choisir une photo
+use-rings = Utiliser les anneaux
+photo-help = La photo reste sur cet ordinateur. { $name } ne la voit jamais.
+photo-failed = Cette image n’a pas pu être utilisée : { $error }
+photo-too-big = Ce fichier dépasse 30 Mo.
+photo-too-detailed = Cette image est trop détaillée pour être gardée.
+name = Nom
+rename = Renommer
+name-help = Toi seul vois ce nom.
+safety-number = Numéro de sécurité
+not-compared = Pas encore comparé
+compared-help = Tu l’as comparé avec { $name } en personne ou au téléphone.
+compare-help = Compare-le une fois avec { $name } pour être sûr que personne ne s’est glissé entre vous.
+compare = Comparer le numéro de sécurité
+notifications-from = Notifications de { $name }
+mute-on = Activées
+mute-1h = 1 heure
+mute-8h = 8 heures
+mute-off = Coupées
+mute-on-help = Une notification pour chaque message de { $name }.
+mute-off-help = Aucune notification de { $name } tant que tu ne les réactives pas. Les messages arrivent toujours.
+mute-until-help = Silence jusqu’à { $time }, puis réactivées.
+remove-title = Retirer { $name } ?
+remove-help = { $name } ne pourra plus te joindre ni voir quand tu es en ligne. Pour reparler, l’un de vous enverra une nouvelle invitation.
+remove-wipe = Supprimer aussi la conversation de cet ordinateur
+remove = Retirer
+remove-name = Retirer { $name }
+
+## Réglages
+
+back = Retour à la conversation
+settings-sections = Sections des réglages
+appearance = Apparence
+network = Réseau
+notifications = Notifications
+security = Sécurité
+about = À propos
+theme = Thème
+theme-system = Comme le système
+theme-dark = Sombre
+theme-light = Clair
+theme-help = « Comme le système » suit le mode clair ou sombre de ton ordinateur, et change avec lui.
+connection = Connexion
+bridges = Ponts
+bridges-help = Certains réseaux (Wi-Fi de fac ou de bureau) bloquent Tor. Nightpost passe alors par un pont, une entrée absente de la liste publique.
+bridges-builtin = Intégrés, si besoin
+bridges-builtin-help = Snowflake, rien à régler. Utilisé seulement si Tor ne passe pas.
+bridges-own = Tes propres ponts
+bridges-own-help = D’un ami, de bridges.torproject.org (WebTunnel passe le plus souvent), ou de ton propre serveur. Utilisés en permanence.
+bridges-lines = Lignes de pont, une par ligne
+bridges-save = Enregistrer les ponts
+bridges-reset = Retour aux ponts intégrés.
+bridges-saved = Ponts enregistrés : Tor se reconnecte par eux.
+notify-show = Afficher les notifications
+notify-show-help = Quand un message arrive et que Nightpost n’est pas au premier plan.
+notify-sound = Jouer un son
+notify-sound-help = Un court carillon à chaque notification.
+notify-history = Garder dans l’historique
+notify-history-help = Désactivé : le système laisse partir chaque notification une fois affichée, au lieu de la garder dans sa liste.
+notify-shows = Ce qu’affiche une notification
+notify-who-what = Qui et quoi
+notify-who = Qui a écrit
+notify-nothing = Rien
+notify-example-name = Léa
+notify-example-text = On se voit à huit heures ?
+notify-locked = Une notification peut s’afficher sur un écran verrouillé.
+need-passphrase = Choisis une phrase de passe.
+passphrases-differ = Les deux phrases de passe diffèrent.
+passphrase-saved = Phrase de passe enregistrée
+passphrase-removed = Phrase de passe retirée
+locked-both = Avec ton trousseau et une phrase de passe
+locked-both-help = Tes messages et tes clés sont chiffrés. Nightpost demande la phrase de passe à chaque démarrage.
+locked-keychain = Avec le trousseau du système
+locked-keychain-help = Tes messages et tes clés sont chiffrés. La clé s’ouvre quand tu te connectes à cet ordinateur.
+leave-lock-help = Les messages n’arrivent plus, et ta phrase de passe est demandée quand tu rouvres Nightpost.
+leave-quit-help = Les messages n’arrivent plus jusqu’à ce que tu rouvres Nightpost. Ajoute une phrase de passe plus haut pour que cela le verrouille.
+how-locked = Comment tes messages sont verrouillés
+passphrase-change = Changer la phrase de passe
+passphrase-remove = Retirer la phrase de passe
+passphrase-add = Ajouter une phrase de passe
+passphrase-current = Phrase de passe actuelle
+passphrase-new = Nouvelle phrase de passe
+passphrase-again = La même, encore
+passphrase-warning = Si tu l’oublies, tes messages sont perdus : personne ne peut la retrouver, même avec cet ordinateur.
+passphrase-remove-help = Le trousseau seul ouvrira de nouveau tes messages.
+passphrase-add-it = Ajouter la phrase de passe
+change-it = La changer
+remove-it = La retirer
+read-receipts = Accusés de lecture
+read-receipts-send = Envoyer des accusés de lecture
+read-receipts-help = Activé : les gens voient quand tu as lu leurs messages, et tu vois quand ils lisent les tiens, s’ils l’ont activé aussi. Désactivé : ni l’un ni l’autre.
+leaving = En partant
+close-locks = Fermer la fenêtre verrouille Nightpost
+close-quits = Fermer la fenêtre quitte Nightpost
+quit-lock = Quitter et verrouiller
+quit = Quitter Nightpost
+tagline = Des messages entre gens qui se connaissent, par Tor, sans serveur au milieu.
+your-data = Tes données
+folder = Dossier
+open-folder = Ouvrir le dossier
+licences = Licences
+licence-bridges = lyrebird (ponts)
+licence-icons = Icônes

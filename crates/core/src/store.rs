@@ -26,6 +26,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use zeroize::Zeroizing;
 
 use crate::dbkey::{MARKER, Secret, Unlock};
+use crate::t;
 
 type Result<T> = std::result::Result<T, SignalProtocolError>;
 
@@ -130,10 +131,10 @@ impl Store {
     /// database tells the interfaces whether to ask for it at start.
     pub fn set_passphrase(&self, current: Option<Zeroizing<Vec<u8>>>, new: Option<Zeroizing<Vec<u8>>>) -> anyhow::Result<()> {
         // Without a keychain the passphrase comes from a file, and is the only key.
-        anyhow::ensure!(self.secret.is_some(), "without a keychain, the passphrase cannot be changed here");
-        anyhow::ensure!(new.as_ref().is_none_or(|p| !p.is_empty()), "an empty passphrase protects nothing");
+        anyhow::ensure!(self.secret.is_some(), t!("err-passphrase-keychain"));
+        anyhow::ensure!(new.as_ref().is_none_or(|p| !p.is_empty()), t!("err-passphrase-empty"));
         let current = Unlock::new(self.secret.clone(), current).expect("has a secret").key(&self.salt);
-        anyhow::ensure!(current == *self.key.borrow(), "that is not the current passphrase");
+        anyhow::ensure!(current == *self.key.borrow(), t!("err-passphrase-wrong"));
         let adding = new.is_some();
         let key = Unlock::new(self.secret.clone(), new).expect("has a secret").key(&self.salt);
         let pragma = Zeroizing::new(format!("PRAGMA rekey = \"x'{}{}'\"", hex(&key[..]), hex(&self.salt)));

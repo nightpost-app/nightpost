@@ -88,6 +88,8 @@ anyhow = "1"
 serde_json = "1"
 interprocess = { version = "2", features = ["tokio"] }
 directories = "6"
+# The system language, for the words shown (i18n.rs), on all three systems.
+sys-locale = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

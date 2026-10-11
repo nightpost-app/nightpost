@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
-use nightpost_core::dbkey;
+use nightpost_core::{dbkey, i18n, t};
 
 mod chrome;
 mod person;
@@ -288,7 +288,7 @@ impl State {
     fn fail(mut self, reply: Result<Reply>) {
         self.status.set(match reply {
             Ok(Reply::Error { message }) => message,
-            Ok(other) => format!("unexpected reply {other:?}"),
+            Ok(other) => t!("err-unexpected", reply = format!("{other:?}")),
             Err(e) => format!("{e:#}"),
         });
     }
@@ -319,8 +319,8 @@ impl State {
                     if prefs.notify && !muted {
                         match (prefs.show_name, prefs.show_text) {
                             (true, true) => notify(&from, &body, prefs),
-                            (true, false) => notify("Nightpost", &format!("Message from {from}"), prefs),
-                            _ => notify("Nightpost", "New message", prefs),
+                            (true, false) => notify("Nightpost", &t!("notify-from", name = from), prefs),
+                            _ => notify("Nightpost", &t!("notify-new"), prefs),
                         }
                     }
                 }
@@ -342,7 +342,7 @@ impl State {
             }
             Event::ReadReceipts { on } => self.read_receipts.set(on),
             Event::ContactAdded { name } => {
-                self.status.set(format!("{name} is now a contact"));
+                self.status.set(t!("now-contact", name = name));
                 if matches!(&*self.dialog.read(), Some(Dialog::Waiting { name: n, .. } | Dialog::Invite { name: n, .. }) if *n == name) {
                     self.dialog.set(None);
                 }
@@ -352,7 +352,7 @@ impl State {
                 });
             }
             Event::Fingerprint { name, safety_number } => {
-                notify("Nightpost", &format!("{name} used your invitation"), *self.prefs.read());
+                notify("Nightpost", &t!("notify-used-invite", name = name), *self.prefs.read());
                 let ours = self.codes.read().contains(&name);
                 self.dialog.set(Some(if ours {
                     Dialog::Confirm { name, number: safety_number }
@@ -403,7 +403,7 @@ impl State {
 #[component]
 fn App() -> Element {
     let mut state = use_context_provider(|| State {
-        phase: Signal::new(Phase::Connecting("Connecting to the daemon…".into())),
+        phase: Signal::new(Phase::Connecting(t!("connecting-daemon"))),
         contacts: Signal::new(Vec::new()),
         unread: Signal::new(HashMap::new()),
         selected: Signal::new(None),
@@ -447,7 +447,7 @@ fn App() -> Element {
     let theme = *state.theme.read();
     rsx! {
         style { {STYLE.as_str()} }
-        div { class: "root", "data-theme": theme.name(), "data-maximized": "{state.maximized}", "data-platform": std::env::consts::OS,
+        div { class: "root", lang: i18n::language(), "data-theme": theme.name(), "data-maximized": "{state.maximized}", "data-platform": std::env::consts::OS,
             if *state.phase.read() != Phase::Ready {
                 div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
             }
@@ -456,7 +456,7 @@ fn App() -> Element {
                     div { class: "splash",
                         p { class: "wordmark", "Nightpost" }
                         p { "{what}" }
-                        button { class: "quiet", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), "Tor blocked here? Bridges" }
+                        button { class: "quiet", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), {t!("bridges-button")} }
                     }
                     DialogView {}
                 },
@@ -488,12 +488,12 @@ fn App() -> Element {
 fn SideToggle() -> Element {
     let mut state = use_context::<State>();
     let hidden = state.prefs.read().side_hidden;
-    let label = if hidden { "Show the list" } else { "Hide the list" };
+    let label = if hidden { t!("show-list") } else { t!("hide-list") };
     rsx! {
         button {
             class: "side-toggle",
-            title: label,
-            "aria-label": label,
+            title: "{label}",
+            "aria-label": "{label}",
             "aria-expanded": if hidden { "false" } else { "true" },
             onclick: move |_| {
                 let p = *state.prefs.peek();
@@ -534,7 +534,7 @@ async fn run(mut state: State, passphrase: Option<String>) {
     while let Ok(Some(event)) = events.event().await {
         state.on_event(event);
     }
-    state.phase.set(Phase::Failed("The daemon stopped. Reopen Nightpost to start it again.".into()));
+    state.phase.set(Phase::Failed(t!("daemon-stopped")));
 }
 
 /// Asks for the passphrase, then starts the daemon with it.
@@ -554,10 +554,10 @@ fn Locked(why: String) -> Element {
     rsx! {
         form { class: "splash", onsubmit: move |e| { e.prevent_default(); unlock(); },
             p { class: "wordmark", "Nightpost" }
-            label { r#for: "passphrase", "Your passphrase opens your messages." }
+            label { r#for: "passphrase", {t!("unlock-prompt")} }
             input { id: "passphrase", class: "name-field", r#type: "password", autofocus: true, value: "{passphrase}", oninput: move |e| passphrase.set(e.value()) }
             if !why.is_empty() { p { class: "warning", "{why}" } }
-            button { class: "primary", r#type: "submit", "Unlock" }
+            button { class: "primary", r#type: "submit", {t!("unlock")} }
         }
     }
 }
@@ -587,7 +587,7 @@ fn Sidebar() -> Element {
         aside {
             div { class: "brand", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized,
                 p { class: "wordmark", "Nightpost" }
-                if !rows.is_empty() { span { class: "reach-count", "{reachable} reachable of {rows.len()}" } }
+                if !rows.is_empty() { span { class: "reach-count", {t!("reachable-count", reachable = reachable, total = rows.len())} } }
             }
             nav {
                 for (name, last) in rows {
@@ -597,9 +597,9 @@ fn Sidebar() -> Element {
                         if !in_settings && selected.as_deref() == Some(name.as_str()) { class.push_str(" selected"); }
                         if unread > 0 { class.push_str(" unread"); }
                         let preview = match &last {
-                            Some(m) if m.outgoing => format!("You: {}", m.text.lines().next().unwrap_or_default()),
+                            Some(m) if m.outgoing => t!("preview-you", text = m.text.lines().next().unwrap_or_default()),
                             Some(m) => m.text.lines().next().unwrap_or_default().to_string(),
-                            None => "No messages yet".into(),
+                            None => t!("no-messages"),
                         };
                         let when = last.as_ref().map(|m| short_time(m.time)).unwrap_or_default();
                         let on = reached(&net, state.links.read().get(&name).copied());
@@ -632,11 +632,11 @@ fn Sidebar() -> Element {
                     "{title}"
                 }
                 div { class: "footer-row",
-                    button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
+                    button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} }
                     button {
                         class: if in_settings { "gear on" } else { "gear" },
-                        title: "Settings",
-                        "aria-label": "Settings",
+                        title: t!("settings"),
+                        "aria-label": t!("settings"),
                         onclick: move |_| state.view.set(if in_settings { View::Chat } else { View::Settings(Section::Appearance) }),
                         svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
                             circle { cx: "12", cy: "12", r: "3" }
@@ -657,16 +657,16 @@ fn reached(net: &Network, link: Option<LinkState>) -> bool {
 }
 
 /// What the panel under the list says about Tor.
-fn network_summary(net: &Network) -> (&'static str, String) {
+fn network_summary(net: &Network) -> (String, String) {
     let line = net.line.strip_prefix("Tor: ").unwrap_or(&net.line).to_string();
     if net.entry == Some(false) || net.circuit == Some(false) {
-        ("Tor is not getting through", line)
+        (t!("net-blocked"), line)
     } else if net.percent < 100 {
-        ("Connecting to Tor", if line.is_empty() { format!("{}%", net.percent) } else { line })
+        (t!("net-connecting"), if line.is_empty() { format!("{}%", net.percent) } else { line })
     } else if net.bridged {
-        ("Through a bridge", "This network does not see that you use Tor.".into())
+        (t!("net-bridged"), t!("net-bridged-help"))
     } else {
-        ("Connected to Tor", "Messages pass three relays before they reach anyone.".into())
+        (t!("net-connected"), t!("net-connected-help"))
     }
 }
 
@@ -819,33 +819,29 @@ fn RouteView(name: String) -> Element {
     let sending = pending && matches!(link, Some(LinkState::Trying | LinkState::Open));
     let arrival = state.arrival.read().as_ref().filter(|a| a.0 == name).map(|a| a.1);
     let line = net.line.strip_prefix("Tor: ").unwrap_or(&net.line).to_string();
-    let entrance = if net.bridged { "Private entrance" } else { "Entrance" };
+    let entrance = if net.bridged { t!("step-private-entrance") } else { t!("step-entrance") };
     let tips: [(String, String); 6] = [
-        ("Your computer".into(), format!("Messages are locked here before they leave. Only {name}’s device can open them.")),
+        (t!("step-computer"), t!("step-computer-help", name = name)),
         (
-            entrance.into(),
-            if net.bridged {
-                "A bridge: a way into Tor that is not on the public list, so this network cannot tell it apart.".into()
-            } else {
-                "The first Tor relay. It sees your address, never where messages go.".into()
-            },
+            entrance.clone(),
+            if net.bridged { t!("step-bridge-help") } else { t!("step-guard-help") },
         ),
-        ("Relay".into(), "Kept for weeks: it guards your side of the route. It cannot read the message.".into()),
-        ("Relay".into(), "Changes every few hours. It knows neither who writes nor to whom.".into()),
-        ("Meeting point".into(), format!("Where your route and {name}’s meet. Neither of you learns where the other is.")),
-        (name.clone(), format!("{name}’s device, the only one that can open your messages.")),
+        (t!("step-relay"), t!("step-relay-1-help")),
+        (t!("step-relay"), t!("step-relay-2-help")),
+        (t!("step-meeting"), t!("step-meeting-help", name = name)),
+        (name.clone(), t!("step-device-help", name = name)),
     ];
-    let labels = [String::from("You"), entrance.into(), "Relay".into(), "Relay".into(), "Meeting point".into(), name.clone()];
+    let labels = [t!("step-you"), entrance, t!("step-relay"), t!("step-relay"), t!("step-meeting"), name.clone()];
     // What the step in orange or red is doing, for its tooltip.
     let now = match (route.live, route.fail) {
         (Some(0), _) | (_, Some(_)) => line.clone(),
-        (Some(_), _) => format!("Reaching {name}…"),
+        (Some(_), _) => t!("reaching", name = name),
         _ => String::new(),
     };
     rsx! {
         // Measured by the narrow layout in style.css.
         div { class: "route-box",
-            div { class: "route", role: "group", "aria-label": "Route to {name}",
+            div { class: "route", role: "group", "aria-label": t!("route-label", name = name),
                 svg { view_box: "0 0 900 140", "aria-hidden": "true",
                     for i in 0..5 {
                         g { key: "{i}",
@@ -886,16 +882,16 @@ fn RouteView(name: String) -> Element {
 fn reach_line(name: &str, net: &Network, link: Option<LinkState>) -> (&'static str, String) {
     let route = Route::new(net, link);
     if route.fail.is_some() {
-        ("fail", "Tor is not getting through".into())
+        ("fail", t!("net-blocked"))
     } else if route.live == Some(0) {
-        ("live", format!("Connecting to Tor, {}%", net.percent))
+        ("live", t!("connecting-percent", percent = net.percent))
     } else {
         match link {
-            Some(LinkState::Open) => ("on", "Connected".into()),
-            Some(LinkState::Idle) => ("on", "Reachable".into()),
-            Some(LinkState::Trying) => ("live", format!("Reaching {name}…")),
-            Some(LinkState::Unreachable) => ("", "Not reachable right now".into()),
-            None => ("", "Reached when you write".into()),
+            Some(LinkState::Open) => ("on", t!("link-open")),
+            Some(LinkState::Idle) => ("on", t!("link-idle")),
+            Some(LinkState::Trying) => ("live", t!("reaching", name = name)),
+            Some(LinkState::Unreachable) => ("", t!("link-away")),
+            None => ("", t!("link-unknown")),
         }
     }
 }
@@ -909,9 +905,9 @@ fn Conversation() -> Element {
             main {
                 div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
                 div { class: "empty",
-                h2 { "Nobody here yet" }
-                p { "Nightpost only connects people who know each other. Send someone a one-time link, or read them a code on the phone." }
-                button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), "Add someone" }
+                h2 { {t!("empty-title")} }
+                p { {t!("empty-help")} }
+                button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} }
             }
             p { class: "status", "{state.status}" } }
         };
@@ -919,7 +915,7 @@ fn Conversation() -> Element {
     let rows = rows(state.messages.read().get(&name).map(Vec::as_slice).unwrap_or_default());
     let link = state.links.read().get(&name).copied();
     let (reach_class, reach) = reach_line(&name, &state.network.read(), link);
-    let waiting = if link == Some(LinkState::Unreachable) { format!("Will be sent once {name} is reachable") } else { "Sending…".into() };
+    let waiting = if link == Some(LinkState::Unreachable) { t!("waiting-reachable", name = name) } else { t!("sending") };
 
     let send = {
         let name = name.clone();
@@ -954,7 +950,7 @@ fn Conversation() -> Element {
     rsx! {
         main {
             header { class: "talk-head",
-                button { class: if open { "who open" } else { "who" }, "aria-label": "About {name}", onclick: toggle,
+                button { class: if open { "who open" } else { "who" }, "aria-label": t!("about-name", name = name), onclick: toggle,
                     {avatar(&name, person.photo.as_deref(), 48)}
                     span { class: "who-text",
                         span { class: "who-name",
@@ -962,13 +958,13 @@ fn Conversation() -> Element {
                             // Each mark says what it means in a bubble like the route's.
                             if person.verified {
                                 span { class: "mark-wrap",
-                                    svg { class: "mark verified", view_box: "0 0 24 24", role: "img", "aria-label": "Verified",
+                                    svg { class: "mark verified", view_box: "0 0 24 24", role: "img", "aria-label": t!("verified"),
                                         path { d: "M12 3l7 2.8v5.6c0 4.4-3 7.7-7 9.4-4-1.7-7-5-7-9.4V5.8z" }
                                         path { d: "M8.5 12l2.5 2.5 4.5-5" }
                                     }
                                     span { class: "tip", role: "tooltip",
-                                        strong { "Safety number compared" }
-                                        span { "You both read the same digits: this is really {name}." }
+                                        strong { {t!("verified-title")} }
+                                        span { {t!("verified-help", name = name)} }
                                     }
                                 }
                             }
@@ -976,7 +972,7 @@ fn Conversation() -> Element {
                                 span { class: "mark-wrap",
                                     // The whole bell, cut where the bar crosses it, so the bar
                                     // reads on any background.
-                                    svg { class: "mark bell", view_box: "0 0 24 24", role: "img", "aria-label": "Muted",
+                                    svg { class: "mark bell", view_box: "0 0 24 24", role: "img", "aria-label": t!("muted"),
                                         defs {
                                             mask { id: "bell-cut",
                                                 rect { width: "24", height: "24", fill: "white", stroke: "none" }
@@ -990,8 +986,8 @@ fn Conversation() -> Element {
                                         path { d: "M3 3l18 18" }
                                     }
                                     span { class: "tip", role: "tooltip",
-                                        strong { if until == u64::MAX { "Muted" } else { "Muted until {clock(until)}" } }
-                                        span { "Messages from {name} still arrive, without a notification." }
+                                        strong { if until == u64::MAX { {t!("muted")} } else { {t!("muted-until", time = clock(until))} } }
+                                        span { {t!("muted-help", name = name)} }
                                     }
                                 }
                             }
@@ -999,7 +995,7 @@ fn Conversation() -> Element {
                         span { class: "state {reach_class}", "{reach}" }
                     }
                 }
-                button { class: if open { "info on" } else { "info" }, title: "About {name}", "aria-label": "About {name}", onclick: toggle,
+                button { class: if open { "info on" } else { "info" }, title: t!("about-name", name = name), "aria-label": t!("about-name", name = name), onclick: toggle,
                     svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", "aria-hidden": "true",
                         circle { cx: "12", cy: "12", r: "9" }
                         path { d: "M12 11v5M12 7.6v.1" }
@@ -1027,7 +1023,7 @@ fn Conversation() -> Element {
                                             } else if m.outgoing {
                                                 // Signal's marks: two rings once delivered, filled once read.
                                                 svg { class: if m.read { "tick read" } else { "tick" }, view_box: "2 0 24 16", role: "img",
-                                                    "aria-label": if m.read { "Read" } else { "Delivered" },
+                                                    "aria-label": if m.read { t!("read") } else { t!("delivered") },
                                                     circle { cx: "10", cy: "8", r: "6" }
                                                     path { d: "M7.3 8.2l1.8 1.8 3.6-3.8" }
                                                     circle { class: "gap", cx: "18", cy: "8", r: "7.6" }
@@ -1045,8 +1041,8 @@ fn Conversation() -> Element {
             }
             div { class: "composer",
                 textarea {
-                    "aria-label": "Message to {name}",
-                    placeholder: "Write to {name}",
+                    "aria-label": t!("message-to", name = name),
+                    placeholder: t!("write-to", name = name),
                     value: "{draft}",
                     rows: "1",
                     oninput: move |e| draft.set(e.value()),
@@ -1057,7 +1053,7 @@ fn Conversation() -> Element {
                         }
                     },
                 }
-                button { class: "primary", onclick: move |_| send_click(), "Send" }
+                button { class: "primary", onclick: move |_| send_click(), {t!("send")} }
             }
             p { class: "status", "{state.status}" }
             if open { PersonPanel { key: "{name}", name: name.clone() } }
@@ -1082,49 +1078,49 @@ fn DialogView() -> Element {
     let body = match dialog {
         Dialog::Add => rsx! { AddDialog {} },
         Dialog::Bridges => rsx! {
-            h3 { "Bridges" }
+            h3 { {t!("bridges")} }
             div { class: "block", BridgesEditor {} }
-            div { class: "actions", button { onclick: close, "Close" } }
+            div { class: "actions", button { onclick: close, {t!("close")} } }
         },
         Dialog::Safety { name, number } => return rsx! { SafetyNumber { name, number } },
         Dialog::Invite { name, link } => rsx! {
-            h3 { "An invitation for {name}" }
-            p { "Give it to {name} only, through a channel you trust. It works once, for 7 days." }
-            img { class: "qr", src: "{qr(&link)}", alt: "QR code of the invitation" }
-            textarea { class: "link", readonly: true, rows: "4", "aria-label": "Invitation link", value: "{link}" }
+            h3 { {t!("invite-title", name = name)} }
+            p { {t!("invite-help", name = name)} }
+            img { class: "qr", src: "{qr(&link)}", alt: t!("invite-qr") }
+            textarea { class: "link", readonly: true, rows: "4", "aria-label": t!("invite-link"), value: "{link}" }
             div { class: "actions",
-                CopyButton { text: link.clone(), label: "Copy the link" }
-                button { onclick: close, "Done" }
+                CopyButton { text: link.clone(), label: t!("copy-link") }
+                button { onclick: close, {t!("done")} }
             }
         },
         Dialog::Code { name, code } => rsx! {
-            h3 { "Read this code to {name}" }
-            p { "On a call or in person. It works for 10 minutes." }
+            h3 { {t!("code-title", name = name)} }
+            p { {t!("code-help")} }
             p { class: "code", "{code.replace('-', \" \")}" }
-            p { "When {name} types it in, you will both compare a safety number before anything is kept." }
+            p { {t!("code-after", name = name)} }
             div { class: "actions",
-                CopyButton { text: code.clone(), label: "Copy the code" }
-                button { onclick: close, "Hide" }
+                CopyButton { text: code.clone(), label: t!("copy-code") }
+                button { onclick: close, {t!("hide")} }
             }
         },
         Dialog::Confirm { name, number } => {
             let (keep, refuse) = (name.clone(), name.clone());
             rsx! {
-                h3 { "Someone used your code for {name}" }
-                p { "Ask them to read their safety number aloud. Yours is:" }
+                h3 { {t!("confirm-title", name = name)} }
+                p { {t!("confirm-help")} }
                 p { class: "number", "{groups(&number)}" }
-                p { class: "warning", "Keep them only if every digit matches. Otherwise it is not {name}." }
+                p { class: "warning", {t!("confirm-warning", name = name)} }
                 div { class: "actions",
-                    button { class: "primary", onclick: move |_| confirm(state, keep.clone(), true), "The digits match" }
-                    button { class: "danger", onclick: move |_| confirm(state, refuse.clone(), false), "They differ, turn down" }
+                    button { class: "primary", onclick: move |_| confirm(state, keep.clone(), true), {t!("digits-match")} }
+                    button { class: "danger", onclick: move |_| confirm(state, refuse.clone(), false), {t!("digits-differ")} }
                 }
             }
         }
         Dialog::Waiting { name, number } => rsx! {
-            h3 { "Waiting for {name}" }
-            p { "Read this safety number to {name}. They check that it matches theirs:" }
+            h3 { {t!("waiting-title", name = name)} }
+            p { {t!("waiting-help", name = name)} }
             p { class: "number", "{groups(&number)}" }
-            p { "{name} is added as soon as they confirm." }
+            p { {t!("waiting-after", name = name)} }
         },
     };
     rsx! {
@@ -1142,23 +1138,23 @@ fn SafetyNumber(name: String, number: String) -> Element {
     let who = name.clone();
     let close = move |_| state.dialog.set(None);
     rsx! {
-        div { class: "full", role: "dialog", "aria-label": "Safety number with {name}",
-            button { class: "full-close", "aria-label": "Close", onclick: close,
+        div { class: "full", role: "dialog", "aria-label": t!("safety-label", name = name),
+            button { class: "full-close", "aria-label": t!("close"), onclick: close,
                 svg { width: "22", height: "22", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", "aria-hidden": "true", path { d: "M6 6l12 12M18 6L6 18" } }
             }
             div { class: "full-body",
                 {avatar(&name, photo.as_deref(), 64)}
-                h1 { "Your safety number with {name}" }
-                p { class: "full-help", "Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between." }
+                h1 { {t!("safety-title", name = name)} }
+                p { class: "full-help", {t!("safety-help")} }
                 p { class: "full-number", "{groups(&number)}" }
                 div { class: "actions",
                     button { class: "primary", onclick: move |_| {
                         state.dialog.set(None);
                         person::update(state, who.clone(), |p| p.verified = true);
-                    }, "They match" }
-                    button { class: "ghost", onclick: close, "Not now" }
+                    }, {t!("they-match")} }
+                    button { class: "ghost", onclick: close, {t!("not-now")} }
                 }
-                p { class: "full-warn", "If even one digit differs, it is not {name} at the other end: do not mark it." }
+                p { class: "full-warn", {t!("safety-warning", name = name)} }
             }
         }
     }
@@ -1177,7 +1173,7 @@ fn AddDialog() -> Element {
     let invite = move |by_code: bool| {
         let who = name.read().trim().to_string();
         if who.is_empty() {
-            return error.set("Give them a name first.".into());
+            return error.set(t!("need-name"));
         }
         spawn(async move {
             let request = if by_code { Request::InviteCode { name: who.clone() } } else { Request::Invite { name: who.clone() } };
@@ -1194,10 +1190,10 @@ fn AddDialog() -> Element {
     let accept = move |_| {
         let (who, given) = (name.read().trim().to_string(), pasted.read().trim().to_string());
         if given.is_empty() {
-            return error.set("Paste their link, or type the code they read you.".into());
+            return error.set(t!("need-given"));
         }
         if who.is_empty() {
-            return error.set("Give them a name first, at the top.".into());
+            return error.set(t!("need-name-top"));
         }
         // A code is digits and separators; anything else is taken for a link.
         let request = if given.chars().all(|c| c.is_ascii_digit() || " -.".contains(c)) {
@@ -1218,7 +1214,7 @@ fn AddDialog() -> Element {
                     if matches!(*state.dialog.peek(), Some(Dialog::Add)) {
                         state.dialog.set(None);
                     }
-                    state.status.set(format!("{name} added"));
+                    state.status.set(t!("added", name = name));
                 }
                 Ok(Reply::Error { message }) if shown => error.set(message),
                 Err(e) if shown => error.set(format!("{e:#}")),
@@ -1230,34 +1226,34 @@ fn AddDialog() -> Element {
         let network = state.network.read();
         let who = name.read().trim().to_string();
         let progress = if network.percent < 100 {
-            format!("Waiting for Tor ({}%) before looking.", network.percent)
+            t!("looking-tor", percent = network.percent)
         } else {
-            format!("Tor is connected. {who}'s Nightpost has to be running; finding it can take up to 5 minutes.")
+            t!("looking-help", name = who)
         };
         return rsx! {
-            h3 { "Looking for {who}…" }
+            h3 { {t!("looking-title", name = who)} }
             p { role: "status", "{progress}" }
-            p { class: "help", "Closing this does not stop it: {who} shows up in your list once found." }
-            div { class: "actions", button { onclick: move |_| state.dialog.set(None), "Close" } }
+            p { class: "help", {t!("looking-close", name = who)} }
+            div { class: "actions", button { onclick: move |_| state.dialog.set(None), {t!("close")} } }
         };
     }
     let (mut by_link, mut by_code) = (invite, invite);
 
     rsx! {
-        h3 { "Add someone" }
-        label { "Their name, as you will see it" }
-        input { autofocus: true, value: "{name}", placeholder: "Alice", oninput: move |e| { name.set(e.value()); error.set(String::new()); } }
+        h3 { {t!("add-title")} }
+        label { {t!("add-name-label")} }
+        input { autofocus: true, value: "{name}", placeholder: t!("add-name-placeholder"), oninput: move |e| { name.set(e.value()); error.set(String::new()); } }
         div { class: "actions",
-            button { class: "primary", onclick: move |_| by_link(false), "Create a link" }
-            button { onclick: move |_| by_code(true), "Create a code to read out" }
+            button { class: "primary", onclick: move |_| by_link(false), {t!("create-link")} }
+            button { onclick: move |_| by_code(true), {t!("create-code")} }
         }
         hr {}
-        label { "Or use what they gave you: their link, or the code they read you" }
+        label { {t!("add-use-label")} }
         input { value: "{pasted}", placeholder: "nightpost:1:… or 482-109-375-512", oninput: move |e| { pasted.set(e.value()); error.set(String::new()); } }
         if !error.read().is_empty() { p { class: "warning", role: "alert", "{error}" } }
         div { class: "actions",
-            button { class: "primary", onclick: accept, "Use it" }
-            button { onclick: move |_| state.dialog.set(None), "Cancel" }
+            button { class: "primary", onclick: accept, {t!("use-it")} }
+            button { onclick: move |_| state.dialog.set(None), {t!("cancel")} }
         }
     }
 }
@@ -1267,7 +1263,7 @@ fn confirm(mut state: State, name: String, keep: bool) {
     state.codes.write().retain(|n| *n != name);
     spawn(async move {
         match call(Request::Confirm { name: name.clone(), keep }).await {
-            Ok(Reply::Done) => state.status.set(if keep { format!("{name} kept") } else { format!("{name} turned down") }),
+            Ok(Reply::Done) => state.status.set(if keep { t!("kept", name = name) } else { t!("turned-down", name = name) }),
             other => state.fail(other),
         }
     });
@@ -1293,7 +1289,7 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
     // A daemon left running from before an update: it would not know what
     // this window asks. Stop it; the one next to this program takes over.
     if api::running_version(dir()).as_deref() != Some(nightpost_core::VERSION) && Client::connect(dir()).await.is_ok() {
-        phase.set(Phase::Connecting("Restarting Nightpost after the update…".into()));
+        phase.set(Phase::Connecting(t!("restarting-update")));
         call(Request::Shutdown).await.ok();
         for _ in 0..20 {
             if Client::connect(dir()).await.is_err() {
@@ -1312,7 +1308,7 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
         phase.set(Phase::Locked(String::new()));
         return Ok(None);
     }
-    phase.set(Phase::Connecting("Starting…".into()));
+    phase.set(Phase::Connecting(t!("starting")));
     let mut daemon = if starting { None } else { Some(start_daemon(passphrase)?) };
     let log = dir().join("daemon.log");
     loop {
@@ -1323,14 +1319,14 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if let Some(status) = daemon.as_mut().map(std::process::Child::try_wait).transpose()?.flatten() {
             if asked && text.contains("wrong key") {
-                phase.set(Phase::Locked("That passphrase does not open them. Try again.".into()));
+                phase.set(Phase::Locked(t!("wrong-passphrase")));
                 return Ok(None);
             }
             bail!("the daemon stopped ({status}): {}", text.lines().last().unwrap_or_default());
         }
         // Its progress lines, not the log lines around them.
-        let progress = text.lines().rev().find(|l| l.starts_with("Tor:")).unwrap_or("Starting…");
-        phase.set(Phase::Connecting(progress.into()));
+        let progress = text.lines().rev().find(|l| l.starts_with("Tor:")).map(String::from).unwrap_or_else(|| t!("starting"));
+        phase.set(Phase::Connecting(progress));
     }
 }
 
@@ -1394,7 +1390,7 @@ fn notify(title: &str, body: &str, prefs: Prefs) {
 
 /// Copies `text`, and says so for four seconds once the clipboard took it.
 #[component]
-fn CopyButton(text: String, label: &'static str) -> Element {
+fn CopyButton(text: String, label: String) -> Element {
     let mut copied = use_signal(|| false);
     let onclick = move |_| {
         // Our own link or code: Rust's quoting is a valid JS string literal.
@@ -1412,7 +1408,7 @@ fn CopyButton(text: String, label: &'static str) -> Element {
         // Both labels hold the width, so the buttons beside it stay put.
         button { class: "primary copy", "aria-live": "polite", onclick,
             span { class: if *copied.read() { "off" }, "{label}" }
-            span { class: if !*copied.read() { "off" }, "Copied" }
+            span { class: if !*copied.read() { "off" }, {t!("copied")} }
         }
     }
 }
@@ -1442,10 +1438,10 @@ fn day_label(millis: u64) -> String {
     let (Some(then), Some(today)) = (zoned(millis), zoned(jiff::Timestamp::now().as_millisecond() as u64)) else { return String::new() };
     let days = (today.date() - then.date()).get_days();
     match days {
-        0 => "Today".into(),
-        1 => "Yesterday".into(),
-        _ if then.year() == today.year() => then.strftime("%A %-d %B").to_string(),
-        _ => then.strftime("%-d %B %Y").to_string(),
+        0 => t!("today"),
+        1 => t!("yesterday"),
+        _ if then.year() == today.year() => t!("date-this-year", weekday = weekday(&then), day = then.day(), month = month(&then, false)),
+        _ => t!("date-other-year", day = then.day(), month = month(&then, false), year = then.year()),
     }
 }
 
@@ -1454,10 +1450,18 @@ fn short_time(millis: u64) -> String {
     let (Some(then), Some(today)) = (zoned(millis), zoned(jiff::Timestamp::now().as_millisecond() as u64)) else { return String::new() };
     match (today.date() - then.date()).get_days() {
         0 => then.strftime("%H:%M").to_string(),
-        1 => "Yesterday".into(),
-        2..=6 => then.strftime("%A").to_string(),
-        _ => then.strftime("%-d %b").to_string(),
+        1 => t!("yesterday"),
+        2..=6 => weekday(&then),
+        _ => t!("date-short", day = then.day(), month = month(&then, true)),
     }
+}
+
+fn weekday(day: &jiff::Zoned) -> String {
+    i18n::text(&format!("weekday-{}", day.weekday().to_monday_one_offset()), &[])
+}
+
+fn month(day: &jiff::Zoned, short: bool) -> String {
+    i18n::text(&format!("month-{}{}", if short { "short-" } else { "" }, day.month()), &[])
 }
 
 /// 60 digits as 3 lines of 4 groups, the way they are read out.

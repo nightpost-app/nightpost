@@ -5,6 +5,8 @@ use anyhow::{Result, ensure};
 use dioxus::prelude::*;
 use nightpost_core::api::{MAX_PHOTO, Person, Reply, Request};
 
+use nightpost_core::t;
+
 use crate::{Dialog, State, avatar, call, clock, muted, now_millis};
 
 /// Changes what we keep about them; the daemon announces the result.
@@ -24,7 +26,7 @@ pub fn update(state: State, name: String, change: impl FnOnce(&mut Person)) {
 /// the file held besides pixels does not survive, and nothing but our own
 /// PNG is ever put in the page.
 pub fn photo_uri(bytes: &[u8]) -> Result<String> {
-    ensure!(bytes.len() <= 30 << 20, "that file is over 30 MB");
+    ensure!(bytes.len() <= 30 << 20, t!("photo-too-big"));
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(12_000);
@@ -34,7 +36,7 @@ pub fn photo_uri(bytes: &[u8]) -> Result<String> {
     let mut png = Vec::new();
     picture.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
     let uri = format!("data:image/png;base64,{}", data_encoding::BASE64.encode(&png));
-    ensure!(uri.len() <= MAX_PHOTO, "that picture is too detailed to keep");
+    ensure!(uri.len() <= MAX_PHOTO, t!("photo-too-detailed"));
     Ok(uri)
 }
 
@@ -56,17 +58,17 @@ pub fn PersonPanel(name: String) -> Element {
         Some(_) => "1h",
     };
     let mute_help = match quiet {
-        None => format!("A notification for each message from {name}."),
-        Some(u64::MAX) => format!("No notification from {name} until you turn them back on. Messages still arrive."),
-        Some(until) => format!("Quiet until {}, then back on.", clock(until)),
+        None => t!("mute-on-help", name = name),
+        Some(u64::MAX) => t!("mute-off-help", name = name),
+        Some(until) => t!("mute-until-help", time = clock(until)),
     };
-    let mutes = [("on", "On", None), ("1h", "1 hour", Some(HOUR)), ("8h", "8 hours", Some(8 * HOUR)), ("off", "Off", Some(u64::MAX))];
+    let mutes = [("on", t!("mute-on"), None), ("1h", t!("mute-1h"), Some(HOUR)), ("8h", t!("mute-8h"), Some(8 * HOUR)), ("off", t!("mute-off"), Some(u64::MAX))];
 
     let (pick, rings, rename, compare, remove) = (name.clone(), name.clone(), name.clone(), name.clone(), name.clone());
     rsx! {
-        aside { class: "person", "aria-label": "About {name}",
+        aside { class: "person", "aria-label": t!("about-name", name = name),
             div { class: "person-top",
-                button { class: "close", "aria-label": "Close", onclick: move |_| state.panel.set(false),
+                button { class: "close", "aria-label": t!("close"), onclick: move |_| state.panel.set(false),
                     svg { width: "18", height: "18", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", "aria-hidden": "true", path { d: "M6 6l12 12M18 6L6 18" } }
                 }
                 div { class: "drag-fill", onmousedown: crate::chrome::drag, ondoubleclick: crate::chrome::toggle_maximized }
@@ -75,7 +77,7 @@ pub fn PersonPanel(name: String) -> Element {
                 {avatar(&name, person.photo.as_deref(), 96)}
                 div { class: "row",
                     label { class: "small-button",
-                        if person.photo.is_some() { "Change photo" } else { "Choose a photo" }
+                        {if person.photo.is_some() { t!("change-photo") } else { t!("choose-photo") }}
                         input {
                             r#type: "file",
                             accept: "image/png, image/jpeg, image/webp, image/gif",
@@ -90,21 +92,21 @@ pub fn PersonPanel(name: String) -> Element {
                                     };
                                     match picture {
                                         Ok(uri) => update(state, name, |p| p.photo = Some(uri)),
-                                        Err(e) => state.status.set(format!("That picture could not be used: {e:#}")),
+                                        Err(e) => state.status.set(t!("photo-failed", error = format!("{e:#}"))),
                                     }
                                 });
                             },
                         }
                     }
                     if person.photo.is_some() {
-                        button { class: "small-button", onclick: move |_| update(state, rings.clone(), |p| p.photo = None), "Use the rings" }
+                        button { class: "small-button", onclick: move |_| update(state, rings.clone(), |p| p.photo = None), {t!("use-rings")} }
                     }
                 }
-                p { class: "help", "The photo stays on this computer. {name} never sees it." }
+                p { class: "help", {t!("photo-help", name = name)} }
             }
 
             section { class: "block",
-                label { r#for: "rename", class: "panel-title", "Name" }
+                label { r#for: "rename", class: "panel-title", {t!("name")} }
                 div { class: "row",
                     input { id: "rename", class: "name-field", value: "{new_name}", maxlength: "32", oninput: move |e| new_name.set(e.value()) }
                     button {
@@ -120,19 +122,19 @@ pub fn PersonPanel(name: String) -> Element {
                                 }
                             });
                         },
-                        "Rename"
+                        {t!("rename")}
                     }
                 }
-                p { class: "help", "Only you see this name." }
+                p { class: "help", {t!("name-help")} }
             }
 
             section { class: "block",
                 div { class: "row spread",
-                    h2 { class: "panel-title", "Safety number" }
-                    span { class: if person.verified { "chip on" } else { "chip" }, if person.verified { "Verified" } else { "Not compared yet" } }
+                    h2 { class: "panel-title", {t!("safety-number")} }
+                    span { class: if person.verified { "chip on" } else { "chip" }, {if person.verified { t!("verified") } else { t!("not-compared") }} }
                 }
                 p { class: "help",
-                    if person.verified { "You compared it with {name} in person or on a call." } else { "Compare it once with {name} to be sure nobody sits in between." }
+                    {if person.verified { t!("compared-help", name = name) } else { t!("compare-help", name = name) }}
                 }
                 div {
                     button {
@@ -146,14 +148,14 @@ pub fn PersonPanel(name: String) -> Element {
                                 }
                             });
                         },
-                        "Compare safety number"
+                        {t!("compare")}
                     }
                 }
             }
 
             section { class: "block",
-                h2 { class: "panel-title", "Notifications" }
-                div { class: "segmented", role: "radiogroup", "aria-label": "Notifications from {name}",
+                h2 { class: "panel-title", {t!("notifications")} }
+                div { class: "segmented", role: "radiogroup", "aria-label": t!("notifications-from", name = name),
                     for (id, label, length) in mutes {
                         {
                             let who = name.clone();
@@ -178,11 +180,11 @@ pub fn PersonPanel(name: String) -> Element {
 
             section { class: "block danger-zone",
                 if *removing.read() {
-                    h2 { class: "panel-title danger-text", "Remove {name}?" }
-                    p { class: "help", "{name} can no longer reach you or see when you are online. To talk again, one of you sends a new invitation." }
+                    h2 { class: "panel-title danger-text", {t!("remove-title", name = name)} }
+                    p { class: "help", {t!("remove-help", name = name)} }
                     button { class: "check", role: "checkbox", "aria-checked": "{wipe}", onclick: move |_| { let w = *wipe.read(); wipe.set(!w); },
                         span { class: if *wipe.read() { "box on" } else { "box" }, if *wipe.read() { "✓" } }
-                        "Also delete the conversation from this computer"
+                        {t!("remove-wipe")}
                     }
                     div { class: "row",
                         button {
@@ -193,17 +195,17 @@ pub fn PersonPanel(name: String) -> Element {
                                 // Not `spawn`: this panel goes away with them.
                                 dioxus::core::spawn_forever(async move {
                                     match call(Request::Remove { name: name.clone(), wipe }).await {
-                                        Ok(Reply::Done) => state.status.set(format!("{name} removed")),
+                                        Ok(Reply::Done) => state.status.set(t!("removed", name = name)),
                                         other => state.fail(other),
                                     }
                                 });
                             },
-                            "Remove"
+                            {t!("remove")}
                         }
-                        button { class: "small-button", onclick: move |_| { removing.set(false); wipe.set(false); }, "Cancel" }
+                        button { class: "small-button", onclick: move |_| { removing.set(false); wipe.set(false); }, {t!("cancel")} }
                     }
                 } else {
-                    button { class: "danger-ghost", onclick: move |_| removing.set(true), "Remove {name}" }
+                    button { class: "danger-ghost", onclick: move |_| removing.set(true), {t!("remove-name", name = name)} }
                 }
             }
         }

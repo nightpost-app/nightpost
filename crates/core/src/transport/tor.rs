@@ -25,6 +25,7 @@ use tor_rtcompat::PreferredRuntime;
 use super::{DiscoveryKey, Onion, Result, TransportError, none_authorized, onion};
 use crate::api::Network;
 use crate::dbkey::Secret;
+use crate::t;
 
 /// The virtual port Nightpost listens on inside its onion services.
 const PORT: u16 = 7777;
@@ -225,17 +226,17 @@ async fn watch(
                 match configs(&state_dir, &cache_dir, Some((&b.lyrebird, &lines))) {
                     Ok(new) => both = new,
                     Err(e) => {
-                        say!(format!("Tor: {e}"));
+                        say!(t!("tor-error", error = e));
                         continue;
                     }
                 }
                 // Lines of one's own are there to be used.
                 bridged |= !lines.is_empty();
                 if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
-                    say!(format!("Tor: switching failed: {e}"));
+                    say!(t!("tor-switch-failed", error = e));
                 }
                 restart(&mut net, bridged, &client);
-                say!(if bridged { "Tor: reconnecting through the bridges…" } else { "Tor: reconnecting…" }.into());
+                say!(if bridged { t!("tor-reconnecting-bridges") } else { t!("tor-reconnecting") });
                 (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
                 continue;
             }
@@ -252,8 +253,8 @@ async fn watch(
                 }
                 net.percent = percent(status.as_frac());
                 say!(match status.blocked() {
-                    Some(why) => format!("Tor: stuck? {}", why.message()),
-                    None => format!("Tor: {}%", net.percent),
+                    Some(why) => t!("tor-stuck", why = why.message()),
+                    None => t!("tor-percent", percent = net.percent),
                 });
             }
             Err(_) if both.len() < 2 => {
@@ -280,12 +281,10 @@ async fn watch(
                 }
                 bridged = !bridged;
                 if let Err(e) = client.reconfigure(&both[usize::from(bridged)], Reconfigure::AllOrNothing) {
-                    say!(format!("Tor: switching failed: {e}"));
+                    say!(t!("tor-switch-failed", error = e));
                 }
                 restart(&mut net, bridged, &client);
-                say!(if bridged { "Tor: blocked on this network? Going through a bridge…" } else { "Tor: the bridge is not getting through; trying without it…" }
-                        .into(),
-                );
+                say!(if bridged { t!("tor-to-bridge") } else { t!("tor-from-bridge") });
                 (best, since, saved, failures) = (client.bootstrap_status().as_frac(), Instant::now(), None, 0);
             }
         }

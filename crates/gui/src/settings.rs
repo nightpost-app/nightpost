@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
-use nightpost_core::dbkey;
+use nightpost_core::{dbkey, t};
 
 use crate::{State, Theme, View, call, dir, network_summary};
 
@@ -16,13 +16,15 @@ pub enum Section {
     About,
 }
 
-const SECTIONS: [(Section, &str); 5] = [
-    (Section::Appearance, "Appearance"),
-    (Section::Network, "Network"),
-    (Section::Notifications, "Notifications"),
-    (Section::Security, "Security"),
-    (Section::About, "About"),
-];
+fn sections() -> [(Section, String); 5] {
+    [
+        (Section::Appearance, t!("appearance")),
+        (Section::Network, t!("network")),
+        (Section::Notifications, t!("notifications")),
+        (Section::Security, t!("security")),
+        (Section::About, t!("about")),
+    ]
+}
 
 /// Each section's icon, in a tile with its own outline.
 fn icon(section: Section) -> Element {
@@ -45,15 +47,15 @@ pub fn SettingsPage(section: Section) -> Element {
     rsx! {
         main { class: "settings",
             header { class: "settings-head",
-                button { class: "close", title: "Back to the conversation", "aria-label": "Back to the conversation", onclick: move |_| state.view.set(View::Chat),
+                button { class: "close", title: t!("back"), "aria-label": t!("back"), onclick: move |_| state.view.set(View::Chat),
                     svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true", path { d: "M15 5l-7 7 7 7" } }
                 }
-                h1 { "Settings" }
+                h1 { {t!("settings")} }
                 div { class: "drag-fill", onmousedown: crate::chrome::drag, ondoubleclick: crate::chrome::toggle_maximized }
             }
             div { class: "settings-body",
-                nav { class: "sections", "aria-label": "Settings sections",
-                    for (s, label) in SECTIONS {
+                nav { class: "sections", "aria-label": t!("settings-sections"),
+                    for (s, label) in sections() {
                         button {
                             key: "{label}",
                             class: if s == section { "section on" } else { "section" },
@@ -87,11 +89,11 @@ pub fn SettingsPage(section: Section) -> Element {
 fn Appearance() -> Element {
     let mut state = use_context::<State>();
     let theme = *state.theme.read();
-    let options = [(Theme::System, "As the system", "#0f1522", "#f4f5f7"), (Theme::Dark, "Dark", "#0f1522", "#111a29"), (Theme::Light, "Light", "#f4f5f7", "#ffffff")];
+    let options = [(Theme::System, t!("theme-system"), "#0f1522", "#f4f5f7"), (Theme::Dark, t!("theme-dark"), "#0f1522", "#111a29"), (Theme::Light, t!("theme-light"), "#f4f5f7", "#ffffff")];
     rsx! {
         section { class: "block",
-            h2 { "Theme" }
-            div { class: "themes", role: "radiogroup", "aria-label": "Theme",
+            h2 { {t!("theme")} }
+            div { class: "themes", role: "radiogroup", "aria-label": t!("theme"),
                 for (t, label, a, b) in options {
                     button {
                         key: "{label}",
@@ -104,7 +106,7 @@ fn Appearance() -> Element {
                     }
                 }
             }
-            p { class: "help", "“As the system” follows your computer’s light or dark mode, and changes with it." }
+            p { class: "help", {t!("theme-help")} }
         }
     }
 }
@@ -123,7 +125,7 @@ fn NetworkSection() -> Element {
     };
     rsx! {
         section { class: "block",
-            h2 { "Connection" }
+            h2 { {t!("connection")} }
             div { class: "card",
                 span { class: dot }
                 span { class: "card-text",
@@ -133,7 +135,7 @@ fn NetworkSection() -> Element {
             }
         }
         section { class: "block",
-            h2 { "Bridges" }
+            h2 { {t!("bridges")} }
             BridgesEditor {}
         }
     }
@@ -161,26 +163,26 @@ pub fn BridgesEditor() -> Element {
             match call(Request::Bridges { lines: Some(lines) }).await {
                 Ok(Reply::Bridges { lines }) => {
                     error.set(String::new());
-                    saved.set(if lines.is_empty() { "Back to the built-in bridges.".into() } else { "Bridges saved: Tor reconnects through them.".into() });
+                    saved.set(if lines.is_empty() { t!("bridges-reset") } else { t!("bridges-saved") });
                 }
                 reply => {
                     saved.set(String::new());
                     error.set(match reply {
                         Ok(Reply::Error { message }) => message,
-                        Ok(other) => format!("unexpected reply {other:?}"),
-                        Err(e) => format!("Nightpost's daemon does not answer: {e:#}"),
+                        Ok(other) => t!("err-unexpected", reply = format!("{other:?}")),
+                        Err(e) => t!("daemon-silent", error = format!("{e:#}")),
                     });
                 }
             }
         });
     };
     let modes = [
-        (false, "Built-in, when needed", "Snowflake, nothing to set up. Used only if Tor does not get through."),
-        (true, "Bridges of your own", "From a friend, bridges.torproject.org (WebTunnel gets through most often), or your own server. Used all the time."),
+        (false, t!("bridges-builtin"), t!("bridges-builtin-help")),
+        (true, t!("bridges-own"), t!("bridges-own-help")),
     ];
     rsx! {
-        p { class: "help", "Some networks (university or work Wi-Fi) block Tor. Nightpost then goes in through a bridge, an entrance that is not on the public list." }
-        div { role: "radiogroup", "aria-label": "Bridges", class: "choices",
+        p { class: "help", {t!("bridges-help")} }
+        div { role: "radiogroup", "aria-label": t!("bridges"), class: "choices",
             for (mine, label, help) in modes {
                 button {
                     key: "{label}",
@@ -197,14 +199,14 @@ pub fn BridgesEditor() -> Element {
             }
         }
         if *own.read() {
-            label { r#for: "bridges", class: "field-label", "Bridge lines, one per line" }
+            label { r#for: "bridges", class: "field-label", {t!("bridges-lines")} }
             textarea { id: "bridges", class: "lines-field", rows: "4", placeholder: "webtunnel [2001:db8::1]:443 … url=https://…", value: "{text}", oninput: move |e| {
                 text.set(e.value());
                 saved.set(String::new());
             } }
         }
         if !error.read().is_empty() { p { class: "warning", "{error}" } }
-        div { button { class: "primary", onclick: save, "Save bridges" } }
+        div { button { class: "primary", onclick: save, {t!("bridges-save")} } }
         p { class: "help", role: "status", "{saved}" }
     }
 }
@@ -214,20 +216,20 @@ fn Notifications() -> Element {
     let mut state = use_context::<State>();
     let prefs = *state.prefs.read();
     let toggles = [
-        ("Show notifications", "When a message arrives and Nightpost is not in front.", prefs.notify, 0),
-        ("Play a sound", "A short chime with each notification.", prefs.sound, 1),
-        ("Keep in history", "Off: the system lets each one go once shown, rather than keeping it in its list of past notifications.", prefs.keep_history, 2),
+        (t!("notify-show"), t!("notify-show-help"), prefs.notify, 0),
+        (t!("notify-sound"), t!("notify-sound-help"), prefs.sound, 1),
+        (t!("notify-history"), t!("notify-history-help"), prefs.keep_history, 2),
     ];
     // (name, text), its label, and the notification it gives.
     let shows = [
-        ((true, true), "Who and what", "Léa", "See you at eight?"),
-        ((true, false), "Who wrote", "Nightpost", "Message from Léa"),
-        ((false, false), "Nothing", "Nightpost", "New message"),
+        ((true, true), t!("notify-who-what"), t!("notify-example-name"), t!("notify-example-text")),
+        ((true, false), t!("notify-who"), "Nightpost".into(), t!("notify-from", name = t!("notify-example-name"))),
+        ((false, false), t!("notify-nothing"), "Nightpost".into(), t!("notify-new")),
     ];
     let shown = (prefs.show_name, prefs.show_name && prefs.show_text);
     rsx! {
         section { class: "block",
-            h2 { "Notifications" }
+            h2 { {t!("notifications")} }
             for (label, help, on, which) in toggles {
                 button {
                     key: "{label}",
@@ -249,8 +251,8 @@ fn Notifications() -> Element {
             }
         }
         section { class: "block",
-            h2 { "What a notification shows" }
-            div { role: "radiogroup", "aria-label": "What a notification shows", class: "choices",
+            h2 { {t!("notify-shows")} }
+            div { role: "radiogroup", "aria-label": t!("notify-shows"), class: "choices",
                 for (choice, label, title, body) in shows {
                     button {
                         key: "{label}",
@@ -270,7 +272,7 @@ fn Notifications() -> Element {
                     }
                 }
             }
-            p { class: "help", "A notification can show on a locked screen." }
+            p { class: "help", {t!("notify-locked")} }
         }
     }
 }
@@ -305,10 +307,10 @@ fn Security() -> Element {
         let Some(c) = *change.read() else { return };
         let wants = c != Change::Remove;
         if wants && new.read().is_empty() {
-            return error.set("Choose a passphrase.".into());
+            return error.set(t!("need-passphrase"));
         }
         if wants && *new.read() != *again.read() {
-            return error.set("The two passphrases differ.".into());
+            return error.set(t!("passphrases-differ"));
         }
         let request = Request::SetPassphrase { current: (c != Change::Add).then(|| current.read().clone()), new: wants.then(|| new.read().clone()) };
         busy.set(true);
@@ -317,7 +319,7 @@ fn Security() -> Element {
                 Ok(Reply::Done) => {
                     has.set(wants);
                     open(None);
-                    state.status.set(if wants { "Passphrase saved".into() } else { "Passphrase removed".into() });
+                    state.status.set(if wants { t!("passphrase-saved") } else { t!("passphrase-removed") });
                 }
                 Ok(Reply::Error { message }) => error.set(message),
                 other => state.fail(other),
@@ -327,20 +329,20 @@ fn Security() -> Element {
     };
 
     let (title, help) = if *has.read() {
-        ("With your keychain and a passphrase", "Your messages and keys are stored encrypted. Nightpost asks for the passphrase each time it starts.")
+        (t!("locked-both"), t!("locked-both-help"))
     } else {
-        ("With your system keychain", "Your messages and keys are stored encrypted. The key opens when you log in to this computer.")
+        (t!("locked-keychain"), t!("locked-keychain-help"))
     };
     let c = *change.read();
     let lock_on_close = state.prefs.read().lock_on_close;
     let leave_help = if *has.read() {
-        "Messages stop arriving, and your passphrase is asked for when you open Nightpost again."
+        t!("leave-lock-help")
     } else {
-        "Messages stop arriving until you open Nightpost again. Add a passphrase above for this to lock it."
+        t!("leave-quit-help")
     };
     rsx! {
         section { class: "block",
-            h2 { "How your messages are locked" }
+            h2 { {t!("how-locked")} }
             div { class: "card",
                 svg { class: "card-icon", width: "22", height: "22", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
                     rect { x: "5", y: "11", width: "14", height: "10", rx: "2" }
@@ -354,10 +356,10 @@ fn Security() -> Element {
             if c.is_none() {
                 div { class: "row",
                     if *has.read() {
-                        button { class: "ghost", onclick: move |_| open(Some(Change::Replace)), "Change the passphrase" }
-                        button { class: "ghost", onclick: move |_| open(Some(Change::Remove)), "Remove the passphrase" }
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Replace)), {t!("passphrase-change")} }
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Remove)), {t!("passphrase-remove")} }
                     } else {
-                        button { class: "ghost", onclick: move |_| open(Some(Change::Add)), "Add a passphrase" }
+                        button { class: "ghost", onclick: move |_| open(Some(Change::Add)), {t!("passphrase-add")} }
                     }
                 }
             }
@@ -365,40 +367,40 @@ fn Security() -> Element {
         if let Some(c) = c {
             form { class: "block", onsubmit: save,
                 h2 {
-                    match c {
-                        Change::Add => "Add a passphrase",
-                        Change::Replace => "Change the passphrase",
-                        Change::Remove => "Remove the passphrase",
-                    }
+                    {match c {
+                        Change::Add => t!("passphrase-add"),
+                        Change::Replace => t!("passphrase-change"),
+                        Change::Remove => t!("passphrase-remove"),
+                    }}
                 }
                 if c != Change::Add {
-                    label { r#for: "current", class: "field-label", "Current passphrase" }
+                    label { r#for: "current", class: "field-label", {t!("passphrase-current")} }
                     input { id: "current", class: "name-field", r#type: "password", autofocus: true, value: "{current}", oninput: move |e| current.set(e.value()) }
                 }
                 if c != Change::Remove {
-                    label { r#for: "new", class: "field-label", "New passphrase" }
+                    label { r#for: "new", class: "field-label", {t!("passphrase-new")} }
                     input { id: "new", class: "name-field", r#type: "password", autofocus: c == Change::Add, value: "{new}", oninput: move |e| new.set(e.value()) }
-                    label { r#for: "again", class: "field-label", "The same again" }
+                    label { r#for: "again", class: "field-label", {t!("passphrase-again")} }
                     input { id: "again", class: "name-field", r#type: "password", value: "{again}", oninput: move |e| again.set(e.value()) }
-                    p { class: "warning", "Forget it and your messages are gone: nobody can recover it, not even with this computer." }
+                    p { class: "warning", {t!("passphrase-warning")} }
                 } else {
-                    p { class: "help", "The keychain alone will open your messages again." }
+                    p { class: "help", {t!("passphrase-remove-help")} }
                 }
                 if !error.read().is_empty() { p { class: "warning", "{error}" } }
                 div { class: "row",
                     button { class: "primary", r#type: "submit", disabled: *busy.read(),
-                        match c {
-                            Change::Add => "Add the passphrase",
-                            Change::Replace => "Change it",
-                            Change::Remove => "Remove it",
-                        }
+                        {match c {
+                            Change::Add => t!("passphrase-add-it"),
+                            Change::Replace => t!("change-it"),
+                            Change::Remove => t!("remove-it"),
+                        }}
                     }
-                    button { class: "ghost", r#type: "button", onclick: move |_| open(None), "Cancel" }
+                    button { class: "ghost", r#type: "button", onclick: move |_| open(None), {t!("cancel")} }
                 }
             }
         }
         section { class: "block",
-            h2 { "Read receipts" }
+            h2 { {t!("read-receipts")} }
             button {
                 class: "toggle-row",
                 role: "switch",
@@ -412,14 +414,14 @@ fn Security() -> Element {
                     });
                 },
                 span { class: "card-text",
-                    span { class: "card-title", "Send read receipts" }
-                    span { class: "help", "On: people see when you have read their messages, and you see when they read yours, if they have it on too. Off: neither." }
+                    span { class: "card-title", {t!("read-receipts-send")} }
+                    span { class: "help", {t!("read-receipts-help")} }
                 }
                 span { class: if read_receipts { "switch on" } else { "switch" }, span {} }
             }
         }
         section { class: "block",
-            h2 { "Leaving" }
+            h2 { {t!("leaving")} }
             button {
                 class: "toggle-row",
                 role: "switch",
@@ -430,7 +432,7 @@ fn Security() -> Element {
                     state.prefs.set(p.save());
                 },
                 span { class: "card-text",
-                    span { class: "card-title", if *has.read() { "Closing the window locks Nightpost" } else { "Closing the window quits Nightpost" } }
+                    span { class: "card-title", {if *has.read() { t!("close-locks") } else { t!("close-quits") }} }
                     span { class: "help", "{leave_help}" }
                 }
                 span { class: if lock_on_close { "switch on" } else { "switch" }, span {} }
@@ -442,7 +444,7 @@ fn Security() -> Element {
                         crate::shut_down();
                         dioxus::desktop::window().close();
                     },
-                    if *has.read() { "Quit and lock" } else { "Quit Nightpost" }
+                    {if *has.read() { t!("quit-lock") } else { t!("quit") }}
                 }
             }
         }
@@ -453,10 +455,10 @@ fn Security() -> Element {
 fn About() -> Element {
     let folder = dir().display().to_string();
     let licences = [
-        ("Nightpost", "AGPL-3.0"),
-        ("Space Grotesk", "SIL Open Font License 1.1"),
-        ("lyrebird (bridges)", "BSD-3-Clause, Tor Project"),
-        ("Icons", "Lucide, ISC"),
+        (String::from("Nightpost"), "AGPL-3.0"),
+        ("Space Grotesk".into(), "SIL Open Font License 1.1"),
+        (t!("licence-bridges"), "BSD-3-Clause, Tor Project"),
+        (t!("licence-icons"), "Lucide, ISC"),
     ];
     rsx! {
         section { class: "block",
@@ -470,15 +472,15 @@ fn About() -> Element {
                     }
                 }
             }
-            p { class: "help", "Messages between people who know each other, over Tor, with no server in between." }
+            p { class: "help", {t!("tagline")} }
         }
         section { class: "block",
-            h2 { "Your data" }
-            div { class: "kv", span { "Folder" } span { "{folder}" } }
-            div { button { class: "ghost", onclick: move |_| open_folder(dir()), "Open the folder" } }
+            h2 { {t!("your-data")} }
+            div { class: "kv", span { {t!("folder")} } span { "{folder}" } }
+            div { button { class: "ghost", onclick: move |_| open_folder(dir()), {t!("open-folder")} } }
         }
         section { class: "block",
-            h2 { "Licences" }
+            h2 { {t!("licences")} }
             for (what, licence) in licences {
                 div { key: "{what}", class: "kv", span { "{what}" } span { "{licence}" } }
             }
