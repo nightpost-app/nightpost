@@ -27,3 +27,7 @@ debug = false
 # change nothing and the loop never ends. The copy under patches/ stops when a
 # step no longer changes the value. Drop it once upstream has the fix.
 saturating-time = { path = "patches/saturating-time" }
+
+# Programs a third the size to download; a panic still says where.
+[profile.release]
+strip = true

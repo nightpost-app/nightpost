@@ -186,12 +186,14 @@ async fn listen(dir: &Path) -> Result<Client> {
 }
 
 
-/// lyrebird next to this program (as released) or on the PATH.
+/// lyrebird next to this program (as in the archives), where the Linux
+/// packages put it, or on the PATH.
 fn lyrebird() -> Option<std::path::PathBuf> {
     let name = format!("lyrebird{}", std::env::consts::EXE_SUFFIX);
-    let beside = std::env::current_exe().ok()?.with_file_name(&name);
-    if beside.is_file() {
-        return Some(beside);
+    let exe = std::env::current_exe().ok()?;
+    let packaged = exe.parent()?.join("../libexec/nightpost").join(&name);
+    if let Some(found) = [exe.with_file_name(&name), packaged].into_iter().find(|p| p.is_file()) {
+        return Some(found);
     }
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())
 }
