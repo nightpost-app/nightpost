@@ -435,6 +435,8 @@ header { display: flex; justify-content: space-between; align-items: center; gap
   .app, .splash { transition: grid-template-columns .28s ease-in-out, filter .2s ease-out; }
   .app > aside { transition: visibility 0s; }
   .app.side-hidden > aside { transition: visibility 0s .28s; }
+  /* Room for the toggle, made as the list folds: not a jump at the start. */
+  .talk-head, .settings-head { transition: padding-left .28s ease-in-out; }
   .step .label { transition: opacity .3s ease-in-out; }
   .route > svg { animation: route-svg-up .45s ease-in-out both; }
   .step > button { animation: route-step-up .45s ease-in-out both; }
