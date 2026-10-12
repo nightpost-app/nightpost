@@ -46,7 +46,7 @@ month-short-12 = Dec
 ## Tor, as the daemon reports it ("Tor: " stays as is in every language: the interface looks for it)
 
 tor-percent = Tor: { $percent }%
-tor-stuck = Tor: stuck? { $why }
+tor-stuck = Tor: stuck at { $percent }%, trying again…
 tor-error = Tor: { $error }
 tor-switch-failed = Tor: switching failed: { $error }
 tor-reconnecting = Tor: reconnecting…

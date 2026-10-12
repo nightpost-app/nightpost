@@ -253,7 +253,11 @@ async fn watch(
                 }
                 net.percent = percent(status.as_frac());
                 say!(match status.blocked() {
-                    Some(why) => t!("tor-stuck", why = why.message()),
+                    // arti's reason is English and technical: the log keeps it.
+                    Some(why) => {
+                        tracing::info!("Tor bootstrap blocked: {}", why.message());
+                        t!("tor-stuck", percent = net.percent)
+                    }
                     None => t!("tor-percent", percent = net.percent),
                 });
             }

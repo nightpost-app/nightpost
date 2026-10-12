@@ -43,7 +43,7 @@ month-short-12 = Dez.
 ## Tor, wie der Daemon es meldet („Tor: “ bleibt, wie es ist: die Oberfläche sucht danach)
 
 tor-percent = Tor: { $percent } %
-tor-stuck = Tor: hängt? { $why }
+tor-stuck = Tor: hängt bei { $percent } %, neuer Versuch …
 tor-error = Tor: { $error }
 tor-switch-failed = Tor: Umschalten fehlgeschlagen: { $error }
 tor-reconnecting = Tor: verbindet neu…

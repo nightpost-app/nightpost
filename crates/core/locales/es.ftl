@@ -43,7 +43,7 @@ month-short-12 = dic
 ## Tor, según el daemon ("Tor: " se queda tal cual: la interfaz lo busca)
 
 tor-percent = Tor: { $percent } %
-tor-stuck = Tor: ¿atascado? { $why }
+tor-stuck = Tor: atascado en el { $percent } %, reintentando…
 tor-error = Tor: { $error }
 tor-switch-failed = Tor: el cambio falló: { $error }
 tor-reconnecting = Tor: reconectando…

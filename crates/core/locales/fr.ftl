@@ -43,7 +43,7 @@ month-short-12 = déc.
 ## Tor, tel que le daemon le décrit (« Tor: » reste tel quel : l’interface le reconnaît)
 
 tor-percent = Tor: { $percent } %
-tor-stuck = Tor: bloqué ? { $why }
+tor-stuck = Tor: bloqué à { $percent } %, nouvel essai…
 tor-error = Tor: { $error }
 tor-switch-failed = Tor: le changement a échoué : { $error }
 tor-reconnecting = Tor: reconnexion…
