@@ -9,15 +9,9 @@ struct Sidebar: View {
         let people = model.sortedContacts
         let reachable = people.filter { Route.reached(model.network, model.links[$0.name]) }.count
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Nightpost").font(.ui(24, .bold)).foregroundStyle(Palette.strong)
+            HStack {
+                Wordmark(size: 24)
                 Spacer()
-                if !people.isEmpty {
-                    Text(t("reachable-count", ["reachable": reachable, "total": people.count]))
-                        .font(.ui(13))
-                        .monospacedDigit()
-                        .foregroundStyle(Palette.muted)
-                }
             }
             .padding(.top, Chrome.top + 4)
             .padding(.horizontal, 16)
@@ -35,18 +29,23 @@ struct Sidebar: View {
                 .padding(.horizontal, 10)
             }
             .scrollIndicators(.never)
-            footer
+            footer(people.isEmpty ? nil : t("reachable-count", ["reachable": reachable, "total": people.count]))
         }
         .background(Palette.side)
         .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
     }
 
-    private var footer: some View {
+    /// How Tor is, and who is reachable: the top has the name and its logo.
+    private func footer(_ count: String?) -> some View {
         let (stage, title) = networkSummary(model.network)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Circle().fill(stage.color).frame(width: 8, height: 8)
                 Text(title).font(.ui(13.5, .medium)).foregroundStyle(Palette.soft)
+                Spacer()
+                if let count {
+                    Text(count).font(.ui(13)).monospacedDigit().foregroundStyle(Palette.muted).lineLimit(1)
+                }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)

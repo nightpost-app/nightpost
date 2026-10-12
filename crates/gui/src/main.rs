@@ -590,11 +590,11 @@ fn Sidebar() -> Element {
         "net-dot"
     };
     let in_settings = matches!(*state.view.read(), View::Settings(_));
+    let count = (!rows.is_empty()).then(|| t!("reachable-count", reachable = reachable, total = rows.len()));
     rsx! {
         aside {
             div { class: "brand", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized,
                 p { class: "wordmark", "Nightpost" }
-                if !rows.is_empty() { span { class: "reach-count", {t!("reachable-count", reachable = reachable, total = rows.len())} } }
             }
             nav {
                 for (name, last) in rows {
@@ -634,9 +634,13 @@ fn Sidebar() -> Element {
                 }
             }
             div { class: "footer",
-                button { class: "net-status", onclick: move |_| state.view.set(View::Settings(Section::Network)),
-                    span { class: dot }
-                    "{title}"
+                // Who is reachable sits with how Tor is: the top has the name and its logo.
+                div { class: "footer-status",
+                    button { class: "net-status", onclick: move |_| state.view.set(View::Settings(Section::Network)),
+                        span { class: dot }
+                        "{title}"
+                    }
+                    if let Some(count) = count { span { class: "reach-count", "{count}" } }
                 }
                 div { class: "footer-row",
                     button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} }

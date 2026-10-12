@@ -96,6 +96,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; border-radiu
 ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
 
 .wordmark { font: 700 24px/1 var(--display); letter-spacing: .01em; color: var(--strong); }
+/* The app's icon before its name (apps/macos/icon.swift, as an SVG). */
+.wordmark { display: inline-flex; align-items: center; gap: .3em; }
+.wordmark::before { content: ""; flex: none; width: 1.2em; height: 1.2em; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='100 100 824 824'%3E%3Cdefs%3E%3ClinearGradient id='n' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%231C2740'/%3E%3Cstop offset='1' stop-color='%230A0F19'/%3E%3C/linearGradient%3E%3Cmask id='g'%3E%3Crect x='100' y='100' width='824' height='824' fill='white'/%3E%3Ccircle cx='712' cy='300' r='142'/%3E%3C/mask%3E%3Cmask id='c'%3E%3Ccircle cx='712' cy='300' r='112' fill='white'/%3E%3Ccircle cx='760' cy='240' r='100'/%3E%3C/mask%3E%3C/defs%3E%3Crect x='100' y='100' width='824' height='824' rx='185' fill='url(%23n)'/%3E%3Cg mask='url(%23g)' fill='none' stroke='%23EEF2F9' stroke-width='40' stroke-linejoin='round' stroke-linecap='round'%3E%3Crect x='262' y='384' width='500' height='340' rx='44'/%3E%3Cpath d='M290 412 512 572 734 412'/%3E%3C/g%3E%3Crect x='600' y='188' width='224' height='224' fill='%235CC8C2' mask='url(%23c)'/%3E%3C/svg%3E") center / contain no-repeat; }
 .ghost { border: 1px solid var(--line2); color: var(--text); font-weight: 500; }
 .ghost:hover { background: var(--selected); }
 .primary { background: var(--main); color: var(--main-ink); font-weight: 600; }
@@ -173,6 +176,8 @@ nav { flex: 1; overflow-y: auto; padding: 0 10px; }
 .net-dot.live { background: var(--live); }
 .net-dot.fail { background: var(--fail); }
 .net-dot.big { width: 12px; height: 12px; margin-top: 5px; box-shadow: 0 0 0 4px var(--selected); }
+.footer-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.footer-status .reach-count { padding-right: 6px; white-space: nowrap; }
 .footer-row { display: flex; gap: 8px; }
 .footer-row .primary { flex: 1; min-height: 42px; border-radius: 10px; }
 .gear { flex: none; width: 42px; height: 42px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: 10px; color: var(--soft); }

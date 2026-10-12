@@ -400,3 +400,20 @@ func networkSummary(_ net: Network) -> (Route.Stage, String) {
     if net.percent < 100 { return (.live, t("net-connecting")) }
     return (.done, net.bridged ? t("net-bridged") : t("net-connected"))
 }
+
+/// "Nightpost" with the app's icon before it, as the GUI's `.wordmark`.
+struct Wordmark: View {
+    let size: CGFloat
+
+    var body: some View {
+        HStack(spacing: size * 0.3) {
+            // The icon keeps macOS's margin round its tile, a tenth of each
+            // side: drawn larger, then that margin given back.
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: size * 1.5, height: size * 1.5)
+                .padding(-size * 0.15)
+            Text(verbatim: "Nightpost").font(.ui(size, .bold)).foregroundStyle(Palette.strong)
+        }
+    }
+}

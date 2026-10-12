@@ -65,7 +65,7 @@ struct Splash: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("Nightpost").font(.ui(46, .bold)).foregroundStyle(Palette.strong)
+            Wordmark(size: 46)
             Text(verbatim: line)
                 .font(.ui(15))
                 .monospacedDigit()
@@ -89,7 +89,7 @@ struct LockView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("Nightpost").font(.ui(46, .bold)).foregroundStyle(Palette.strong)
+            Wordmark(size: 46)
             Text(t("mac-locked")).font(.ui(15)).foregroundStyle(Palette.muted)
             SecureField(t("mac-passphrase"), text: $passphrase)
                 .textFieldStyle(.plain)
