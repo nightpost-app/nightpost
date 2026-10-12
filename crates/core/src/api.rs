@@ -358,6 +358,10 @@ async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocket
             Ok(Request::Shutdown) => {
                 // Answered first: the caller learns it was heard.
                 write_line(&mut send, &Reply::Done).await?;
+                // Stopping Nightpost closes what shows it; a daemon that just
+                // dies leaves them saying so.
+                daemon.announce(Event::Close { interface: Interface::Window });
+                daemon.announce(Event::Close { interface: Interface::Terminal });
                 daemon.shut_down();
                 return Ok(());
             }

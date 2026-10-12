@@ -373,7 +373,7 @@ impl State {
                 window.set_minimized(false);
                 window.set_focus();
             }
-            // From the tray icon: the daemon keeps running.
+            // From the tray icon, or Nightpost stopping.
             Event::Close { interface: Interface::Window } => dioxus::desktop::window().close(),
             Event::Close { interface: Interface::Terminal } => {}
             Event::TypingIndicators { on } => self.typing_indicators.set(on),
