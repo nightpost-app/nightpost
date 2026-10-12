@@ -143,6 +143,8 @@ struct State {
     maximized: Signal<bool>,
     /// We send read receipts, and so see theirs (the daemon keeps it).
     read_receipts: Signal<bool>,
+    /// The language spoken; choosing another draws everything again.
+    language: Signal<&'static str>,
 }
 
 /// How notifications behave; nothing about anyone, so a plain file.
@@ -421,6 +423,7 @@ fn App() -> Element {
         panel: Signal::new(false),
         maximized: Signal::new(false),
         read_receipts: Signal::new(false),
+        language: Signal::new(i18n::language()),
     });
 
     use_future(move || run(state, None));
@@ -445,39 +448,43 @@ fn App() -> Element {
     });
 
     let theme = *state.theme.read();
+    let language = *state.language.read();
     rsx! {
         style { {STYLE.as_str()} }
-        div { class: "root", lang: i18n::language(), "data-theme": theme.name(), "data-maximized": "{state.maximized}", "data-platform": std::env::consts::OS,
-            if *state.phase.read() != Phase::Ready {
-                div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
-            }
-            match state.phase.read().clone() {
-                Phase::Connecting(what) => rsx! {
-                    div { class: "splash",
-                        p { class: "wordmark", "Nightpost" }
-                        p { "{what}" }
-                        button { class: "quiet", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), {t!("bridges-button")} }
-                    }
-                    DialogView {}
-                },
-                Phase::Locked(why) => rsx! { Locked { why } },
-                Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
-                Phase::Ready => rsx! {
-                    div { class: if state.prefs.read().side_hidden { "app side-hidden" } else { "app" },
-                        SideToggle {}
-                        Sidebar {}
-                        match *state.view.read() {
-                            View::Chat => rsx! { Conversation {} },
-                            View::Settings(section) => rsx! { SettingsPage { section } },
+        // Keyed by language: a new language draws every word again.
+        for language in [language] {
+            div { key: "{language}", class: "root", lang: language, "data-theme": theme.name(), "data-maximized": "{state.maximized}", "data-platform": std::env::consts::OS,
+                if *state.phase.read() != Phase::Ready {
+                    div { class: "drag-strip", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
+                }
+                match state.phase.read().clone() {
+                    Phase::Connecting(what) => rsx! {
+                        div { class: "splash",
+                            p { class: "wordmark", "Nightpost" }
+                            p { "{what}" }
+                            button { class: "quiet", onclick: move |_| state.dialog.set(Some(Dialog::Bridges)), {t!("bridges-button")} }
                         }
-                    }
-                    DialogView {}
-                },
-            }
-            if cfg!(target_os = "macos") {
-                div { class: "titlebar", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
-            } else {
-                Chrome {}
+                        DialogView {}
+                    },
+                    Phase::Locked(why) => rsx! { Locked { why } },
+                    Phase::Failed(why) => rsx! { div { class: "splash", p { class: "wordmark", "Nightpost" } p { class: "warning", "{why}" } } },
+                    Phase::Ready => rsx! {
+                        div { class: if state.prefs.read().side_hidden { "app side-hidden" } else { "app" },
+                            SideToggle {}
+                            Sidebar {}
+                            match *state.view.read() {
+                                View::Chat => rsx! { Conversation {} },
+                                View::Settings(section) => rsx! { SettingsPage { section } },
+                            }
+                        }
+                        DialogView {}
+                    },
+                }
+                if cfg!(target_os = "macos") {
+                    div { class: "titlebar", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
+                } else {
+                    Chrome {}
+                }
             }
         }
     }

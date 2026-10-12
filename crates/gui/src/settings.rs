@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
-use nightpost_core::{dbkey, t};
+use nightpost_core::{dbkey, i18n, t};
 
 use crate::{State, Theme, View, call, dir, network_summary};
 
@@ -89,6 +89,7 @@ pub fn SettingsPage(section: Section) -> Element {
 fn Appearance() -> Element {
     let mut state = use_context::<State>();
     let theme = *state.theme.read();
+    let chosen = i18n::chosen();
     let options = [(Theme::System, t!("theme-system"), "#0f1522", "#f4f5f7"), (Theme::Dark, t!("theme-dark"), "#0f1522", "#111a29"), (Theme::Light, t!("theme-light"), "#f4f5f7", "#ffffff")];
     rsx! {
         section { class: "block",
@@ -107,6 +108,31 @@ fn Appearance() -> Element {
                 }
             }
             p { class: "help", {t!("theme-help")} }
+        }
+        section { class: "block",
+            h2 { {t!("language")} }
+            div { class: "themes", role: "radiogroup", "aria-label": t!("language"),
+                for (code, label) in std::iter::once((None, t!("theme-system"))).chain(i18n::languages().map(|(c, n)| (Some(c), n.to_string()))) {
+                    button {
+                        key: "{label}",
+                        class: if code == chosen.as_deref() { "language-option on" } else { "language-option" },
+                        role: "radio",
+                        "aria-checked": "{code == chosen.as_deref()}",
+                        lang: code.unwrap_or_default(),
+                        onclick: move |_| {
+                            if i18n::choose(code).is_ok() {
+                                state.language.set(i18n::language());
+                                // The daemon's words too: errors, Tor's progress.
+                                dioxus::core::spawn_forever(async move {
+                                    call(Request::Language).await.ok();
+                                });
+                            }
+                        },
+                        "{label}"
+                    }
+                }
+            }
+            p { class: "help", {t!("language-help")} }
         }
     }
 }

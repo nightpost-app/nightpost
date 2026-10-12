@@ -65,6 +65,9 @@ pub enum Request {
     /// built-in ones). Answered while Tor is still starting too, since a
     /// network that blocks Tor is when they are needed.
     Bridges { lines: Option<Vec<String>> },
+    /// The language was chosen again (see [`crate::i18n::choose`]): the
+    /// daemon speaks it from now on.
+    Language,
     /// Stops the daemon: the database closes and, with a passphrase, stays
     /// locked until the next start.
     Shutdown,
@@ -236,6 +239,10 @@ pub async fn serve_starting(listener: Listener, bridges: BridgeLines, ready: tok
             }
             while let Ok(Some(line)) = read_line(&mut lines).await {
                 let reply = match serde_json::from_str::<Request>(&line) {
+                    Ok(Request::Language) => {
+                        crate::i18n::reload();
+                        Reply::Done
+                    }
                     Ok(Request::Bridges { lines }) => bridges.answer(lines).unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
                     Ok(_) => Reply::Error { message: t!("err-starting") },
                     Err(e) => Reply::Error { message: format!("bad request: {e}") },
@@ -325,6 +332,10 @@ async fn answer<T: Transport + 'static>(daemon: Rc<Daemon<T>>, conn: LocalSocket
                 daemon.shut_down();
                 return Ok(());
             }
+            Ok(Request::Language) => {
+                crate::i18n::reload();
+                Reply::Done
+            }
             Ok(Request::Bridges { lines }) => bridges.answer(lines).unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
             Ok(request) => handle(&daemon, request).await.unwrap_or_else(|e| Reply::Error { message: format!("{e:#}") }),
             Err(e) => Reply::Error { message: format!("bad request: {e}") },
@@ -385,7 +396,7 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             daemon.set_passphrase(bytes(current), bytes(new))?;
             Reply::Done
         }
-        Request::Listen | Request::Shutdown | Request::Bridges { .. } => unreachable!("answered by the caller"),
+        Request::Listen | Request::Shutdown | Request::Bridges { .. } | Request::Language => unreachable!("answered by the caller"),
     })
 }
 

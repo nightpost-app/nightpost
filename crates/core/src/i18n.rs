@@ -1,6 +1,7 @@
 //! The words the interfaces show, in the system's language: English, French,
-//! Spanish or German, English for anything else. `NIGHTPOST_LANG=fr` picks
-//! one by hand.
+//! Spanish or German, English for anything else. The language chosen in the
+//! settings (the `language` file of the data directory) comes first, and
+//! `NIGHTPOST_LANG=fr` before it.
 //!
 //! The files in `locales/` are Fluent, kept to one line per message with
 //! `{ $name }` placeables, so any Fluent tool can edit them. The daemon
@@ -8,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const LOCALES: [(&str, &str); 4] = [
     ("en", include_str!("../locales/en.ftl")),
@@ -15,6 +17,9 @@ const LOCALES: [(&str, &str); 4] = [
     ("es", include_str!("../locales/es.ftl")),
     ("de", include_str!("../locales/de.ftl")),
 ];
+
+/// The language chosen by hand, next to the database.
+const FILE: &str = "language";
 
 type Table = HashMap<&'static str, &'static str>;
 
@@ -26,33 +31,65 @@ fn parse(text: &'static str) -> Table {
         .collect()
 }
 
-/// The language code to use, from `NIGHTPOST_LANG` or the system.
-pub fn language() -> &'static str {
-    static LANG: OnceLock<&'static str> = OnceLock::new();
-    LANG.get_or_init(|| {
-        // Tests check messages in English, whatever the machine speaks.
-        if cfg!(test) {
-            return "en";
-        }
-        let wanted = std::env::var("NIGHTPOST_LANG").ok().or_else(sys_locale::get_locale).unwrap_or_default();
-        let code = wanted.split(['-', '_', '.']).next().unwrap_or_default().to_ascii_lowercase();
-        LOCALES.iter().map(|(c, _)| *c).find(|c| *c == code).unwrap_or("en")
-    })
+fn tables() -> &'static Vec<Table> {
+    static TABLES: OnceLock<Vec<Table>> = OnceLock::new();
+    TABLES.get_or_init(|| LOCALES.iter().map(|(_, t)| parse(t)).collect())
 }
 
-fn tables() -> &'static (Table, Table) {
-    static TABLES: OnceLock<(Table, Table)> = OnceLock::new();
-    TABLES.get_or_init(|| {
-        let chosen = LOCALES.iter().find(|(c, _)| *c == language()).map_or("", |(_, t)| t);
-        (parse(chosen), parse(LOCALES[0].1))
-    })
+/// Where in [`LOCALES`] the language in use is.
+fn current() -> &'static AtomicUsize {
+    static CURRENT: OnceLock<AtomicUsize> = OnceLock::new();
+    CURRENT.get_or_init(|| AtomicUsize::new(wanted()))
+}
+
+fn wanted() -> usize {
+    // Tests check messages in English, whatever the machine speaks.
+    if cfg!(test) {
+        return 0;
+    }
+    let wanted = std::env::var("NIGHTPOST_LANG").ok().or_else(chosen).or_else(sys_locale::get_locale).unwrap_or_default();
+    let code = wanted.split(['-', '_', '.']).next().unwrap_or_default().trim().to_ascii_lowercase();
+    LOCALES.iter().position(|(c, _)| *c == code).unwrap_or(0)
+}
+
+/// The language code in use.
+pub fn language() -> &'static str {
+    LOCALES[current().load(Ordering::Relaxed)].0
+}
+
+/// Each language's code and its name, in itself.
+pub fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
+    LOCALES.iter().zip(tables()).map(|((code, _), table)| (*code, table["language-name"]))
+}
+
+/// The language chosen in the settings; `None`: the system's.
+pub fn chosen() -> Option<String> {
+    let text = std::fs::read_to_string(crate::api::data_dir().ok()?.join(FILE)).ok()?;
+    Some(text.trim().to_string()).filter(|c| !c.is_empty())
+}
+
+/// Chooses the language (`None`: the system's) and speaks it from now on.
+pub fn choose(code: Option<&str>) -> anyhow::Result<()> {
+    let file = crate::api::data_dir()?.join(FILE);
+    match code {
+        Some(code) => std::fs::write(file, code)?,
+        None => std::fs::remove_file(file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })?,
+    }
+    reload();
+    Ok(())
+}
+
+/// Speaks the language chosen now, maybe by another process.
+pub fn reload() {
+    current().store(wanted(), Ordering::Relaxed);
 }
 
 /// The message `key`, its `{ $name }` placeables filled from `args`.
 /// Missing in the language: the English one; missing in English: the key.
 pub fn text(key: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
-    let (chosen, english) = tables();
-    fill(chosen.get(key).or_else(|| english.get(key)).copied().unwrap_or(key), args)
+    let tables = tables();
+    let found = tables[current().load(Ordering::Relaxed)].get(key).or_else(|| tables[0].get(key));
+    fill(found.copied().unwrap_or(key), args)
 }
 
 fn fill(template: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
@@ -148,5 +185,6 @@ mod tests {
         assert_eq!(english.len(), 1);
         assert_eq!(fill(english["greet"], &[("name", &"Bob"), ("n", &40)]), "Hello Bob, 40%");
         assert_eq!(text("no-such-key", &[]), "no-such-key");
+        assert_eq!(languages().map(|(_, name)| name).collect::<Vec<_>>(), ["English", "Français", "Español", "Deutsch"]);
     }
 }
