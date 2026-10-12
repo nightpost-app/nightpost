@@ -22,6 +22,8 @@ enum Request: Encodable, Sendable {
     case markRead(name: String)
     case readReceipts(on: Bool?)
     case bridges(lines: [String]?)
+    /// The language was chosen again: the daemon speaks it from now on.
+    case language
     case shutdown
 
     private enum Key: String, CodingKey {
@@ -50,6 +52,7 @@ enum Request: Encodable, Sendable {
         case let .markRead(name): try cmd("mark_read"); try c.encode(name, forKey: .name)
         case let .readReceipts(on): try cmd("read_receipts"); try c.encode(on, forKey: .on)
         case let .bridges(lines): try cmd("bridges"); try c.encode(lines, forKey: .lines)
+        case .language: try cmd("language")
         case .shutdown: try cmd("shutdown")
         }
     }

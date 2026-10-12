@@ -46,6 +46,8 @@ struct RootView: View {
             case .ready: MainView()
             }
         }
+        // A new language draws every word again.
+        .id(model.language)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.ground)
         .foregroundStyle(Palette.text)

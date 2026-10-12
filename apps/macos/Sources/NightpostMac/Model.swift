@@ -26,6 +26,8 @@ final class AppModel {
     var network = Network()
     var links: [String: LinkState] = [:]
     var readReceipts = false
+    /// The language spoken; choosing another draws everything again.
+    var language = Words.language
     /// The last message in, for the route to show it coming: from whom, and
     /// a count so each one plays again.
     var arrival: (name: String, count: Int)?

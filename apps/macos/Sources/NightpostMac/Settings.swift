@@ -17,6 +17,8 @@ enum Theme: String {
 }
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         TabView {
             Tab(t("appearance"), systemImage: "circle.lefthalf.filled") { Pane { AppearancePane() } }
@@ -25,6 +27,7 @@ struct SettingsView: View {
             Tab(t("security"), systemImage: "lock") { Pane { SecurityPane() } }
             Tab(t("about"), systemImage: "info.circle") { Pane { AboutPane() } }
         }
+        .id(model.language)
         .frame(width: 560)
         .foregroundStyle(Palette.text)
         .background(WindowGround())
@@ -156,7 +159,10 @@ private struct Warning: View {
 }
 
 private struct AppearancePane: View {
+    @Environment(AppModel.self) private var model
     @AppStorage("theme") private var theme = Theme.system
+    /// Kept here: choosing the language already spoken redraws nothing else.
+    @State private var chosen = Words.chosen
 
     var body: some View {
         Block(title: t("theme")) {
@@ -167,6 +173,23 @@ private struct AppearancePane: View {
             }
             Help(t("mac-theme-help"))
         }
+        Block(title: t("language")) {
+            Picker(t("language"), selection: Binding(get: { chosen ?? "" }, set: choose)) {
+                Text(verbatim: t("theme-system")).tag("")
+                ForEach(Words.names, id: \.code) { Text(verbatim: $0.name).tag($0.code) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Help(t("language-help"))
+        }
+    }
+
+    private func choose(_ code: String) {
+        Words.choose(code.isEmpty ? nil : code)
+        chosen = Words.chosen
+        model.language = Words.language
+        // The daemon's words too: errors, Tor's progress.
+        Task { _ = try? await Daemon.call(.language) }
     }
 
     private func swatch(_ option: Theme, _ label: String, _ a: UInt32, _ b: UInt32) -> some View {

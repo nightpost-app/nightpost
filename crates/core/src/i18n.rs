@@ -47,7 +47,7 @@ fn wanted() -> usize {
     if cfg!(test) {
         return 0;
     }
-    let wanted = std::env::var("NIGHTPOST_LANG").ok().or_else(chosen).or_else(sys_locale::get_locale).unwrap_or_default();
+    let wanted = std::env::var("NIGHTPOST_LANG").ok().filter(|l| !l.is_empty()).or_else(chosen).or_else(sys_locale::get_locale).unwrap_or_default();
     let code = wanted.split(['-', '_', '.']).next().unwrap_or_default().trim().to_ascii_lowercase();
     LOCALES.iter().position(|(c, _)| *c == code).unwrap_or(0)
 }
