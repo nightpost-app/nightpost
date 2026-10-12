@@ -25,8 +25,9 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "AGPL-3.0-only"
 
-!define MUI_ICON "..\..\icons\nightpost.ico"
-!define MUI_UNICON "..\..\icons\nightpost.ico"
+; The parcel (icons/installer.py), not the app's own icon: this is the setup.
+!define MUI_ICON "..\..\icons\installer.ico"
+!define MUI_UNICON "..\..\icons\installer.ico"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\nightpost-gui.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Nightpost"

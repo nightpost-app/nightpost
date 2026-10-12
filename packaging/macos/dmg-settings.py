@@ -1,6 +1,10 @@
 # dmgbuild settings for Nightpost-macos.dmg:
 #   dmgbuild -s packaging/macos/dmg-settings.py -D app=<Nightpost.app> \
-#     -D background=<background.tiff> Nightpost Nightpost-macos.dmg
+#     -D background=<background.tiff> -D icon=<icons/installer.icns> \
+#     Nightpost Nightpost-macos.dmg
+# The icon is the disk's once opened: the parcel (icons/installer.py), not
+# the app's own. The .dmg file itself gets it through set-file-icon.js,
+# which only lasts on this Mac: a download does not carry it.
 # The background (background.py, then tiffutil -cathidpicheck for both
 # sizes) has the arrow and the line of text drawn around the two icons
 # placed here. Nothing goes through Finder, so it builds over SSH and in CI.
@@ -13,7 +17,7 @@ format = "ULFO"
 filesystem = "HFS+"
 files = [app]
 symlinks = {"Applications": "/Applications"}
-icon = os.path.join(app, "Contents", "Resources", "Nightpost.icns")
+icon = defines["icon"]
 
 background = defines["background"]
 window_rect = ((200, 140), (640, 400))
