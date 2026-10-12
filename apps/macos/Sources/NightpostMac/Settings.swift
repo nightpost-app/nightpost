@@ -28,7 +28,7 @@ struct SettingsView: View {
             Tab(t("about"), systemImage: "info.circle") { Pane { AboutPane() } }
         }
         .id(model.language)
-        .frame(width: 560)
+        .frame(width: 640)
         .foregroundStyle(Palette.text)
         .background(WindowGround())
     }
@@ -58,7 +58,8 @@ private struct Pane<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(28)
         }
-        .frame(minHeight: 380, idealHeight: 520)
+        // The same size on every tab: the window does not jump from one to the next.
+        .frame(height: 600)
         .background(Palette.ground)
     }
 }
