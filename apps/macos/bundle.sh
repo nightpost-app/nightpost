@@ -11,6 +11,9 @@ app=build/Nightpost.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Info.plist "$app/Contents/"
+# The daemon's version, which the app compares with the running one's.
+version=$("$nightpost" --version | awk '{print $2}')
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 cp .build/release/NightpostMac "$app/Contents/MacOS/"
 cp "$nightpost" "$app/Contents/MacOS/nightpost"
 if [ -n "$lyrebird" ]; then

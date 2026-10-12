@@ -37,6 +37,11 @@ enum Daemon {
 
     static var log: URL { dir.appending(path: "daemon.log") }
 
+    /// What the running daemon wrote at its start; bundle.sh gives the app
+    /// the version of the daemon beside it.
+    static var runningVersion: String? { try? String(contentsOf: dir.appending(path: "api.version"), encoding: .utf8) }
+    static var bundledVersion: String? { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }
+
     /// One request on its own connection.
     static func call(_ request: Request) async throws -> Reply {
         try await withCheckedThrowingContinuation { answer in

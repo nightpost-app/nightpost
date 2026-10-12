@@ -98,6 +98,13 @@ final class AppModel {
     /// The event stream, starting the daemon first if none answers. nil:
     /// it needs the passphrase (again) and the phase now asks for it.
     private func attach(passphrase: String?) async throws -> AsyncThrowingStream<Event, any Error>? {
+        // A daemon left running from before an update would not know what
+        // this app asks: stop it, the one beside this app takes over.
+        if Daemon.runningVersion != Daemon.bundledVersion && Daemon.answers {
+            phase = .connecting(t("restarting-update"))
+            _ = try? await Daemon.call(.shutdown)
+            for _ in 0..<20 where Daemon.answers { try await Task.sleep(for: .milliseconds(500)) }
+        }
         if let events = try? await Daemon.listen() {
             return events
         }
