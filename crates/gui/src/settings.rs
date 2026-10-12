@@ -92,6 +92,12 @@ fn Appearance() -> Element {
     // A signal: choosing the language already spoken redraws nothing else.
     let mut chosen = use_signal(i18n::chosen);
     let mut terminal = use_signal(|| std::fs::read_to_string(dir().join(crate::tray::TERMINAL_FILE)).unwrap_or_default().trim().to_string());
+    let installed = crate::tray::installed();
+    // A command line of one's own: none of the buttons.
+    let mut other = use_signal(|| {
+        let line = terminal.peek().clone();
+        !line.is_empty() && !installed.iter().any(|&(_, l)| l == line)
+    });
     let options = [(Theme::System, t!("theme-system"), "#0f1522", "#f4f5f7"), (Theme::Dark, t!("theme-dark"), "#0f1522", "#111a29"), (Theme::Light, t!("theme-light"), "#f4f5f7", "#ffffff")];
     rsx! {
         section { class: "block",
@@ -140,24 +146,47 @@ fn Appearance() -> Element {
         section { class: "block",
             h2 { {t!("terminal")} }
             div { class: "themes", role: "radiogroup", "aria-label": t!("terminal"),
-                for (command, label) in std::iter::once(("", t!("theme-system"))).chain(crate::tray::installed().into_iter().map(|(c, n)| (c, n.to_string()))) {
+                for (line, label) in std::iter::once(("", t!("theme-system"))).chain(installed.iter().map(|&(n, l)| (l, n.to_string()))) {
                     button {
                         key: "{label}",
-                        class: if command == *terminal.read() { "language-option on" } else { "language-option" },
+                        class: if !*other.read() && line == *terminal.read() { "language-option on" } else { "language-option" },
                         role: "radio",
-                        "aria-checked": "{command == *terminal.read()}",
+                        "aria-checked": "{!*other.read() && line == *terminal.read()}",
                         onclick: move |_| {
-                            let file = dir().join(crate::tray::TERMINAL_FILE);
-                            let saved = if command.is_empty() { std::fs::remove_file(file).or(Ok(())) } else { std::fs::write(file, command) };
-                            if saved.is_ok() {
-                                terminal.set(command.to_string());
+                            if save_terminal(line) {
+                                terminal.set(line.to_string());
+                                other.set(false);
                             }
                         },
                         "{label}"
                     }
                 }
+                button {
+                    class: if *other.read() { "language-option on" } else { "language-option" },
+                    role: "radio",
+                    "aria-checked": "{other}",
+                    onclick: move |_| other.set(true),
+                    {t!("terminal-other")}
+                }
             }
-            p { class: "help", {t!("terminal-help")} }
+            if *other.read() {
+                // Saved as typed: the next "Open in a terminal" uses it.
+                input {
+                    class: "name-field",
+                    "aria-label": t!("terminal-other"),
+                    placeholder: if cfg!(windows) { "wt" } else { "alacritty -e" },
+                    spellcheck: false,
+                    value: "{terminal}",
+                    oninput: move |e| {
+                        if save_terminal(e.value().trim()) {
+                            terminal.set(e.value());
+                        }
+                    },
+                }
+                p { class: "help", {t!("terminal-other-help")} }
+            } else {
+                p { class: "help", {t!("terminal-help")} }
+            }
         }
     }
 }
@@ -572,4 +601,10 @@ fn open_folder(path: &std::path::Path) {
     let mut command = std::process::Command::new(opener);
     as_launched(&mut command);
     let _ = command.arg(path).spawn();
+}
+
+/// The terminal's command line for the tray; empty: the system's.
+fn save_terminal(line: &str) -> bool {
+    let file = dir().join(crate::tray::TERMINAL_FILE);
+    if line.is_empty() { std::fs::remove_file(file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) } else { std::fs::write(file, line) }.is_ok()
 }

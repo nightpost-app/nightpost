@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum Theme: String {
     case system, dark, light
@@ -187,10 +188,31 @@ private struct AppearancePane: View {
         Block(title: t("terminal")) {
             HStack(spacing: 10) {
                 terminalPill("", t("theme-system"))
-                ForEach(Terminal.installed, id: \.path) { terminalPill($0.path, $0.deletingPathExtension().lastPathComponent) }
+                ForEach(terminals, id: \.path) { terminalPill($0.path, $0.deletingPathExtension().lastPathComponent) }
+                Button(t("terminal-other"), action: pickTerminal).buttonStyle(.plain)
+                    .font(.ui(14, .medium)).foregroundStyle(Palette.soft)
+                    .padding(.horizontal, 16).frame(height: 34)
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.line2))
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .fixedSize()
             }
             Help(t("mac-terminal-help"))
         }
+    }
+
+    /// Those that say they run .command files, and one picked by hand.
+    private var terminals: [URL] {
+        let found = Terminal.installed
+        guard !terminal.isEmpty, !found.contains(where: { $0.path == terminal }) else { return found }
+        return found + [URL(fileURLWithPath: terminal)]
+    }
+
+    /// Any app: macOS hands it the .command file.
+    private func pickTerminal() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        if panel.runModal() == .OK, let url = panel.url { terminal = url.path }
     }
 
     private func terminalPill(_ path: String, _ label: String) -> some View {

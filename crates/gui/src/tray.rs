@@ -138,45 +138,76 @@ fn ask(request: Request) {
     });
 }
 
-/// The terminals one can pick in Settings: command, how it wants the
-/// program, name.
+/// The terminals offered in Settings: name, and the command line the
+/// program is added to. Any other command line can be typed in.
 #[cfg(not(windows))]
-pub const TERMINALS: [(&str, &[&str], &str); 11] = [
-    ("ghostty", &["-e"], "Ghostty"),
-    ("konsole", &["-e"], "Konsole"),
-    ("ptyxis", &["--"], "Ptyxis"),
-    ("gnome-terminal", &["--"], "GNOME Terminal"),
-    ("kgx", &["-e"], "Console"),
-    ("xfce4-terminal", &["-x"], "Xfce Terminal"),
-    ("alacritty", &["-e"], "Alacritty"),
-    ("kitty", &[], "kitty"),
-    ("foot", &[], "foot"),
-    ("wezterm", &["start", "--"], "WezTerm"),
-    ("xterm", &["-e"], "XTerm"),
+pub const TERMINALS: [(&str, &str); 11] = [
+    ("Ghostty", "ghostty -e"),
+    ("Konsole", "konsole -e"),
+    ("Ptyxis", "ptyxis --"),
+    ("GNOME Terminal", "gnome-terminal --"),
+    ("Console", "kgx -e"),
+    ("Xfce Terminal", "xfce4-terminal -x"),
+    ("Alacritty", "alacritty -e"),
+    ("kitty", "kitty"),
+    ("foot", "foot"),
+    ("WezTerm", "wezterm start --"),
+    ("XTerm", "xterm -e"),
 ];
 #[cfg(windows)]
-pub const TERMINALS: [(&str, &[&str], &str); 3] = [("wt", &[], "Windows Terminal"), ("alacritty", &["-e"], "Alacritty"), ("wezterm", &["start", "--"], "WezTerm")];
+pub const TERMINALS: [(&str, &str); 3] = [("Windows Terminal", "wt"), ("Alacritty", "alacritty -e"), ("WezTerm", "wezterm start --")];
 
-/// The one picked in Settings, by command; none: the system's.
+/// The command line picked in Settings; none: the system's.
 pub const TERMINAL_FILE: &str = "terminal";
 
 /// Those of [`TERMINALS`] on the PATH.
 pub fn installed() -> Vec<(&'static str, &'static str)> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let found = |command: &str| {
+    let found = |line: &str| {
+        let command = line.split(' ').next().unwrap_or_default();
         // Not is_file: Windows Terminal's `wt.exe` is an app alias, which
         // only has metadata of its own.
         std::env::split_paths(&path).any(|dir| std::fs::symlink_metadata(dir.join(format!("{command}{}", std::env::consts::EXE_SUFFIX))).is_ok())
     };
-    TERMINALS.iter().filter(|(command, ..)| found(command)).map(|&(command, _, name)| (command, name)).collect()
+    TERMINALS.into_iter().filter(|(_, line)| found(line)).collect()
+}
+
+/// A command line in words, as a shell splits it: quotes hold spaces
+/// together (`"C:\Program Files\…"`); backslashes are left alone, for
+/// Windows paths.
+fn words(line: &str) -> Vec<String> {
+    let (mut words, mut word, mut quote, mut started) = (Vec::new(), String::new(), None, false);
+    for c in line.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '"' | '\'') => (quote, started) = (Some(c), true),
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, c) => (word, started) = (word + &c.to_string(), true),
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// Runs `program` at the end of the command line `line`.
+fn run_in(line: &str, program: &Path) -> bool {
+    let words = words(line);
+    let Some((terminal, args)) = words.split_first() else { return false };
+    reap(Command::new(terminal).args(args).arg(program).stdin(Stdio::null()).spawn())
 }
 
 /// Runs `program` in a terminal window: false if none could be found.
 fn open_terminal(program: &Path) -> bool {
     let picked = std::fs::read_to_string(crate::dir().join(TERMINAL_FILE)).unwrap_or_default();
-    if let Some((command, args, _)) = TERMINALS.iter().find(|(command, ..)| *command == picked.trim())
-        && reap(Command::new(command).args(*args).arg(program).stdin(Stdio::null()).spawn())
-    {
+    if run_in(&picked, program) {
         return true;
     }
     #[cfg(windows)]
@@ -191,11 +222,20 @@ fn open_terminal(program: &Path) -> bool {
     {
         // The user's TERMINAL, then the standard launcher, then the
         // terminals desktops come with.
-        let chosen = std::env::var_os("TERMINAL").map(|t| (t, &["-e"][..]));
-        chosen
-            .into_iter()
-            .chain(std::iter::once(("xdg-terminal-exec".into(), &[][..])))
-            .chain(TERMINALS.iter().map(|&(t, args, _)| (t.into(), args)))
-            .any(|(terminal, args)| reap(Command::new(terminal).args(args).arg(program).stdin(Stdio::null()).spawn()))
+        let chosen = std::env::var_os("TERMINAL").map(|t| reap(Command::new(t).arg("-e").arg(program).stdin(Stdio::null()).spawn()));
+        chosen == Some(true) || std::iter::once("xdg-terminal-exec").chain(TERMINALS.map(|(_, line)| line)).any(|line| run_in(line, program))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::words;
+
+    #[test]
+    fn a_command_line_splits_as_a_shell_would() {
+        assert_eq!(words("  wezterm start  -- "), ["wezterm", "start", "--"]);
+        assert_eq!(words(r#""C:\Program Files\Alacritty\alacritty.exe" -e"#), [r"C:\Program Files\Alacritty\alacritty.exe", "-e"]);
+        assert_eq!(words("foot --title 'Night post' ''"), ["foot", "--title", "Night post", ""]);
+        assert!(words(" ").is_empty());
     }
 }
