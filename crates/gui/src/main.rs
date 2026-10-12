@@ -143,6 +143,11 @@ struct State {
     maximized: Signal<bool>,
     /// We send read receipts, and so see theirs (the daemon keeps it).
     read_receipts: Signal<bool>,
+    /// We tell people we are writing, and so see when they do.
+    typing_indicators: Signal<bool>,
+    /// Who is writing to us now, numbered as `arrival` so only the last
+    /// ping takes them away.
+    typing: Signal<HashMap<String, u64>>,
     /// The language spoken; choosing another draws everything again.
     language: Signal<&'static str>,
 }
@@ -298,6 +303,7 @@ impl State {
     fn on_event(mut self, event: Event) {
         match event {
             Event::Message { from, id, time, text } => {
+                self.typing.write().remove(&from);
                 let n = self.arrival.read().as_ref().map_or(0, |a| a.1) + 1;
                 self.arrival.set(Some((from.clone(), n)));
                 spawn(async move {
@@ -343,6 +349,17 @@ impl State {
                 }
             }
             Event::ReadReceipts { on } => self.read_receipts.set(on),
+            Event::TypingIndicators { on } => self.typing_indicators.set(on),
+            Event::Typing { from } => {
+                let n = self.typing.read().values().max().copied().unwrap_or(0) + 1;
+                self.typing.write().insert(from.clone(), n);
+                spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    if self.typing.read().get(&from) == Some(&n) {
+                        self.typing.write().remove(&from);
+                    }
+                });
+            }
             Event::ContactAdded { name } => {
                 self.status.set(t!("now-contact", name = name));
                 if matches!(&*self.dialog.read(), Some(Dialog::Waiting { name: n, .. } | Dialog::Invite { name: n, .. }) if *n == name) {
@@ -423,6 +440,8 @@ fn App() -> Element {
         panel: Signal::new(false),
         maximized: Signal::new(false),
         read_receipts: Signal::new(false),
+        typing_indicators: Signal::new(false),
+        typing: Signal::new(HashMap::new()),
         language: Signal::new(i18n::language()),
     });
 
@@ -534,6 +553,10 @@ async fn run(mut state: State, passphrase: Option<String>) {
     }
     match call(Request::ReadReceipts { on: None }).await {
         Ok(Reply::ReadReceipts { on }) => state.read_receipts.set(on),
+        other => state.fail(other),
+    }
+    match call(Request::TypingIndicators { on: None }).await {
+        Ok(Reply::TypingIndicators { on }) => state.typing_indicators.set(on),
         other => state.fail(other),
     }
     state.reload_contacts().await;
@@ -911,6 +934,8 @@ fn reach_line(name: &str, net: &Network, link: Option<LinkState>) -> (&'static s
 fn Conversation() -> Element {
     let mut state = use_context::<State>();
     let mut draft = use_signal(String::new);
+    // When we last told them we are writing.
+    let mut pinged = use_signal(|| None::<std::time::Instant>);
     let Some(name) = state.selected.read().clone() else {
         return rsx! {
             main {
@@ -924,6 +949,22 @@ fn Conversation() -> Element {
         };
     };
     let rows = rows(state.messages.read().get(&name).map(Vec::as_slice).unwrap_or_default());
+    let typing = state.typing.read().contains_key(&name);
+    let mut typed = {
+        let name = name.clone();
+        move |text: String| {
+            // At most one ping every few seconds, as UmbraChat did.
+            let quiet = pinged.read().is_none_or(|at| at.elapsed() >= Duration::from_secs(4));
+            if *state.typing_indicators.read() && quiet && !text.trim().is_empty() {
+                pinged.set(Some(std::time::Instant::now()));
+                let name = name.clone();
+                spawn(async move {
+                    let _ = call(Request::Typing { name }).await;
+                });
+            }
+            draft.set(text);
+        }
+    };
     let link = state.links.read().get(&name).copied();
     let (reach_class, reach) = reach_line(&name, &state.network.read(), link);
     let waiting = if link == Some(LinkState::Unreachable) { t!("waiting-reachable", name = name) } else { t!("sending") };
@@ -1019,6 +1060,12 @@ fn Conversation() -> Element {
             // view stays there as messages arrive.
             div { class: "thread",
                 div { class: "column",
+                    if typing {
+                        div { class: "bubble-row in",
+                            div { class: "bubble typing", "aria-hidden": "true", i {} i {} i {} }
+                            span { class: "sr", role: "status", {t!("typing", name = name)} }
+                        }
+                    }
                     for row in rows.into_iter().rev() {
                         match row {
                             Row::Day(label) => rsx! { p { key: "day-{label}", class: "day", "{label}" } },
@@ -1056,7 +1103,7 @@ fn Conversation() -> Element {
                     placeholder: t!("write-to", name = name),
                     value: "{draft}",
                     rows: "1",
-                    oninput: move |e| draft.set(e.value()),
+                    oninput: move |e| typed(e.value()),
                     onkeydown: move |e: KeyboardEvent| {
                         if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
                             e.prevent_default();

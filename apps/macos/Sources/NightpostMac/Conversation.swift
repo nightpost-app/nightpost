@@ -91,6 +91,9 @@ struct ConversationView: View {
                 .lineLimit(1...10)
                 .focused($writing)
                 .onSubmit(send)
+                .onChange(of: draft) { _, now in
+                    if !now.allSatisfy(\.isWhitespace) { model.typed(to: name) }
+                }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
                 .frame(minHeight: 48)
@@ -140,6 +143,7 @@ private struct MessageList: View {
                     let last = next.map { $0.outgoing != m.outgoing || $0.time - m.time > 5 * 60_000 || !When.sameDay($0.time, m.time) } ?? true
                     Bubble(message: m, meta: last || (m.outgoing && !m.delivered), waiting: waiting)
                 }
+                if model.typing[name] != nil { Typing(name: name) }
             }
             .padding(.top, 8)
             .padding(.bottom, 12)
@@ -192,6 +196,39 @@ private struct Bubble: View {
         .frame(maxWidth: 544, alignment: out ? .trailing : .leading)
         .frame(maxWidth: .infinity, alignment: out ? .trailing : .leading)
         .padding(.top, 6)
+    }
+}
+
+/// They are writing: three dots, which blink in turn unless motion is
+/// reduced.
+private struct Typing: View {
+    @Environment(\.accessibilityReduceMotion) private var still
+    let name: String
+
+    var body: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 4, bottomTrailingRadius: 16, topTrailingRadius: 16, style: .continuous)
+        TimelineView(.animation(paused: still)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    // The GUI's blink: 1.2 s, each dot 0.2 s after the one before.
+                    let phase = (time - 0.2 * Double(i)).truncatingRemainder(dividingBy: 1.2) / 1.2
+                    let lit = phase < 0.3 ? phase / 0.3 : phase < 0.6 ? (0.6 - phase) / 0.3 : 0
+                    Circle()
+                        .fill(Palette.muted)
+                        .frame(width: 7, height: 7)
+                        .opacity(still ? [1, 0.7, 0.45][i] : 0.35 + 0.65 * lit)
+                }
+            }
+        }
+        .padding(.horizontal, 15)
+        .frame(height: 40)
+        .background(Palette.inBg, in: shape)
+        .overlay { shape.stroke(Palette.inBorder) }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
+        .accessibilityElement()
+        .accessibilityLabel(t("typing", ["name": name]))
     }
 }
 

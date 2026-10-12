@@ -20,6 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use tokio::sync::mpsc;
+use tokio::time::{Duration, Instant, sleep_until};
 use unicode_width::UnicodeWidthChar as _;
 
 // Night post, as in the graphical interface: a desk at night, their
@@ -40,6 +41,10 @@ const DIM: Style = Style::new().fg(LAMP);
 const PAPER: Style = Style::new().fg(INK).bg(ONIONSKIN);
 const SIDEBAR: u16 = 28;
 const HISTORY: u32 = 200;
+/// As the graphical interface: a ping at most this often while typing,
+/// shown this long on the other side.
+const TYPING_EVERY: Duration = Duration::from_secs(4);
+const TYPING_SHOWN: Duration = Duration::from_secs(5);
 fn help() -> Vec<String> {
     let keys = [
         ("Enter", t!("help-send")),
@@ -109,6 +114,11 @@ struct App {
     focused: bool,
     notify: Option<String>,
     quit: bool,
+    /// Who is writing to us, until when. ponytail: one person at a time,
+    /// the last one heard; a map if two at once ever matters here.
+    typing: Option<(String, Instant)>,
+    /// When we last said we are writing.
+    pinged: Option<Instant>,
 }
 
 pub async fn run(dir: &Path) -> Result<()> {
@@ -143,6 +153,8 @@ pub async fn run(dir: &Path) -> Result<()> {
         focused: true,
         notify: None,
         quit: false,
+        typing: None,
+        pinged: None,
     };
     app.reload_contacts(&mut requests).await?;
     app.select(0, &mut requests).await;
@@ -184,6 +196,8 @@ impl App {
                     _ => {}
                 },
                 Some(update) = updated.recv() => self.on_update(update, requests).await,
+                // Only to draw again without it.
+                _ = sleep_until(self.typing.as_ref().map_or_else(Instant::now, |t| t.1)), if self.typing.is_some() => self.typing = None,
             }
         }
         Ok(())
@@ -267,8 +281,23 @@ impl App {
                 let end = next_boundary(&self.input, self.cursor);
                 self.input.replace_range(self.cursor..end, "");
             }
-            KeyCode::Char(c) if !ctrl => self.insert(c.encode_utf8(&mut [0; 4])),
+            KeyCode::Char(c) if !ctrl => {
+                self.insert(c.encode_utf8(&mut [0; 4]));
+                self.typed(requests).await;
+            }
             _ => {}
+        }
+    }
+
+    /// At most one ping every few seconds; the daemon drops it unless
+    /// typing indicators are on.
+    async fn typed(&mut self, requests: &mut Client) {
+        if self.input.starts_with('/') || self.pinged.is_some_and(|at| at.elapsed() < TYPING_EVERY) {
+            return;
+        }
+        if let Some(c) = self.conversations.get(self.selected) {
+            self.pinged = Some(Instant::now());
+            let _ = requests.call(&Request::Typing { name: c.name.clone() }).await;
         }
     }
 
@@ -421,6 +450,9 @@ impl App {
                 self.quit = true;
             }
             Update::Event(Event::Message { from, id, time, text }) => {
+                if self.typing.as_ref().is_some_and(|t| t.0 == from) {
+                    self.typing = None;
+                }
                 let selected = self.selected;
                 let focused = self.focused;
                 let mut read = false;
@@ -486,7 +518,8 @@ impl App {
                 }
             }
             // The route is the graphical interface's.
-            Update::Event(Event::Network { .. } | Event::Link { .. } | Event::ReadReceipts { .. }) => {}
+            Update::Event(Event::Network { .. } | Event::Link { .. } | Event::ReadReceipts { .. } | Event::TypingIndicators { .. }) => {}
+            Update::Event(Event::Typing { from }) => self.typing = Some((from, Instant::now() + TYPING_SHOWN)),
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 self.notify = Some(t!("notify-used-invite", name = name));
                 self.overlay = Some(if self.codes.contains(&name) {
@@ -584,6 +617,9 @@ impl App {
             }
             if c.person.muted_until.is_some_and(|until| until > now_millis()) {
                 title.push(Span::styled("  muted", Style::new().fg(INK_SOFT)));
+            }
+            if self.typing.as_ref().is_some_and(|t| t.0 == c.name) {
+                title.push(Span::styled(format!("  {}", t!("typing", name = c.name)), DIM));
             }
         }
         frame.render_widget(Paragraph::new(Line::from(title)), margin(header));

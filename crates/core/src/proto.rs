@@ -135,6 +135,9 @@ pub enum Body {
     /// These messages of ours were read. Sent only by someone who turned
     /// read receipts on.
     Read(Vec<[u8; 16]>),
+    /// They are writing to us now. Sent only by someone who turned typing
+    /// indicators on, over a link already open, never queued.
+    Typing,
 }
 
 /// Longest text message, in bytes.

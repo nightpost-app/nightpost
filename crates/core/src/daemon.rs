@@ -66,7 +66,7 @@ pub struct Daemon<T: Transport> {
     refreshing: Mutex<()>,
     /// Devices a link is open (or being opened) to, with a way to wake it
     /// when something new is queued for them.
-    links: RefCell<HashMap<Target, Option<mpsc::UnboundedSender<()>>>>,
+    links: RefCell<HashMap<Target, Option<Wake>>>,
     /// Failed attempts in a row, and when to try again.
     backoff: RefCell<HashMap<Target, (u32, Instant)>>,
     wake: Notify,
@@ -79,6 +79,9 @@ pub struct Daemon<T: Transport> {
 }
 
 type Target = (Vec<u8>, u8);
+/// Wakes an open link: `None` to send what is queued, `Some` an envelope to
+/// send at once, never queued (a typing indicator).
+type Wake = mpsc::UnboundedSender<Option<Vec<u8>>>;
 
 /// This device's own keys, created with the database.
 #[derive(Serialize, Deserialize)]
@@ -395,7 +398,7 @@ impl<T: Transport + 'static> Daemon<T> {
     fn nudge(&self, contact: &Contact, devices: &DeviceList) {
         for device in &devices.devices {
             if let Some(Some(link)) = self.links.borrow().get(&(contact.identity.clone(), device.id)) {
-                let _ = link.send(());
+                let _ = link.send(None);
             }
         }
         self.wake.notify_one();
@@ -410,6 +413,49 @@ impl<T: Transport + 'static> Daemon<T> {
     pub fn set_read_receipts(&self, on: bool) -> Result<()> {
         self.store.put("self", "read_receipts", &[u8::from(on)])?;
         let _ = self.events.send(Event::ReadReceipts { on });
+        Ok(())
+    }
+
+    /// Whether we tell people we are writing to them, and so see when they
+    /// write to us. Off by default, as read receipts.
+    pub fn typing_indicators(&self) -> Result<bool> {
+        Ok(self.store.get("self", "typing_indicators")?.is_some_and(|v| v == [1]))
+    }
+
+    pub fn set_typing_indicators(&self, on: bool) -> Result<()> {
+        self.store.put("self", "typing_indicators", &[u8::from(on)])?;
+        let _ = self.events.send(Event::TypingIndicators { on });
+        Ok(())
+    }
+
+    /// We are writing to `name`: with typing indicators on, they are told
+    /// over each open link. A device with none gets dialed instead, so the
+    /// next one (the interfaces send one every few seconds) goes, and the
+    /// message after it too, sooner.
+    pub fn typing(self: &Rc<Self>, name: &str) -> Result<()> {
+        if !self.typing_indicators()? {
+            return Ok(());
+        }
+        let contact = self.contact_named(name)?;
+        let id: [u8; 16] = OsRng.unwrap_err().random();
+        let envelope = postcard::to_stdvec(&Envelope { id, time: now_millis(), body: Body::Typing })?;
+        for device in self.devices_of(&contact)?.devices.iter().filter(|d| d.role == Role::Normal) {
+            let target = (contact.identity.clone(), device.id);
+            let link = self.links.borrow().get(&target).cloned();
+            match link {
+                Some(Some(link)) => {
+                    let _ = link.send(Some(envelope.clone()));
+                }
+                // Being dialed already.
+                Some(None) => {}
+                None => {
+                    if self.backoff.borrow().get(&target).is_none_or(|(_, at)| *at <= Instant::now()) {
+                        self.links.borrow_mut().insert(target.clone(), None);
+                        spawn_local(self.clone().dial(target));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -717,7 +763,7 @@ impl<T: Transport + 'static> Daemon<T> {
         stream: T::Stream,
         contact: &Contact,
         device: u8,
-        woken: &mut mpsc::UnboundedReceiver<()>,
+        woken: &mut mpsc::UnboundedReceiver<Option<Vec<u8>>>,
     ) -> Result<()> {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (frames_in, mut frames) = mpsc::unbounded_channel();
@@ -764,7 +810,15 @@ impl<T: Transport + 'static> Daemon<T> {
                         }
                         Some(Frame::Card { .. } | Frame::Welcome) => bail!("an invitation frame on a contact link"),
                     },
-                    Some(()) = woken.recv() => {}
+                    Some(now) = woken.recv() => {
+                        // Not queued: nothing waits for its acknowledgement.
+                        if let Some(envelope) = now {
+                            let id: Envelope = postcard::from_bytes(&envelope)?;
+                            let message = session::encrypt(&self.store, &me, &them, &envelope).await?;
+                            let frame = Frame::Message { id: id.id, kind: message.message_type() as u8, body: message.serialize().to_vec() };
+                            proto::send(&mut writer, &frame).await?;
+                        }
+                    }
                     _ = sleep(IDLE) => return Ok(()),
                     _ = self.stopped() => return Ok(()),
                 }
@@ -802,6 +856,8 @@ impl<T: Transport + 'static> Daemon<T> {
                 }
                 return Ok(Some(Event::Read { to: contact.name.clone(), ids: ids.iter().map(|id| hex(id)).collect() }));
             }
+            // As read receipts: taken only from someone we tell too.
+            Body::Typing => return Ok(self.typing_indicators()?.then(|| Event::Typing { from: contact.name.clone() })),
         };
         ensure!(text.len() <= MAX_TEXT, "message too long");
         let text = crate::text::message(&text);
@@ -1132,6 +1188,58 @@ mod tests {
                 // Nothing new to read: nothing sent.
                 bob.mark_read("alice").unwrap();
                 assert!(bob.store.queued(&alice_contact.identity, DEVICE).unwrap().is_empty());
+            })
+            .await;
+    }
+
+    /// "Is typing" goes only over an open link, is never stored nor queued,
+    /// and is seen only when both sides have typing indicators on.
+    #[tokio::test]
+    async fn typing_indicators_are_off_by_default_and_mutual() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+                // A message first, so the link is open.
+                let id = alice.send("bob", "un").unwrap();
+                assert!(message("alice", id, "un")(&next(&mut bob_events).await));
+                next(&mut alice_events).await;
+                next(&mut alice_events).await;
+                let quiet = |events: &mut broadcast::Receiver<Event>| {
+                    while let Ok(event) = events.try_recv() {
+                        assert!(matches!(event, Event::Link { .. } | Event::Network { .. }), "{event:?}");
+                    }
+                };
+
+                assert!(!alice.typing_indicators().unwrap() && !bob.typing_indicators().unwrap());
+                alice.typing("bob").unwrap();
+                sleep(Duration::from_millis(300)).await;
+                quiet(&mut bob_events);
+                // Alice on, Bob off: hers arrives, but he gives none, so he sees none.
+                alice.set_typing_indicators(true).unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::TypingIndicators { on: true });
+                alice.typing("bob").unwrap();
+                sleep(Duration::from_millis(300)).await;
+                quiet(&mut bob_events);
+
+                bob.set_typing_indicators(true).unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::TypingIndicators { on: true });
+                alice.typing("bob").unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::Typing { from: "alice".into() });
+                sleep(Duration::from_millis(300)).await;
+                // Its acknowledgement is no delivery, and nothing waits in a queue.
+                quiet(&mut alice_events);
+                let bob_contact = &alice.contacts_raw().unwrap()[0];
+                assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
+                assert_eq!(bob.history("alice", 10).unwrap().len(), 1);
             })
             .await;
     }

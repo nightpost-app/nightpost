@@ -403,6 +403,21 @@ private struct SecurityPane: View {
                 })
             )
         }
+        Block(title: t("typing-indicators")) {
+            ToggleRow(
+                title: t("typing-indicators-send"),
+                help: t("typing-indicators-help"),
+                on: Binding(get: { model.typingIndicators }, set: { on in
+                    Task {
+                        switch try? await Daemon.call(.typingIndicators(on: on)) {
+                        case let .typingIndicators(now): model.typingIndicators = now
+                        case let .error(message): model.status = message
+                        default: break
+                        }
+                    }
+                })
+            )
+        }
         Block(title: t("leaving")) {
             ToggleRow(
                 title: has ? t("close-locks") : t("close-quits"),

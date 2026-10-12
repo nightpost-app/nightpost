@@ -323,6 +323,7 @@ fn Security() -> Element {
     let mut error = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let read_receipts = *state.read_receipts.read();
+    let typing_indicators = *state.typing_indicators.read();
 
     let mut open = move |c: Option<Change>| {
         change.set(c);
@@ -446,6 +447,27 @@ fn Security() -> Element {
                     span { class: "help", {t!("read-receipts-help")} }
                 }
                 span { class: if read_receipts { "switch on" } else { "switch" }, span {} }
+            }
+        }
+        section { class: "block",
+            h2 { {t!("typing-indicators")} }
+            button {
+                class: "toggle-row",
+                role: "switch",
+                "aria-checked": "{typing_indicators}",
+                onclick: move |_| {
+                    spawn(async move {
+                        match call(Request::TypingIndicators { on: Some(!typing_indicators) }).await {
+                            Ok(Reply::TypingIndicators { on }) => state.typing_indicators.set(on),
+                            other => state.fail(other),
+                        }
+                    });
+                },
+                span { class: "card-text",
+                    span { class: "card-title", {t!("typing-indicators-send")} }
+                    span { class: "help", {t!("typing-indicators-help")} }
+                }
+                span { class: if typing_indicators { "switch on" } else { "switch" }, span {} }
             }
         }
         section { class: "block",

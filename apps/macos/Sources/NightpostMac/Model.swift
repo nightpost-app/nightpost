@@ -26,6 +26,12 @@ final class AppModel {
     var network = Network()
     var links: [String: LinkState] = [:]
     var readReceipts = false
+    /// We tell people we are writing, and so see when they do.
+    var typingIndicators = false
+    /// Who is writing to us now, counted so only the last ping takes them away.
+    var typing: [String: Int] = [:]
+    /// When we last told someone we are writing.
+    private var pinged: Date?
     /// The language spoken; choosing another draws everything again.
     var language = Words.language
     /// The last message in, for the route to show it coming: from whom, and
@@ -71,6 +77,9 @@ final class AppModel {
             }
             if case let .readReceipts(on) = try await Daemon.call(.readReceipts(on: nil)) {
                 readReceipts = on
+            }
+            if case let .typingIndicators(on) = try await Daemon.call(.typingIndicators(on: nil)) {
+                typingIndicators = on
             }
             try await reloadContacts()
         } catch {
@@ -142,6 +151,14 @@ final class AppModel {
         Task {
             if case let .error(message) = try? await Daemon.call(.markRead(name: name)) { status = message }
         }
+    }
+
+    /// We are writing to them: at most one ping every few seconds, as on
+    /// other systems.
+    func typed(to name: String) {
+        guard typingIndicators, pinged.map({ Date().timeIntervalSince($0) >= 4 }) ?? true else { return }
+        pinged = Date()
+        Task { _ = try? await Daemon.call(.typing(name: name)) }
     }
 
     /// False if the daemon refused it (the reason is in `status`).
@@ -294,6 +311,7 @@ final class AppModel {
     private func apply(_ event: Event) {
         switch event {
         case let .message(from, id, time, text):
+            typing[from] = nil
             arrival = (from, (arrival?.count ?? 0) + 1)
             messages[from, default: []].append(HistoryItem(id: id, outgoing: false, time: time, text: text, delivered: true, read: false))
             let here = selected == from
@@ -317,6 +335,14 @@ final class AppModel {
             for i in list.indices where ids.contains(list[i].id) { list[i].read = true }
             messages[to] = list
         case let .readReceipts(on): readReceipts = on
+        case let .typingIndicators(on): typingIndicators = on
+        case let .typing(from):
+            let n = (typing.values.max() ?? 0) + 1
+            typing[from] = n
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                if typing[from] == n { typing[from] = nil }
+            }
         case let .contactAdded(name):
             switch dialog {
             case let .waiting(n, _) where n == name, let .invite(n, _) where n == name: dialog = nil

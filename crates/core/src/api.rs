@@ -61,6 +61,12 @@ pub enum Request {
     /// Whether we send read receipts, and so see theirs; `on` changes it.
     /// Off unless turned on.
     ReadReceipts { on: Option<bool> },
+    /// We are writing to `name` now; sent every few seconds while we do.
+    /// They learn it only if typing indicators are on, on both sides.
+    Typing { name: String },
+    /// Whether we tell people we are writing, and so see when they do; `on`
+    /// changes it. Off unless turned on.
+    TypingIndicators { on: Option<bool> },
     /// The user's own Tor bridge lines; `lines` replaces them (none: the
     /// built-in ones). Answered while Tor is still starting too, since a
     /// network that blocks Tor is when they are needed.
@@ -87,6 +93,7 @@ pub enum Reply {
     Listening,
     Status { network: Network, links: Vec<(String, LinkState)> },
     ReadReceipts { on: bool },
+    TypingIndicators { on: bool },
     Bridges { lines: Vec<String> },
     Error { message: String },
 }
@@ -102,6 +109,9 @@ pub enum Event {
     /// They read these messages of ours.
     Read { to: String, ids: Vec<String> },
     ReadReceipts { on: bool },
+    /// They are writing to us: shown for a few seconds unless another comes.
+    Typing { from: String },
+    TypingIndicators { on: bool },
     ContactAdded { name: String },
     /// Someone used an oral code: the two people compare this number before
     /// the inviter confirms.
@@ -378,6 +388,16 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
                 daemon.set_read_receipts(on)?;
             }
             Reply::ReadReceipts { on: daemon.read_receipts()? }
+        }
+        Request::Typing { name } => {
+            daemon.typing(&name)?;
+            Reply::Done
+        }
+        Request::TypingIndicators { on } => {
+            if let Some(on) = on {
+                daemon.set_typing_indicators(on)?;
+            }
+            Reply::TypingIndicators { on: daemon.typing_indicators()? }
         }
         Request::Rename { name, to } => {
             daemon.rename(&name, &to)?;

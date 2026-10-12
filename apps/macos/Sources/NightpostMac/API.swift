@@ -21,6 +21,9 @@ enum Request: Encodable, Sendable {
     case setPassphrase(current: String?, new: String?)
     case markRead(name: String)
     case readReceipts(on: Bool?)
+    /// We are writing to them; sent every few seconds while we do.
+    case typing(name: String)
+    case typingIndicators(on: Bool?)
     case bridges(lines: [String]?)
     /// The language was chosen again: the daemon speaks it from now on.
     case language
@@ -51,6 +54,8 @@ enum Request: Encodable, Sendable {
         case let .setPassphrase(current, new): try cmd("set_passphrase"); try c.encode(current, forKey: .current); try c.encode(new, forKey: .new)
         case let .markRead(name): try cmd("mark_read"); try c.encode(name, forKey: .name)
         case let .readReceipts(on): try cmd("read_receipts"); try c.encode(on, forKey: .on)
+        case let .typing(name): try cmd("typing"); try c.encode(name, forKey: .name)
+        case let .typingIndicators(on): try cmd("typing_indicators"); try c.encode(on, forKey: .on)
         case let .bridges(lines): try cmd("bridges"); try c.encode(lines, forKey: .lines)
         case .language: try cmd("language")
         case .shutdown: try cmd("shutdown")
@@ -70,6 +75,7 @@ enum Reply: Decodable, Sendable {
     case listening
     case status(network: Network, links: [LinkEntry])
     case readReceipts(on: Bool)
+    case typingIndicators(on: Bool)
     case bridges([String])
     case error(String)
     /// From a newer daemon.
@@ -94,6 +100,7 @@ enum Reply: Decodable, Sendable {
         case "listening": self = .listening
         case "status": self = .status(network: try c.decode(Network.self, forKey: .network), links: try c.decode([LinkEntry].self, forKey: .links))
         case "read_receipts": self = .readReceipts(on: try c.decode(Bool.self, forKey: .on))
+        case "typing_indicators": self = .typingIndicators(on: try c.decode(Bool.self, forKey: .on))
         case "bridges": self = .bridges(try c.decode([String].self, forKey: .lines))
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         default: self = .unknown(tag)
@@ -107,6 +114,9 @@ enum Event: Decodable, Sendable {
     case delivered(to: String, id: String)
     case read(to: String, ids: [String])
     case readReceipts(on: Bool)
+    /// They are writing to us: shown for a few seconds unless another comes.
+    case typing(from: String)
+    case typingIndicators(on: Bool)
     case contactAdded(name: String)
     case fingerprint(name: String, safetyNumber: String)
     case network(Network)
@@ -132,6 +142,8 @@ enum Event: Decodable, Sendable {
         case "delivered": self = .delivered(to: try s(.to), id: try s(.id))
         case "read": self = .read(to: try s(.to), ids: try c.decode([String].self, forKey: .ids))
         case "read_receipts": self = .readReceipts(on: try c.decode(Bool.self, forKey: .on))
+        case "typing": self = .typing(from: try s(.from))
+        case "typing_indicators": self = .typingIndicators(on: try c.decode(Bool.self, forKey: .on))
         case "contact_added": self = .contactAdded(name: try s(.name))
         case "fingerprint": self = .fingerprint(name: try s(.name), safetyNumber: try s(.safetyNumber))
         case "network": self = .network(try c.decode(Network.self, forKey: .network))

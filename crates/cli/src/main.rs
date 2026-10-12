@@ -33,6 +33,8 @@ usage:
   nightpost status                 where Tor and each link stand, as JSON
   nightpost read-receipts [on|off] whether they learn when you read (off
                                    by default; off, you do not see theirs)
+  nightpost typing-indicators [on|off]
+                                   whether they see when you write (same)
   nightpost mark-read <name>       what <name> wrote so far is read
   nightpost bridges                your own Tor bridge lines
   nightpost bridges set            replace them with the lines on stdin
@@ -80,6 +82,9 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["read-receipts"] => Request::ReadReceipts { on: None },
         ["read-receipts", "on"] => Request::ReadReceipts { on: Some(true) },
         ["read-receipts", "off"] => Request::ReadReceipts { on: Some(false) },
+        ["typing-indicators"] => Request::TypingIndicators { on: None },
+        ["typing-indicators", "on"] => Request::TypingIndicators { on: Some(true) },
+        ["typing-indicators", "off"] => Request::TypingIndicators { on: Some(false) },
         ["bridges"] => Request::Bridges { lines: None },
         ["bridges", "set"] => Request::Bridges { lines: Some(std::io::stdin().lines().collect::<std::io::Result<_>>()?) },
         ["bridges", "clear"] => Request::Bridges { lines: Some(Vec::new()) },
@@ -110,6 +115,7 @@ async fn run(args: Vec<String>) -> Result<()> {
         }
         status @ Reply::Status { .. } => println!("{}", serde_json::to_string(&status)?),
         Reply::ReadReceipts { on } => println!("read receipts {}", if on { "on" } else { "off" }),
+        Reply::TypingIndicators { on } => println!("typing indicators {}", if on { "on" } else { "off" }),
         Reply::Bridges { lines } if lines.is_empty() => eprintln!("none: the built-in ones (Snowflake), when Tor is blocked"),
         Reply::Bridges { lines } => println!("{}", lines.join("\n")),
         Reply::Listening => {
