@@ -89,7 +89,8 @@ pub fn SettingsPage(section: Section) -> Element {
 fn Appearance() -> Element {
     let mut state = use_context::<State>();
     let theme = *state.theme.read();
-    let chosen = i18n::chosen();
+    // A signal: choosing the language already spoken redraws nothing else.
+    let mut chosen = use_signal(i18n::chosen);
     let options = [(Theme::System, t!("theme-system"), "#0f1522", "#f4f5f7"), (Theme::Dark, t!("theme-dark"), "#0f1522", "#111a29"), (Theme::Light, t!("theme-light"), "#f4f5f7", "#ffffff")];
     rsx! {
         section { class: "block",
@@ -115,12 +116,13 @@ fn Appearance() -> Element {
                 for (code, label) in std::iter::once((None, t!("theme-system"))).chain(i18n::languages().map(|(c, n)| (Some(c), n.to_string()))) {
                     button {
                         key: "{label}",
-                        class: if code == chosen.as_deref() { "language-option on" } else { "language-option" },
+                        class: if code == chosen.read().as_deref() { "language-option on" } else { "language-option" },
                         role: "radio",
-                        "aria-checked": "{code == chosen.as_deref()}",
+                        "aria-checked": "{code == chosen.read().as_deref()}",
                         lang: code.unwrap_or_default(),
                         onclick: move |_| {
                             if i18n::choose(code).is_ok() {
+                                chosen.set(code.map(String::from));
                                 state.language.set(i18n::language());
                                 // The daemon's words too: errors, Tor's progress.
                                 dioxus::core::spawn_forever(async move {
