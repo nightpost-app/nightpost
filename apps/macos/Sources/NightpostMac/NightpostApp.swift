@@ -23,11 +23,48 @@ struct NightpostApp: App {
         }
 
         // As the tray icon on other systems: there while Nightpost runs.
-        MenuBarExtra("Nightpost", systemImage: "envelope") {
+        MenuBarExtra {
             MenuBarMenu().environment(model)
+        } label: {
+            Image(nsImage: menuBarIcon).accessibilityLabel("Nightpost")
         }
     }
 }
+
+/// The app icon's letter and crescent (icon.swift), in one ink: a template
+/// image, which macOS colours for the menu bar.
+let menuBarIcon: NSImage = {
+    let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { _ in
+        guard let c = NSGraphicsContext.current?.cgContext else { return false }
+        // icon.swift's 1024 grid, from the letter's corner to the moon's top.
+        c.scaleBy(x: 18 / 560, y: 18 / 560)
+        c.translateBy(x: -236, y: -278)
+        let moon = CGPoint(x: 712, y: 724)
+        c.setFillColor(.black)
+        c.setStrokeColor(.black)
+        c.beginTransparencyLayer(auxiliaryInfo: nil)
+        c.setLineWidth(48)
+        c.setLineJoin(.round)
+        c.setLineCap(.round)
+        c.addPath(CGPath(roundedRect: CGRect(x: 262, y: 300, width: 500, height: 340), cornerWidth: 44, cornerHeight: 44, transform: nil))
+        c.strokePath()
+        c.move(to: CGPoint(x: 290, y: 612))
+        c.addLine(to: CGPoint(x: 512, y: 452))
+        c.addLine(to: CGPoint(x: 734, y: 612))
+        c.strokePath()
+        c.setBlendMode(.clear)
+        c.fillEllipse(in: CGRect(x: moon.x - 142, y: moon.y - 142, width: 284, height: 284))
+        c.endTransparencyLayer()
+        c.beginTransparencyLayer(auxiliaryInfo: nil)
+        c.fillEllipse(in: CGRect(x: moon.x - 112, y: moon.y - 112, width: 224, height: 224))
+        c.setBlendMode(.clear)
+        c.fillEllipse(in: CGRect(x: moon.x - 52, y: moon.y - 40, width: 200, height: 200))
+        c.endTransparencyLayer()
+        return true
+    }
+    image.isTemplate = true
+    return image
+}()
 
 /// The menu bar's menu: the window, the terminal interface, stopping.
 struct MenuBarMenu: View {
