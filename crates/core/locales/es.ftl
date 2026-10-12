@@ -130,7 +130,7 @@ connecting-percent = Conectando con Tor, { $percent } %
 link-open = Conectado
 link-idle = Disponible
 link-away = No disponible ahora mismo
-link-unknown = Se le busca cuando escribes
+link-unknown = Conexión en cuanto escribas
 
 ## La conversación
 
@@ -154,10 +154,10 @@ notify-from = Mensaje de { $name }
 notify-new = Mensaje nuevo
 notify-used-invite = { $name } ha usado tu invitación
 now-contact = { $name } ya es un contacto
-added = { $name } añadido
-kept = { $name } aceptado
-turned-down = { $name } rechazado
-removed = { $name } eliminado
+added = Contacto añadido: { $name }
+kept = Contacto aceptado: { $name }
+turned-down = Solicitud rechazada: { $name }
+removed = Contacto eliminado: { $name }
 
 ## Añadir a alguien
 
@@ -201,10 +201,10 @@ waiting-after = { $name } se añadirá en cuanto confirme.
 
 safety-label = Número de seguridad con { $name }
 safety-title = Tu número de seguridad con { $name }
-safety-help = Leéoslo por teléfono o en persona. Las mismas cifras en ambos lados significan que nadie se ha colado en medio.
+safety-help = Leedlo en voz alta, por teléfono o en persona. Si tenéis las mismas cifras, nadie se ha colado en medio.
 they-match = Coinciden
 not-now = Ahora no
-safety-warning = Si una sola cifra es distinta, no es { $name } quien está al otro lado: no lo marques.
+safety-warning = Si una sola cifra es distinta, no es { $name } quien está al otro lado: no lo marques como verificado.
 
 ## El panel de una persona
 
@@ -270,7 +270,7 @@ notify-show-help = Cuando llega un mensaje y Nightpost no está delante.
 notify-sound = Reproducir un sonido
 notify-sound-help = Un breve tono con cada notificación.
 notify-history = Guardar en el historial
-notify-history-help = Desactivado: el sistema deja ir cada notificación una vez mostrada, en lugar de guardarla en su lista.
+notify-history-help = Desactivado: cada notificación desaparece una vez mostrada, en lugar de quedarse en la lista del sistema.
 notify-shows = Qué muestra una notificación
 notify-who-what = Quién y qué
 notify-who = Quién escribió
@@ -294,7 +294,7 @@ passphrase-remove = Quitar la frase de contraseña
 passphrase-add = Añadir una frase de contraseña
 passphrase-current = Frase de contraseña actual
 passphrase-new = Nueva frase de contraseña
-passphrase-again = La misma otra vez
+passphrase-again = Repítela
 passphrase-warning = Si la olvidas, tus mensajes se pierden: nadie puede recuperarla, ni siquiera con este ordenador.
 passphrase-remove-help = El llavero por sí solo volverá a abrir tus mensajes.
 passphrase-add-it = Añadir la frase de contraseña
@@ -303,7 +303,7 @@ remove-it = Quitarla
 read-receipts = Confirmaciones de lectura
 read-receipts-send = Enviar confirmaciones de lectura
 read-receipts-help = Activado: la gente ve cuándo has leído sus mensajes, y tú ves cuándo leen los tuyos, si también lo tienen activado. Desactivado: ninguna de las dos cosas.
-leaving = Al salir
+leaving = Al cerrar
 close-locks = Cerrar la ventana bloquea Nightpost
 close-quits = Cerrar la ventana cierra Nightpost
 quit-lock = Salir y bloquear

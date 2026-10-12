@@ -130,7 +130,7 @@ connecting-percent = Verbindung zu Tor, { $percent } %
 link-open = Verbunden
 link-idle = Erreichbar
 link-away = Gerade nicht erreichbar
-link-unknown = Wird erreicht, wenn du schreibst
+link-unknown = Verbindung, sobald du schreibst
 
 ## Die Unterhaltung
 
@@ -154,10 +154,10 @@ notify-from = Nachricht von { $name }
 notify-new = Neue Nachricht
 notify-used-invite = { $name } hat deine Einladung benutzt
 now-contact = { $name } ist jetzt ein Kontakt
-added = { $name } hinzugefügt
-kept = { $name } behalten
-turned-down = { $name } abgelehnt
-removed = { $name } entfernt
+added = Kontakt hinzugefügt: { $name }
+kept = Kontakt behalten: { $name }
+turned-down = Anfrage abgelehnt: { $name }
+removed = Kontakt entfernt: { $name }
 
 ## Jemanden hinzufügen
 
@@ -201,10 +201,10 @@ waiting-after = { $name } wird hinzugefügt, sobald die Bestätigung kommt.
 
 safety-label = Sicherheitsnummer mit { $name }
 safety-title = Deine Sicherheitsnummer mit { $name }
-safety-help = Lest sie euch am Telefon oder persönlich vor. Dieselben Ziffern auf beiden Seiten bedeuten, dass niemand dazwischen sitzt.
+safety-help = Lest sie euch am Telefon oder persönlich vor. Habt ihr dieselben Ziffern, hat sich niemand dazwischengeschaltet.
 they-match = Sie stimmen überein
 not-now = Nicht jetzt
-safety-warning = Weicht auch nur eine Ziffer ab, ist am anderen Ende nicht { $name }: dann nicht markieren.
+safety-warning = Weicht auch nur eine Ziffer ab, ist am anderen Ende nicht { $name }: dann nicht als verifiziert markieren.
 
 ## Das Feld einer Person
 
@@ -221,7 +221,7 @@ name-help = Nur du siehst diesen Namen.
 safety-number = Sicherheitsnummer
 not-compared = Nicht verglichen
 compared-help = Du hast sie mit { $name } persönlich oder am Telefon verglichen.
-compare-help = Vergleiche sie einmal mit { $name }, um sicher zu sein, dass niemand dazwischen sitzt.
+compare-help = Vergleiche sie einmal mit { $name }, um sicherzugehen, dass sich niemand dazwischengeschaltet hat.
 compare = Sicherheitsnummer vergleichen
 notifications-from = Mitteilungen von { $name }
 mute-on = An
@@ -270,7 +270,7 @@ notify-show-help = Wenn eine Nachricht ankommt und Nightpost nicht im Vordergrun
 notify-sound = Ton abspielen
 notify-sound-help = Ein kurzer Klang bei jeder Mitteilung.
 notify-history = Im Verlauf behalten
-notify-history-help = Aus: das System lässt jede Mitteilung nach dem Anzeigen los, statt sie in seiner Liste zu behalten.
+notify-history-help = Aus: Jede Mitteilung verschwindet nach dem Anzeigen, statt in der Liste des Systems zu bleiben.
 notify-shows = Was eine Mitteilung zeigt
 notify-who-what = Wer und was
 notify-who = Wer geschrieben hat
@@ -294,7 +294,7 @@ passphrase-remove = Passphrase entfernen
 passphrase-add = Passphrase hinzufügen
 passphrase-current = Aktuelle Passphrase
 passphrase-new = Neue Passphrase
-passphrase-again = Noch einmal dieselbe
+passphrase-again = Wiederhole sie
 passphrase-warning = Vergisst du sie, sind deine Nachrichten weg: niemand kann sie wiederherstellen, auch nicht mit diesem Computer.
 passphrase-remove-help = Der Schlüsselbund allein öffnet deine Nachrichten dann wieder.
 passphrase-add-it = Passphrase hinzufügen
@@ -303,7 +303,7 @@ remove-it = Entfernen
 read-receipts = Lesebestätigungen
 read-receipts-send = Lesebestätigungen senden
 read-receipts-help = An: andere sehen, wann du ihre Nachrichten gelesen hast, und du siehst, wann sie deine lesen, wenn sie es auch eingeschaltet haben. Aus: keins von beidem.
-leaving = Beim Verlassen
+leaving = Beim Schließen
 close-locks = Fenster schließen sperrt Nightpost
 close-quits = Fenster schließen beendet Nightpost
 quit-lock = Beenden und sperren

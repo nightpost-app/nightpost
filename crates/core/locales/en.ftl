@@ -123,7 +123,7 @@ step-private-entrance = Private entrance
 step-bridge-help = A bridge: a way into Tor that is not on the public list, so this network cannot tell it apart.
 step-guard-help = The first Tor relay. It sees your address, never where messages go.
 step-relay = Relay
-step-relay-1-help = Kept for weeks: it guards your side of the route. It cannot read the message.
+step-relay-1-help = Stays the same for weeks: it guards your side of the route. It cannot read the message.
 step-relay-2-help = Changes every few hours. It knows neither who writes nor to whom.
 step-meeting = Meeting point
 step-meeting-help = Where your route and { $name }’s meet. Neither of you learns where the other is.
@@ -133,7 +133,7 @@ connecting-percent = Connecting to Tor, { $percent }%
 link-open = Connected
 link-idle = Reachable
 link-away = Not reachable right now
-link-unknown = Reached when you write
+link-unknown = Connects when you write
 
 ## The conversation
 
@@ -204,10 +204,10 @@ waiting-after = { $name } is added as soon as they confirm.
 
 safety-label = Safety number with { $name }
 safety-title = Your safety number with { $name }
-safety-help = Read it to each other on a call or in person. The same digits on both sides mean nobody sits in between.
+safety-help = Read it to each other on a call or in person. If you both have the same digits, nobody has slipped in between.
 they-match = They match
 not-now = Not now
-safety-warning = If even one digit differs, it is not { $name } at the other end: do not mark it.
+safety-warning = If even one digit differs, it is not { $name } at the other end: do not mark it as verified.
 
 ## Someone's panel
 
@@ -224,7 +224,7 @@ name-help = Only you see this name.
 safety-number = Safety number
 not-compared = Not compared yet
 compared-help = You compared it with { $name } in person or on a call.
-compare-help = Compare it once with { $name } to be sure nobody sits in between.
+compare-help = Compare it once with { $name } to make sure nobody has slipped in between.
 compare = Compare safety number
 notifications-from = Notifications from { $name }
 mute-on = On
@@ -273,7 +273,7 @@ notify-show-help = When a message arrives and Nightpost is not in front.
 notify-sound = Play a sound
 notify-sound-help = A short chime with each notification.
 notify-history = Keep in history
-notify-history-help = Off: the system lets each one go once shown, rather than keeping it in its list of past notifications.
+notify-history-help = Off: each notification goes once shown, rather than staying in the system’s list.
 notify-shows = What a notification shows
 notify-who-what = Who and what
 notify-who = Who wrote
@@ -297,7 +297,7 @@ passphrase-remove = Remove the passphrase
 passphrase-add = Add a passphrase
 passphrase-current = Current passphrase
 passphrase-new = New passphrase
-passphrase-again = The same again
+passphrase-again = Once more
 passphrase-warning = Forget it and your messages are gone: nobody can recover it, not even with this computer.
 passphrase-remove-help = The keychain alone will open your messages again.
 passphrase-add-it = Add the passphrase
@@ -306,7 +306,7 @@ remove-it = Remove it
 read-receipts = Read receipts
 read-receipts-send = Send read receipts
 read-receipts-help = On: people see when you have read their messages, and you see when they read yours, if they have it on too. Off: neither.
-leaving = Leaving
+leaving = On closing
 close-locks = Closing the window locks Nightpost
 close-quits = Closing the window quits Nightpost
 quit-lock = Quit and lock

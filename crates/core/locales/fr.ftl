@@ -120,8 +120,8 @@ step-private-entrance = Entrée privée
 step-bridge-help = Un pont : une entrée dans Tor absente de la liste publique, que ce réseau ne sait donc pas reconnaître.
 step-guard-help = Le premier relais Tor. Il voit ton adresse, jamais où vont les messages.
 step-relay = Relais
-step-relay-1-help = Gardé des semaines : il protège ton côté du trajet. Il ne peut pas lire le message.
-step-relay-2-help = Change toutes les quelques heures. Il ne sait ni qui écrit, ni à qui.
+step-relay-1-help = Le même pendant des semaines : il protège ton côté du trajet. Il ne peut pas lire le message.
+step-relay-2-help = Change au bout de quelques heures. Il ne sait ni qui écrit, ni à qui.
 step-meeting = Point de rendez-vous
 step-meeting-help = Là où ton trajet et celui de { $name } se rejoignent. Aucun de vous n’apprend où est l’autre.
 step-device-help = L’appareil de { $name }, le seul qui peut ouvrir tes messages.
@@ -130,7 +130,7 @@ connecting-percent = Connexion à Tor, { $percent } %
 link-open = Connecté
 link-idle = Joignable
 link-away = Injoignable pour l’instant
-link-unknown = Joint quand tu écris
+link-unknown = Connexion dès que tu écris
 
 ## La conversation
 
@@ -154,10 +154,10 @@ notify-from = Message de { $name }
 notify-new = Nouveau message
 notify-used-invite = { $name } a utilisé ton invitation
 now-contact = { $name } est maintenant dans tes contacts
-added = { $name } ajouté
-kept = { $name } gardé
-turned-down = { $name } refusé
-removed = { $name } retiré
+added = Contact ajouté : { $name }
+kept = Contact gardé : { $name }
+turned-down = Demande refusée : { $name }
+removed = Contact retiré : { $name }
 
 ## Ajouter quelqu’un
 
@@ -195,16 +195,16 @@ digits-match = Les chiffres correspondent
 digits-differ = Ils diffèrent, refuser
 waiting-title = En attente de { $name }
 waiting-help = Lis ce numéro de sécurité à { $name }, qui vérifie qu’il correspond au sien :
-waiting-after = { $name } sera ajouté dès sa confirmation.
+waiting-after = { $name } rejoindra tes contacts dès sa confirmation.
 
 ## Numéro de sécurité
 
 safety-label = Numéro de sécurité avec { $name }
 safety-title = Ton numéro de sécurité avec { $name }
-safety-help = Lisez-le-vous au téléphone ou en personne. Les mêmes chiffres des deux côtés veulent dire que personne ne s’est glissé entre vous.
+safety-help = Lisez-le l’un à l’autre, au téléphone ou en personne. Si vous avez les mêmes chiffres, personne ne s’est glissé entre vous.
 they-match = Ils correspondent
 not-now = Pas maintenant
-safety-warning = Si un seul chiffre diffère, ce n’est pas { $name } à l’autre bout : ne le marque pas.
+safety-warning = Si un seul chiffre diffère, ce n’est pas { $name } à l’autre bout : ne le marque pas comme vérifié.
 
 ## Le panneau d’une personne
 
@@ -217,11 +217,11 @@ photo-too-big = ce fichier dépasse 30 Mo
 photo-too-detailed = cette image est trop détaillée pour être gardée
 name = Nom
 rename = Renommer
-name-help = Toi seul vois ce nom.
+name-help = Ce nom n’est visible que par toi.
 safety-number = Numéro de sécurité
 not-compared = Pas encore comparé
 compared-help = Tu l’as comparé avec { $name } en personne ou au téléphone.
-compare-help = Compare-le une fois avec { $name } pour être sûr que personne ne s’est glissé entre vous.
+compare-help = Compare-le une fois avec { $name } pour t’assurer que personne ne s’est glissé entre vous.
 compare = Comparer le numéro de sécurité
 notifications-from = Notifications de { $name }
 mute-on = Activées
@@ -270,7 +270,7 @@ notify-show-help = Quand un message arrive et que Nightpost n’est pas au premi
 notify-sound = Jouer un son
 notify-sound-help = Un court carillon à chaque notification.
 notify-history = Garder dans l’historique
-notify-history-help = Désactivé : le système laisse partir chaque notification une fois affichée, au lieu de la garder dans sa liste.
+notify-history-help = Désactivé : chaque notification disparaît une fois affichée, au lieu de rester dans la liste du système.
 notify-shows = Ce qu’affiche une notification
 notify-who-what = Qui et quoi
 notify-who = Qui a écrit
@@ -294,7 +294,7 @@ passphrase-remove = Retirer la phrase de passe
 passphrase-add = Ajouter une phrase de passe
 passphrase-current = Phrase de passe actuelle
 passphrase-new = Nouvelle phrase de passe
-passphrase-again = La même, encore
+passphrase-again = Répète-la
 passphrase-warning = Si tu l’oublies, tes messages sont perdus : personne ne peut la retrouver, même avec cet ordinateur.
 passphrase-remove-help = Le trousseau seul ouvrira de nouveau tes messages.
 passphrase-add-it = Ajouter la phrase de passe
@@ -303,7 +303,7 @@ remove-it = La retirer
 read-receipts = Accusés de lecture
 read-receipts-send = Envoyer des accusés de lecture
 read-receipts-help = Activé : les gens voient quand tu as lu leurs messages, et tu vois quand ils lisent les tiens, s’ils l’ont activé aussi. Désactivé : ni l’un ni l’autre.
-leaving = En partant
+leaving = À la fermeture
 close-locks = Fermer la fenêtre verrouille Nightpost
 close-quits = Fermer la fenêtre quitte Nightpost
 quit-lock = Quitter et verrouiller
@@ -364,7 +364,7 @@ help-code = un code de 12 chiffres à lire
 help-accept = utiliser un lien
 help-acceptcode = utiliser un code qu’on t’a lu
 help-verify = le numéro de sécurité de cette conversation
-help-rename = toi seul le vois
+help-rename = visible par toi seulement
 help-mute = aucune notification de ce contact (jusqu’à /unmute)
 help-remove = ce contact ne peut plus te joindre
 
