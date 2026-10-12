@@ -175,18 +175,36 @@ private struct AppearancePane: View {
             Help(t("mac-theme-help"))
         }
         Block(title: t("language")) {
-            Picker(t("language"), selection: Binding(get: { chosen ?? "" }, set: choose)) {
-                Text(verbatim: t("theme-system")).tag("")
-                ForEach(Words.names, id: \.code) { Text(verbatim: $0.name).tag($0.code) }
+            // Buttons like the theme cards above, not the system’s menu. (Rounder
+            // than 12 points, cacheDisplay draws stray edges at their ends.)
+            HStack(spacing: 10) {
+                pill(nil, t("theme-system"))
+                ForEach(Words.names, id: \.code) { pill($0.code, $0.name) }
             }
-            .labelsHidden()
-            .fixedSize()
             Help(t("language-help"))
         }
     }
 
-    private func choose(_ code: String) {
-        Words.choose(code.isEmpty ? nil : code)
+    private func pill(_ code: String?, _ label: String) -> some View {
+        let on = chosen == code
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return Button { choose(code) } label: {
+            Text(verbatim: label)
+                .font(.ui(14, on ? .semibold : .medium))
+                .foregroundStyle(on ? Palette.strong : Palette.soft)
+                .padding(.horizontal, 16)
+                .frame(height: 34)
+                .background(on ? Palette.selected : .clear, in: shape)
+                .overlay(shape.strokeBorder(on ? Palette.main : Palette.line2, lineWidth: on ? 2 : 1))
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
+    private func choose(_ code: String?) {
+        Words.choose(code)
         chosen = Words.chosen
         model.language = Words.language
         // The daemon's words too: errors, Tor's progress.
