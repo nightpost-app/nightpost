@@ -127,11 +127,13 @@ enum Event: Decodable, Sendable {
     case contactRenamed(name: String, to: String)
     case contactRemoved(name: String)
     case personChanged(name: String, person: Person)
+    /// Nightpost is stopping ("window"), or a terminal is told to go.
+    case close(interface: String)
     /// From a newer daemon.
     case unknown(String)
 
     private enum Key: String, CodingKey {
-        case event, from, to, id, ids, time, text, on, name, network, state, person
+        case event, from, to, id, ids, time, text, on, name, network, state, person, interface
         case safetyNumber = "safety_number"
     }
 
@@ -154,6 +156,7 @@ enum Event: Decodable, Sendable {
         case "contact_renamed": self = .contactRenamed(name: try s(.name), to: try s(.to))
         case "contact_removed": self = .contactRemoved(name: try s(.name))
         case "person_changed": self = .personChanged(name: try s(.name), person: try c.decode(Person.self, forKey: .person))
+        case "close": self = .close(interface: try s(.interface))
         default: self = .unknown(tag)
         }
     }

@@ -379,6 +379,8 @@ final class AppModel {
         case let .fingerprint(name, number):
             Notifier.shared.post(title: "Nightpost", body: t("notify-used-invite", ["name": name]), name: nil)
             dialog = codes.contains(name) ? .confirm(name: name, number: number) : .waiting(name: name, number: number)
+        // Nobody else asks the app to close: Nightpost is stopping.
+        case let .close(interface): if interface == "window" { NSApp.terminate(nil) }
         case .unknown: break
         }
     }
