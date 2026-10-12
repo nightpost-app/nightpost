@@ -481,8 +481,12 @@ private struct SecurityPane: View {
 private struct AboutPane: View {
     var body: some View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        Block(title: "Nightpost") {
-            Text(verbatim: version).font(.ui(14)).monospacedDigit().foregroundStyle(Palette.muted)
+        // The logo and the name, then the version on their line, as in the GUI.
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .lastTextBaseline, spacing: 12) {
+                Wordmark(size: 32)
+                Text(verbatim: version).font(.ui(14)).monospacedDigit().foregroundStyle(Palette.muted)
+            }
             Help(t("tagline"))
         }
         Block(title: t("your-data")) {
