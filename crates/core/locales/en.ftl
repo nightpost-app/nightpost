@@ -333,6 +333,7 @@ weekday-short-5 = Fri
 weekday-short-6 = Sat
 weekday-short-7 = Sun
 tui-no-daemon = No daemon running: start `nightpost daemon` first (in tmux, for one).
+old-daemon = The running daemon is version { $running }, this one { $mine }: stop it with `nightpost shutdown`, then start `nightpost daemon` again.
 tui-no-stream = The daemon did not accept to stream events.
 tui-help-hint = /help for keys and commands
 tui-help-title = Keys and commands

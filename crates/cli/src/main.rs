@@ -39,6 +39,7 @@ usage:
   nightpost bridges                your own Tor bridge lines
   nightpost bridges set            replace them with the lines on stdin
   nightpost bridges clear          back to the built-in ones (Snowflake)
+  nightpost shutdown               stop the daemon
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
 passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).
@@ -55,6 +56,14 @@ async fn main() {
 async fn run(args: Vec<String>) -> Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let dir = nightpost_core::api::data_dir()?;
+    // A daemon from another version would not understand all we ask.
+    if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"])
+        && Client::connect(&dir).await.is_ok()
+        && let running = api::running_version(&dir)
+        && running.as_deref() != Some(nightpost_core::VERSION)
+    {
+        bail!(nightpost_core::t!("old-daemon", running = running.unwrap_or_else(|| "?".into()), mine = nightpost_core::VERSION));
+    }
     let request = match args.as_slice() {
         [] => return tui::run(&dir).await,
         ["daemon"] => return daemon(&dir).await,
@@ -88,6 +97,7 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["bridges"] => Request::Bridges { lines: None },
         ["bridges", "set"] => Request::Bridges { lines: Some(std::io::stdin().lines().collect::<std::io::Result<_>>()?) },
         ["bridges", "clear"] => Request::Bridges { lines: Some(Vec::new()) },
+        ["shutdown"] => Request::Shutdown,
         _ => {
             println!("{USAGE}");
             return Ok(());

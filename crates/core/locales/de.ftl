@@ -330,6 +330,7 @@ weekday-short-5 = Fr.
 weekday-short-6 = Sa.
 weekday-short-7 = So.
 tui-no-daemon = Kein Daemon läuft: starte zuerst `nightpost daemon` (zum Beispiel in tmux).
+old-daemon = Der laufende Daemon hat Version { $running }, dieser { $mine }: beende ihn mit `nightpost shutdown` und starte `nightpost daemon` neu.
 tui-no-stream = Der Daemon wollte keine Ereignisse senden.
 tui-help-hint = /help für Tasten und Befehle
 tui-help-title = Tasten und Befehle
