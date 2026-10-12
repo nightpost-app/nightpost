@@ -345,6 +345,8 @@ struct Route {
         case (_, _, .some(false), _): (lit, live, fail) = (2, nil, 1)
         case (_, _, _, .open), (_, _, _, .idle): (lit, live, fail) = (6, nil, nil)
         case (_, _, _, .trying): (lit, live, fail) = (4, 3, nil)
+        // The meeting point answered, but not in the same language.
+        case (_, _, _, .older), (_, _, _, .newer): (lit, live, fail) = (5, nil, nil)
         default: (lit, live, fail) = (4, nil, nil)
         }
     }
@@ -373,6 +375,8 @@ struct Route {
         case .idle: return (.done, t("link-idle"))
         case .trying: return (.live, t("reaching", ["name": name]))
         case .unreachable: return (.wait, t("link-away"))
+        case .older: return (.fail, t("link-older", ["name": name]))
+        case .newer: return (.fail, t("link-newer", ["name": name]))
         case nil: return (.wait, t("link-unknown"))
         }
     }

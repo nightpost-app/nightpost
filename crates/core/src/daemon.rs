@@ -22,7 +22,7 @@ use libsignal_protocol::{
 };
 use rand::{Rng as _, TryRngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
 use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
@@ -35,7 +35,7 @@ use crate::invite::{self, Code, CodeError, Invite, InviteError};
 use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service};
 use crate::session::{self, WireBundle};
 use crate::store::Store;
-use crate::t;
+use crate::{PROTOCOL_VERSION, t};
 use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_key, onion};
 
 /// v1 has one device per account.
@@ -249,7 +249,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let me = self.me();
         let caller = Caller::new(&me, invite.onion, Some(invite.token));
         proto::send(&mut stream, caller.hello()).await?;
-        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let challenge: Challenge = challenge(&mut stream).await?;
         let (proof, peer) = caller.on_challenge(&me, &challenge, &invite.identity, None).map_err(handshake)?;
         proto::send(&mut stream, &proof).await?;
         let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &challenge.devices, name).await?;
@@ -290,7 +290,7 @@ impl<T: Transport + 'static> Daemon<T> {
 
     async fn answer_code(self: &Rc<Self>, mut stream: T::Stream, temp: Onion, name: &str) -> Result<()> {
         let me = self.me();
-        let hello: Hello = timeout(STEP, proto::receive(&mut stream)).await??;
+        let hello = hello(&mut stream).await?;
         let (service, challenge) = Service::on_hello(&me, temp, hello).map_err(handshake)?;
         ensure!(self.contact(&service.hello().account)?.is_none(), t!("err-already-contact"));
         proto::send(&mut stream, &challenge).await?;
@@ -337,7 +337,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let me = self.me();
         let caller = Caller::new(&me, temp, None);
         proto::send(&mut stream, caller.hello()).await?;
-        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let challenge: Challenge = challenge(&mut stream).await?;
         let (proof, peer) = caller.on_challenge_by_code(&me, &challenge).map_err(handshake)?;
         ensure!(self.contact(&peer.account.serialize())?.is_none(), t!("err-already-contact"));
         proto::send(&mut stream, &proof).await?;
@@ -602,7 +602,7 @@ impl<T: Transport + 'static> Daemon<T> {
 
     async fn try_answer(self: &Rc<Self>, mut stream: T::Stream) -> Result<()> {
         let me = self.me();
-        let hello: Hello = timeout(STEP, proto::receive(&mut stream)).await??;
+        let hello = hello(&mut stream).await?;
         let (service, challenge) = Service::on_hello(&me, onion(&self.seed()), hello).map_err(handshake)?;
         let contact = self.contact(&service.hello().account)?;
         let token = match (&contact, service.hello().token) {
@@ -713,7 +713,12 @@ impl<T: Transport + 'static> Daemon<T> {
             Err(e) => {
                 tracing::info!("no link to a contact: {e:#}");
                 if let Some(name) = &name {
-                    self.set_link(name, LinkState::Unreachable);
+                    let state = match e.downcast_ref::<OtherVersion>() {
+                        Some(OtherVersion(theirs)) if *theirs > PROTOCOL_VERSION => LinkState::Newer,
+                        Some(_) => LinkState::Older,
+                        None => LinkState::Unreachable,
+                    };
+                    self.set_link(name, state);
                 }
                 self.links.borrow_mut().remove(&target);
                 let mut backoff = self.backoff.borrow_mut();
@@ -731,7 +736,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let me = self.me();
         let caller = Caller::new(&me, to, None);
         proto::send(&mut stream, caller.hello()).await?;
-        let challenge: Challenge = timeout(STEP, proto::receive(&mut stream)).await??;
+        let challenge: Challenge = challenge(&mut stream).await?;
         let expected = IdentityKey::decode(account)?;
         let (proof, _) = caller.on_challenge(&me, &challenge, &expected, Some(&contact.devices)).map_err(handshake)?;
         proto::send(&mut stream, &proof).await?;
@@ -946,6 +951,36 @@ fn address(account: &[u8], device: u8) -> Result<ProtocolAddress> {
 
 fn device_id(id: u8) -> Result<DeviceId> {
     DeviceId::try_from(id).map_err(|_| anyhow::anyhow!("device id {id}"))
+}
+
+/// The other side runs another protocol version, which the handshake
+/// starts with: whichever is older must update before they can talk.
+#[derive(Debug)]
+struct OtherVersion(u16);
+
+impl std::fmt::Display for OtherVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&if self.0 > PROTOCOL_VERSION { t!("other-newer") } else { t!("other-older") })
+    }
+}
+
+impl std::error::Error for OtherVersion {}
+
+/// The service's challenge, or its version if it runs another one.
+async fn challenge(stream: &mut (impl AsyncRead + Unpin)) -> Result<Challenge> {
+    timeout(STEP, proto::receive_handshake(stream)).await??.map_err(|theirs| OtherVersion(theirs).into())
+}
+
+/// The caller's hello. One running another version is told ours, so that
+/// it can say which side must update, and turned away.
+async fn hello(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<Hello> {
+    match timeout(STEP, proto::receive_handshake(stream)).await?? {
+        Ok(hello) => Ok(hello),
+        Err(theirs) => {
+            proto::send(stream, &PROTOCOL_VERSION).await?;
+            Err(OtherVersion(theirs).into())
+        }
+    }
 }
 
 fn handshake(e: proto::HandshakeError) -> anyhow::Error {
@@ -1240,6 +1275,52 @@ mod tests {
                 let bob_contact = &alice.contacts_raw().unwrap()[0];
                 assert!(alice.store.queued(&bob_contact.identity, DEVICE).unwrap().is_empty());
                 assert_eq!(bob.history("alice", 10).unwrap().len(), 1);
+            })
+            .await;
+    }
+
+    /// A contact on another protocol version is told ours and turned away;
+    /// one answering with a newer version shows as such, not as away.
+    #[tokio::test]
+    async fn another_protocol_version_says_who_must_update() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+
+                // Bob, newer, calls: the rest of his hello is unreadable here.
+                let caller = net.node();
+                caller.present(onion(&alice.seed()), &bob.discovery()).unwrap();
+                let mut stream = caller.dial(onion(&alice.seed())).await.unwrap();
+                proto::send(&mut stream, &(PROTOCOL_VERSION + 1, [0xffu8; 9])).await.unwrap();
+                assert_eq!(proto::receive::<u16>(&mut stream).await.unwrap(), PROTOCOL_VERSION);
+
+                // Bob's device, newer, answers Alice in his place.
+                bob.shut_down();
+                bob.service.borrow_mut().take();
+                let (_service, mut incoming) = net.node().serve(&bob.seed(), &[discovery_key(&alice.discovery())]).await.unwrap();
+                spawn_local(async move {
+                    while let Some(mut stream) = incoming.next().await {
+                        let _ = proto::receive_handshake::<Hello>(&mut stream).await;
+                        let _ = proto::send(&mut stream, &(PROTOCOL_VERSION + 1)).await;
+                    }
+                });
+                alice.send("bob", "hé").unwrap();
+                timeout(Duration::from_secs(5), async {
+                    while alice.links() != [("bob".to_string(), LinkState::Newer)] {
+                        sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("shown as newer");
             })
             .await;
     }

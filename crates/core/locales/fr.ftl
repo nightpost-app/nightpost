@@ -131,6 +131,10 @@ link-open = Connecté
 link-idle = Joignable
 link-away = Injoignable pour l’instant
 link-unknown = Connexion dès que tu écris
+link-older = { $name } doit mettre Nightpost à jour pour te parler
+link-newer = Mets Nightpost à jour pour parler à { $name }
+other-older = L’autre personne doit mettre Nightpost à jour avant que vous puissiez vous parler.
+other-newer = Mets Nightpost à jour : l’autre personne a une version plus récente.
 
 ## La conversation
 

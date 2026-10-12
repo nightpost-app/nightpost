@@ -777,6 +777,8 @@ impl Route {
                 Some(LinkState::Open | LinkState::Idle) => at(6, None, None),
                 Some(LinkState::Trying) => at(4, Some(3), None),
                 Some(LinkState::Unreachable) | None => at(4, None, None),
+                // The meeting point answered, but not in the same language.
+                Some(LinkState::Older | LinkState::Newer) => at(5, None, None),
             }
         }
     }
@@ -925,6 +927,8 @@ fn reach_line(name: &str, net: &Network, link: Option<LinkState>) -> (&'static s
             Some(LinkState::Idle) => ("on", t!("link-idle")),
             Some(LinkState::Trying) => ("live", t!("reaching", name = name)),
             Some(LinkState::Unreachable) => ("", t!("link-away")),
+            Some(LinkState::Older) => ("fail", t!("link-older", name = name)),
+            Some(LinkState::Newer) => ("fail", t!("link-newer", name = name)),
             None => ("", t!("link-unknown")),
         }
     }
@@ -967,7 +971,7 @@ fn Conversation() -> Element {
     };
     let link = state.links.read().get(&name).copied();
     let (reach_class, reach) = reach_line(&name, &state.network.read(), link);
-    let waiting = if link == Some(LinkState::Unreachable) { t!("waiting-reachable", name = name) } else { t!("sending") };
+    let waiting = if matches!(link, Some(LinkState::Unreachable | LinkState::Older | LinkState::Newer)) { t!("waiting-reachable", name = name) } else { t!("sending") };
 
     let send = {
         let name = name.clone();

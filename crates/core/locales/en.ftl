@@ -134,6 +134,10 @@ link-open = Connected
 link-idle = Reachable
 link-away = Not reachable right now
 link-unknown = Connects when you write
+link-older = { $name } needs to update Nightpost to talk with you
+link-newer = Update Nightpost to talk with { $name }
+other-older = The other person needs to update Nightpost before you can talk.
+other-newer = Update Nightpost: the other person has a newer version.
 
 ## The conversation
 

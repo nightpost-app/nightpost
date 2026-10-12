@@ -150,6 +150,10 @@ pub enum LinkState {
     Idle,
     /// The last attempt did not reach them; it is tried again later.
     Unreachable,
+    /// They answered with an older protocol: they must update to talk.
+    Older,
+    /// They answered with a newer protocol: we must update.
+    Newer,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

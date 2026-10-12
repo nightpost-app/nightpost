@@ -12,7 +12,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use futures::StreamExt as _;
-use nightpost_core::api::{Client, Event, HistoryItem, Person, Reply, Request};
+use nightpost_core::api::{Client, Event, HistoryItem, LinkState, Person, Reply, Request};
 use nightpost_core::{i18n, t};
 use ratatui::DefaultTerminal;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
@@ -518,6 +518,9 @@ impl App {
                 }
             }
             // The route is the graphical interface's.
+            // Except that one side must update.
+            Update::Event(Event::Link { name, state: LinkState::Older }) => self.status = t!("link-older", name = name),
+            Update::Event(Event::Link { name, state: LinkState::Newer }) => self.status = t!("link-newer", name = name),
             Update::Event(Event::Network { .. } | Event::Link { .. } | Event::ReadReceipts { .. } | Event::TypingIndicators { .. }) => {}
             Update::Event(Event::Typing { from }) => self.typing = Some((from, Instant::now() + TYPING_SHOWN)),
             Update::Event(Event::Fingerprint { name, safety_number }) => {

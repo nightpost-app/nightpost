@@ -172,6 +172,9 @@ struct Network: Codable, Sendable, Equatable {
 
 enum LinkState: String, Codable, Sendable {
     case trying, open, idle, unreachable
+    /// They answered with an older protocol, or a newer one: one side must
+    /// update.
+    case older, newer
 }
 
 /// One `(name, state)` pair of a status reply.

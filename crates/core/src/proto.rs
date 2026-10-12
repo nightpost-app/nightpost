@@ -71,6 +71,14 @@ pub fn frame_len(header: [u8; HEADER]) -> Result<usize, FrameError> {
 }
 
 pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> Result<T, FrameError> {
+    match postcard::take_from_bytes(body(frame)?) {
+        Ok((msg, [])) => Ok(msg),
+        _ => Err(FrameError::Malformed),
+    }
+}
+
+/// What the frame holds, padding taken off.
+fn body(frame: &[u8]) -> Result<&[u8], FrameError> {
     let header: [u8; HEADER] = frame
         .get(..HEADER)
         .and_then(|h| h.try_into().ok())
@@ -78,11 +86,7 @@ pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> Result<T, FrameError> {
     if frame.len() != frame_len(header)? {
         return Err(FrameError::Malformed);
     }
-    let body = &frame[HEADER..HEADER + u32::from_be_bytes(header) as usize];
-    match postcard::take_from_bytes(body) {
-        Ok((msg, [])) => Ok(msg),
-        _ => Err(FrameError::Malformed),
-    }
+    Ok(&frame[HEADER..HEADER + u32::from_be_bytes(header) as usize])
 }
 
 /// Writes `msg` as one frame.
@@ -93,12 +97,29 @@ pub async fn send<T: Serialize>(io: &mut (impl AsyncWrite + Unpin), msg: &T) -> 
 
 /// Reads one frame. The length is checked before anything is allocated.
 pub async fn receive<T: DeserializeOwned>(io: &mut (impl AsyncRead + Unpin)) -> io::Result<T> {
+    decode(&read(io).await?).map_err(invalid)
+}
+
+/// Reads a handshake frame: a `Hello`, a `Challenge`, or a service's
+/// refusal, which is its version alone. Each starts with the protocol
+/// version, read first since the rest may be laid out otherwise in another
+/// version. `Err(theirs)`: the other side runs another version.
+pub async fn receive_handshake<T: DeserializeOwned>(io: &mut (impl AsyncRead + Unpin)) -> io::Result<Result<T, u16>> {
+    let frame = read(io).await?;
+    let (theirs, _) = postcard::take_from_bytes::<u16>(body(&frame).map_err(invalid)?).map_err(|_| invalid(FrameError::Malformed))?;
+    if theirs != PROTOCOL_VERSION {
+        return Ok(Err(theirs));
+    }
+    decode(&frame).map(Ok).map_err(invalid)
+}
+
+async fn read(io: &mut (impl AsyncRead + Unpin)) -> io::Result<Vec<u8>> {
     let mut header = [0; HEADER];
     io.read_exact(&mut header).await?;
     let mut frame = vec![0; frame_len(header).map_err(invalid)?];
     frame[..HEADER].copy_from_slice(&header);
     io.read_exact(&mut frame[HEADER..]).await?;
-    decode(&frame).map_err(invalid)
+    Ok(frame)
 }
 
 fn invalid(e: FrameError) -> io::Error {
@@ -496,5 +517,19 @@ mod tests {
         let mut hello = caller.hello().clone();
         hello.version = 0;
         assert_eq!(Service::on_hello(&bob.me(), ONION, hello).err(), Some(HandshakeError::Version(0)));
+    }
+
+    /// Another version's handshake frame is told apart by its first field
+    /// alone, whatever follows; so is a service's refusal.
+    #[tokio::test]
+    async fn another_version_is_read_before_the_rest() {
+        let (mut a, mut b) = tokio::io::duplex(4096);
+        send(&mut a, &(PROTOCOL_VERSION + 1, [0xffu8; 9])).await.unwrap();
+        assert_eq!(receive_handshake::<Hello>(&mut b).await.unwrap().err(), Some(PROTOCOL_VERSION + 1));
+        send(&mut a, &(PROTOCOL_VERSION + 1)).await.unwrap();
+        assert_eq!(receive_handshake::<Challenge>(&mut b).await.unwrap().err(), Some(PROTOCOL_VERSION + 1));
+        let caller = Caller::new(&Account::new().me(), ONION, None);
+        send(&mut a, caller.hello()).await.unwrap();
+        assert!(receive_handshake::<Hello>(&mut b).await.unwrap().is_ok());
     }
 }

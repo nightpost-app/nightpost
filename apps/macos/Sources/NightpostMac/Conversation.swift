@@ -21,7 +21,7 @@ struct ConversationView: View {
                 .padding(.horizontal, 32)
                 .frame(maxWidth: Self.column + 64)
                 .zIndex(1)
-            MessageList(name: name, waiting: link == .unreachable ? t("waiting-reachable", ["name": name]) : t("sending"))
+            MessageList(name: name, waiting: [.unreachable, .older, .newer].contains(link) ? t("waiting-reachable", ["name": name]) : t("sending"))
             composer
             Text(verbatim: model.status)
                 .font(.ui(12.5))
