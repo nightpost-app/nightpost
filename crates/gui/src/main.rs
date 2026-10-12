@@ -26,6 +26,10 @@ use person::PersonPanel;
 use settings::{BridgesEditor, Section, SettingsPage};
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
+/// What this process changes in its own environment for WebKit, as it was:
+/// given back to what it starts, or a terminal opened from the tray would
+/// run under X11 too.
+static OWN_ENV: OnceLock<Vec<(&str, Option<std::ffi::OsString>)>> = OnceLock::new();
 /// The typeface travels inside the program: a Tor messenger fetches nothing
 /// from a font server. Space Grotesk, one variable file for every weight,
 /// under the SIL Open Font License (`fonts/`).
@@ -44,6 +48,7 @@ fn main() {
     // 1920.0000000000002, then 1920): KDE takes that for a resize and drops
     // its maximise animation. Shared memory frames come at the exact size.
     // Still one thread here, so setting the environment is sound.
+    let _ = OWN_ENV.set(["GDK_BACKEND", "WEBKIT_DISABLE_DMABUF_RENDERER"].into_iter().map(|k| (k, std::env::var_os(k))).collect());
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
@@ -1447,6 +1452,7 @@ fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
     let mut command = std::process::Command::new(&exe);
     let stdin = if passphrase.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() };
     command.arg("daemon").stdin(stdin).stdout(log.try_clone()?).stderr(log);
+    as_launched(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -1465,6 +1471,17 @@ fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
         stdin.write_all(zeroize::Zeroizing::new(passphrase + "\n").as_bytes())?;
     }
     Ok(child)
+}
+
+/// Gives `command` the environment this program was started with, not the
+/// one Dioxus set up for WebKit (`GDK_BACKEND=x11` under Wayland).
+fn as_launched(command: &mut std::process::Command) {
+    for (key, value) in OWN_ENV.get().into_iter().flatten() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
 }
 
 /// Shown by the system: it can be on a locked screen and kept in a history,

@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
 use nightpost_core::{dbkey, i18n, t};
 
-use crate::{State, Theme, View, call, dir, network_summary};
+use crate::{State, Theme, View, as_launched, call, dir, network_summary};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Section {
@@ -546,5 +546,7 @@ fn open_folder(path: &std::path::Path) {
     } else {
         "xdg-open"
     };
-    let _ = std::process::Command::new(opener).arg(path).spawn();
+    let mut command = std::process::Command::new(opener);
+    as_launched(&mut command);
+    let _ = command.arg(path).spawn();
 }
