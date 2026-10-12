@@ -162,6 +162,7 @@ private struct Warning: View {
 private struct AppearancePane: View {
     @Environment(AppModel.self) private var model
     @AppStorage("theme") private var theme = Theme.system
+    @AppStorage(Terminal.key) private var terminal = ""
     /// Kept here: choosing the language already spoken redraws nothing else.
     @State private var chosen = Words.chosen
 
@@ -183,6 +184,31 @@ private struct AppearancePane: View {
             }
             Help(t("language-help"))
         }
+        Block(title: t("mac-terminal")) {
+            HStack(spacing: 10) {
+                terminalPill("", t("theme-system"))
+                ForEach(Terminal.installed, id: \.path) { terminalPill($0.path, $0.deletingPathExtension().lastPathComponent) }
+            }
+            Help(t("mac-terminal-help"))
+        }
+    }
+
+    private func terminalPill(_ path: String, _ label: String) -> some View {
+        let on = terminal == path
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return Button { terminal = path } label: {
+            Text(verbatim: label)
+                .font(.ui(14, on ? .semibold : .medium))
+                .foregroundStyle(on ? Palette.strong : Palette.soft)
+                .padding(.horizontal, 16)
+                .frame(height: 34)
+                .background(on ? Palette.selected : .clear, in: shape)
+                .overlay(shape.strokeBorder(on ? Palette.main : Palette.line2, lineWidth: on ? 2 : 1))
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityAddTraits(on ? [.isSelected] : [])
     }
 
     private func pill(_ code: String?, _ label: String) -> some View {

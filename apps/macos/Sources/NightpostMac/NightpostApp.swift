@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct NightpostApp: App {
@@ -99,10 +100,38 @@ struct MenuBarMenu: View {
         do {
             try "#!/bin/sh\n\(dir)exec \(quote(cli))\n".write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-            NSWorkspace.shared.open(script)
+            Terminal.open(script)
         } catch {
             model.status = error.localizedDescription
         }
+    }
+}
+
+/// The terminal the menu bar opens: one chosen in Settings, else whatever
+/// opens .command files.
+enum Terminal {
+    static let key = "terminal"
+
+    /// The apps that say they run .command files by name: text editors
+    /// open them too, as text.
+    static var installed: [URL] {
+        guard let type = UTType(filenameExtension: "command") else { return [] }
+        return NSWorkspace.shared.urlsForApplications(toOpen: type).filter { url in
+            let types = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleDocumentTypes") as? [[String: Any]] ?? []
+            return types.contains {
+                ($0["CFBundleTypeExtensions"] as? [String] ?? []).contains("command")
+                    || ($0["LSItemContentTypes"] as? [String] ?? []).contains(type.identifier)
+            }
+        }
+    }
+
+    static func open(_ script: URL) {
+        let chosen = UserDefaults.standard.string(forKey: key) ?? ""
+        guard !chosen.isEmpty, FileManager.default.fileExists(atPath: chosen) else {
+            NSWorkspace.shared.open(script)
+            return
+        }
+        NSWorkspace.shared.open([script], withApplicationAt: URL(fileURLWithPath: chosen), configuration: NSWorkspace.OpenConfiguration())
     }
 }
 
