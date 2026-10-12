@@ -1101,6 +1101,23 @@ fn Conversation() -> Element {
                     }
                 }
             }
+            // One side must update: said where the eye goes to write.
+            if let Some((title, help)) = match link {
+                Some(LinkState::Older) => Some((t!("update-older-title", name = name), t!("update-older-help", name = name))),
+                Some(LinkState::Newer) => Some((t!("update-newer-title"), t!("update-newer-help", name = name))),
+                _ => None,
+            } {
+                div { class: "update-notice", role: "status",
+                    svg { view_box: "0 0 24 24", "aria-hidden": "true",
+                        circle { cx: "12", cy: "12", r: "9" }
+                        path { d: "M16 12l-4-4-4 4M12 16V8" }
+                    }
+                    span { class: "card-text",
+                        strong { "{title}" }
+                        span { "{help}" }
+                    }
+                }
+            }
             div { class: "composer",
                 textarea {
                     "aria-label": t!("message-to", name = name),

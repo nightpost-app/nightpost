@@ -135,6 +135,10 @@ link-older = { $name } doit mettre Nightpost à jour pour te parler
 link-newer = Mets Nightpost à jour pour parler à { $name }
 other-older = L’autre personne doit mettre Nightpost à jour avant que vous puissiez vous parler.
 other-newer = Mets Nightpost à jour : l’autre personne a une version plus récente.
+update-older-title = { $name } doit mettre Nightpost à jour
+update-older-help = Vous n’avez plus la même version. Tes messages partiront dès que { $name } aura mis à jour.
+update-newer-title = Mets Nightpost à jour
+update-newer-help = { $name } a une version plus récente. Tes messages partiront une fois la mise à jour faite.
 
 ## La conversation
 

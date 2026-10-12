@@ -22,6 +22,7 @@ struct ConversationView: View {
                 .frame(maxWidth: Self.column + 64)
                 .zIndex(1)
             MessageList(name: name, waiting: [.unreachable, .older, .newer].contains(link) ? t("waiting-reachable", ["name": name]) : t("sending"))
+            if link == .older || link == .newer { UpdateNotice(name: name, theirs: link == .older) }
             composer
             Text(verbatim: model.status)
                 .font(.ui(12.5))
@@ -117,6 +118,39 @@ struct ConversationView: View {
         Task {
             if await !model.send(text, to: name) { draft = text }
         }
+    }
+}
+
+/// One side must update: said where the eye goes to write.
+private struct UpdateNotice: View {
+    let name: String
+    /// They must update, not us.
+    let theirs: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        HStack(alignment: .top, spacing: 12) {
+            Icon(parts: [.circle(12, 12, 9), .path("M16 12l-4-4-4 4M12 16V8")], weight: 2)
+                .foregroundStyle(Palette.fail)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theirs ? t("update-older-title", ["name": name]) : t("update-newer-title"))
+                    .font(.ui(15, .semibold))
+                    .foregroundStyle(Palette.strong)
+                Text(theirs ? t("update-older-help", ["name": name]) : t("update-newer-help", ["name": name]))
+                    .font(.ui(14))
+                    .foregroundStyle(Palette.soft)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Palette.fail.opacity(0.1), in: shape)
+        .overlay(shape.stroke(Palette.fail.opacity(0.4)))
+        .frame(maxWidth: ConversationView.column)
+        .padding(.horizontal, 32)
+        .padding(.top, 8)
+        .accessibilityElement(children: .combine)
     }
 }
 
