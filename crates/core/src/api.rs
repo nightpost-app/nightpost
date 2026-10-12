@@ -67,6 +67,10 @@ pub enum Request {
     /// Whether we tell people we are writing, and so see when they do; `on`
     /// changes it. Off unless turned on.
     TypingIndicators { on: Option<bool> },
+    /// Bring the open window to the front (another one was started).
+    Show,
+    /// Close every interface of this kind (asked from the tray icon).
+    Close { interface: Interface },
     /// The user's own Tor bridge lines; `lines` replaces them (none: the
     /// built-in ones). Answered while Tor is still starting too, since a
     /// network that blocks Tor is when they are needed.
@@ -121,6 +125,17 @@ pub enum Event {
     ContactRenamed { name: String, to: String },
     ContactRemoved { name: String },
     PersonChanged { name: String, person: Person },
+    Show,
+    Close { interface: Interface },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Interface {
+    /// The graphical interface.
+    Window,
+    /// The terminal interface.
+    Terminal,
 }
 
 /// How far Tor got, for interfaces to draw the route a message takes.
@@ -392,6 +407,14 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
                 daemon.set_read_receipts(on)?;
             }
             Reply::ReadReceipts { on: daemon.read_receipts()? }
+        }
+        Request::Show => {
+            daemon.announce(Event::Show);
+            Reply::Done
+        }
+        Request::Close { interface } => {
+            daemon.announce(Event::Close { interface });
+            Reply::Done
         }
         Request::Typing { name } => {
             daemon.typing(&name)?;

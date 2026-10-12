@@ -214,6 +214,20 @@ fn lyrebird() -> Option<std::path::PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&name)).find(|p| p.is_file())
 }
 
+/// The tray icon, from the graphical interface beside this program: it
+/// shows that the daemon runs, and goes with it. Not without a desktop.
+fn tray() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let gui = exe.with_file_name(format!("nightpost-gui{}", std::env::consts::EXE_SUFFIX));
+    let desktop = !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    if desktop && gui.is_file() {
+        // Its errors go where the daemon's do.
+        if let Ok(mut child) = std::process::Command::new(gui).arg("--tray").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn() {
+            std::thread::spawn(move || child.wait());
+        }
+    }
+}
+
 async fn daemon(dir: &Path) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -248,6 +262,7 @@ async fn daemon(dir: &Path) -> Result<()> {
             let (ready, starting) = tokio::sync::oneshot::channel();
             let listener = tokio::task::spawn_local(api::serve_starting(api::bind(dir).await?, bridges.clone(), starting));
 
+            tray();
             eprintln!("Tor: starting (minutes the first time)");
             let lyrebird = lyrebird();
             if lyrebird.is_none() {

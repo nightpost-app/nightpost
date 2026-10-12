@@ -13,12 +13,13 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
-use nightpost_core::api::{self, Client, Event, HistoryItem, LinkState, Network, Person, Reply, Request};
+use nightpost_core::api::{self, Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request};
 use nightpost_core::{dbkey, i18n, t};
 
 mod chrome;
 mod person;
 mod settings;
+mod tray;
 
 use chrome::Chrome;
 use person::PersonPanel;
@@ -57,6 +58,18 @@ fn main() {
     #[cfg(windows)]
     nightpost_core::register_app_id(&dir);
     DIR.set(dir).expect("set once");
+    if std::env::args().nth(1).as_deref() == Some("--tray") {
+        tray::run();
+    }
+    // One window per data folder: a second brings the first to the front
+    // and goes. The lock lasts as long as this process.
+    if let Ok(lock) = std::fs::File::create(self::dir().join("gui.lock")) {
+        if let Err(std::fs::TryLockError::WouldBlock) = lock.try_lock() {
+            let _ = tokio::runtime::Builder::new_current_thread().enable_all().build().map(|r| r.block_on(call(Request::Show)));
+            return;
+        }
+        std::mem::forget(lock);
+    }
     // Our own frame (chrome.rs): no system title bar; macOS keeps its own
     // buttons. The page is never see-through (WebKitGTK then keeps only what
     // changes); on Linux the window is, for the corners cut out of it.
@@ -349,6 +362,15 @@ impl State {
                 }
             }
             Event::ReadReceipts { on } => self.read_receipts.set(on),
+            Event::Show => {
+                let window = dioxus::desktop::window();
+                window.set_visible(true);
+                window.set_minimized(false);
+                window.set_focus();
+            }
+            // From the tray icon: the daemon keeps running.
+            Event::Close { interface: Interface::Window } => dioxus::desktop::window().close(),
+            Event::Close { interface: Interface::Terminal } => {}
             Event::TypingIndicators { on } => self.typing_indicators.set(on),
             Event::Typing { from } => {
                 let n = self.typing.read().values().max().copied().unwrap_or(0) + 1;

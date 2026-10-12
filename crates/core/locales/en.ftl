@@ -142,6 +142,12 @@ update-older-title = { $name } needs to update Nightpost
 update-older-help = You no longer run the same version. Your messages go as soon as { $name } updates.
 update-newer-title = Update Nightpost
 update-newer-help = { $name } has a newer version. Your messages go once you update.
+tray-open-window = Open the window
+tray-close-window = Close the window
+tray-open-terminal = Open in a terminal
+tray-close-terminal = Close the terminal
+tray-stop = Stop Nightpost
+tray-no-terminal = No terminal found: run `nightpost` in yours.
 
 ## The conversation
 

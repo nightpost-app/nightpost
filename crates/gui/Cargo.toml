@@ -46,7 +46,8 @@ copyright = "Nightpost contributors"
 license-file = ["../../LICENSE", "0"]
 extended-description = "A messenger with no server in the middle: each person's Nightpost is a Tor onion service only their contacts can find, and messages are end-to-end encrypted with Signal's protocol."
 section = "net"
-depends = "$auto"
+# The tray icon loads it at run time (tray.rs).
+depends = "$auto, libayatana-appindicator3-1"
 assets = [
     ["target/release/nightpost", "usr/bin/", "755"],
     ["target/release/nightpost-gui", "usr/bin/", "755"],
@@ -77,3 +78,5 @@ assets = [
 "webkit2gtk4.1" = "*"
 libxdo = "*"
 xz-libs = "*"
+# Loaded at run time by the tray icon (tray.rs).
+libayatana-appindicator-gtk3 = "*"

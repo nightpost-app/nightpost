@@ -139,6 +139,12 @@ update-older-title = { $name } doit mettre Nightpost à jour
 update-older-help = Vous n’avez plus la même version. Tes messages partiront dès que { $name } aura mis à jour.
 update-newer-title = Mets Nightpost à jour
 update-newer-help = { $name } a une version plus récente. Tes messages partiront une fois la mise à jour faite.
+tray-open-window = Ouvrir la fenêtre
+tray-close-window = Fermer la fenêtre
+tray-open-terminal = Ouvrir dans le terminal
+tray-close-terminal = Fermer le terminal
+tray-stop = Arrêter Nightpost
+tray-no-terminal = Aucun terminal trouvé : lance `nightpost` dans le tien.
 
 ## La conversation
 

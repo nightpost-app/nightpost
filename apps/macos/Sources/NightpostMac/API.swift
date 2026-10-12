@@ -24,13 +24,15 @@ enum Request: Encodable, Sendable {
     /// We are writing to them; sent every few seconds while we do.
     case typing(name: String)
     case typingIndicators(on: Bool?)
+    /// Closes every interface of a kind, "window" or "terminal".
+    case close(interface: String)
     case bridges(lines: [String]?)
     /// The language was chosen again: the daemon speaks it from now on.
     case language
     case shutdown
 
     private enum Key: String, CodingKey {
-        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines
+        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines, interface
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -56,6 +58,7 @@ enum Request: Encodable, Sendable {
         case let .readReceipts(on): try cmd("read_receipts"); try c.encode(on, forKey: .on)
         case let .typing(name): try cmd("typing"); try c.encode(name, forKey: .name)
         case let .typingIndicators(on): try cmd("typing_indicators"); try c.encode(on, forKey: .on)
+        case let .close(interface): try cmd("close"); try c.encode(interface, forKey: .interface)
         case let .bridges(lines): try cmd("bridges"); try c.encode(lines, forKey: .lines)
         case .language: try cmd("language")
         case .shutdown: try cmd("shutdown")

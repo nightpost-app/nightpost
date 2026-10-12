@@ -21,6 +21,51 @@ struct NightpostApp: App {
         Settings {
             SettingsView().environment(model)
         }
+
+        // As the tray icon on other systems: there while Nightpost runs.
+        MenuBarExtra("Nightpost", systemImage: "envelope") {
+            MenuBarMenu().environment(model)
+        }
+    }
+}
+
+/// The menu bar's menu: the window, the terminal interface, stopping.
+struct MenuBarMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Text(networkSummary(model.network).1)
+        Divider()
+        Button(t("tray-open-window")) {
+            openWindow(id: "main")
+            NSApp.activate()
+        }
+        Button(t("tray-close-window")) {
+            NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.close()
+        }
+        Divider()
+        Button(t("tray-open-terminal"), action: openTerminal)
+        Button(t("tray-close-terminal")) {
+            Task { _ = try? await Daemon.call(.close(interface: "terminal")) }
+        }
+        Divider()
+        Button(t("tray-stop")) { model.quit() }
+    }
+
+    /// Terminal runs a .command file it is handed, with no permission to ask.
+    private func openTerminal() {
+        let quote = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let cli = Bundle.main.bundleURL.appending(path: "Contents/MacOS/nightpost").path
+        let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"].map { "NIGHTPOST_DIR=\(quote($0)) " } ?? ""
+        let script = FileManager.default.temporaryDirectory.appending(path: "Nightpost.command")
+        do {
+            try "#!/bin/sh\n\(dir)exec \(quote(cli))\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+            NSWorkspace.shared.open(script)
+        } catch {
+            model.status = error.localizedDescription
+        }
     }
 }
 

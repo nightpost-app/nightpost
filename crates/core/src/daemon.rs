@@ -192,6 +192,11 @@ impl<T: Transport + 'static> Daemon<T> {
         self.events.receiver_count()
     }
 
+    /// Passes `event` on to every interface listening.
+    pub fn announce(&self, event: Event) {
+        let _ = self.events.send(event);
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
     }
