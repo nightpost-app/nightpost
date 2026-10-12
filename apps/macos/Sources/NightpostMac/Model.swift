@@ -18,7 +18,7 @@ final class AppModel {
     /// As many messages as the GUI on other systems loads per conversation.
     static let history: UInt32 = 200
 
-    var phase = Phase.connecting("Starting…")
+    var phase = Phase.connecting(t("connecting-daemon"))
     var contacts: [ContactInfo] = []
     var messages: [String: [HistoryItem]] = [:]
     var unread: [String: Int] = [:]
@@ -99,7 +99,7 @@ final class AppModel {
             phase = .locked("")
             return nil
         }
-        phase = .connecting("Starting…")
+        phase = .connecting(t("starting"))
         let daemon = starting ? nil : try Daemon.start(passphrase: passphrase)
         while true {
             try await Task.sleep(for: .seconds(1))
@@ -116,7 +116,7 @@ final class AppModel {
                 throw ClientError.daemon("the daemon stopped (\(daemon.terminationStatus)): \(lines.last ?? "")")
             }
             // Its progress lines, not the log lines around them.
-            phase = .connecting(lines.last(where: { $0.hasPrefix("Tor:") }) ?? "Starting…")
+            phase = .connecting(lines.last(where: { $0.hasPrefix("Tor:") }) ?? t("starting"))
         }
     }
 
