@@ -138,37 +138,64 @@ fn ask(request: Request) {
     });
 }
 
+/// The terminals one can pick in Settings: command, how it wants the
+/// program, name.
+#[cfg(not(windows))]
+pub const TERMINALS: [(&str, &[&str], &str); 11] = [
+    ("ghostty", &["-e"], "Ghostty"),
+    ("konsole", &["-e"], "Konsole"),
+    ("ptyxis", &["--"], "Ptyxis"),
+    ("gnome-terminal", &["--"], "GNOME Terminal"),
+    ("kgx", &["-e"], "Console"),
+    ("xfce4-terminal", &["-x"], "Xfce Terminal"),
+    ("alacritty", &["-e"], "Alacritty"),
+    ("kitty", &[], "kitty"),
+    ("foot", &[], "foot"),
+    ("wezterm", &["start", "--"], "WezTerm"),
+    ("xterm", &["-e"], "XTerm"),
+];
+#[cfg(windows)]
+pub const TERMINALS: [(&str, &[&str], &str); 3] = [("wt", &[], "Windows Terminal"), ("alacritty", &["-e"], "Alacritty"), ("wezterm", &["start", "--"], "WezTerm")];
+
+/// The one picked in Settings, by command; none: the system's.
+pub const TERMINAL_FILE: &str = "terminal";
+
+/// Those of [`TERMINALS`] on the PATH.
+pub fn installed() -> Vec<(&'static str, &'static str)> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let found = |command: &str| {
+        // Not is_file: Windows Terminal's `wt.exe` is an app alias, which
+        // only has metadata of its own.
+        std::env::split_paths(&path).any(|dir| std::fs::symlink_metadata(dir.join(format!("{command}{}", std::env::consts::EXE_SUFFIX))).is_ok())
+    };
+    TERMINALS.iter().filter(|(command, ..)| found(command)).map(|&(command, _, name)| (command, name)).collect()
+}
+
 /// Runs `program` in a terminal window: false if none could be found.
 fn open_terminal(program: &Path) -> bool {
+    let picked = std::fs::read_to_string(crate::dir().join(TERMINAL_FILE)).unwrap_or_default();
+    if let Some((command, args, _)) = TERMINALS.iter().find(|(command, ..)| *command == picked.trim())
+        && reap(Command::new(command).args(*args).arg(program).stdin(Stdio::null()).spawn())
+    {
+        return true;
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // `start` gives the program a console of its own.
+        // `start` gives the program a console of its own, in the terminal
+        // Windows is set to use.
         reap(Command::new("cmd").args(["/c", "start", "", &*program.to_string_lossy()]).creation_flags(CREATE_NO_WINDOW).spawn())
     }
     #[cfg(not(windows))]
     {
-        let program = program.as_os_str();
-        // The user's choice first, then the standard launcher, then the
-        // terminals desktops come with; each wants the program its own way.
+        // The user's TERMINAL, then the standard launcher, then the
+        // terminals desktops come with.
         let chosen = std::env::var_os("TERMINAL").map(|t| (t, &["-e"][..]));
-        let known: [(&str, &[&str]); 11] = [
-            ("xdg-terminal-exec", &[]),
-            ("konsole", &["-e"]),
-            ("ptyxis", &["--"]),
-            ("gnome-terminal", &["--"]),
-            ("kgx", &["-e"]),
-            ("xfce4-terminal", &["-x"]),
-            ("alacritty", &["-e"]),
-            ("kitty", &[]),
-            ("foot", &[]),
-            ("wezterm", &["start", "--"]),
-            ("xterm", &["-e"]),
-        ];
         chosen
             .into_iter()
-            .chain(known.into_iter().map(|(t, args)| (t.into(), args)))
+            .chain(std::iter::once(("xdg-terminal-exec".into(), &[][..])))
+            .chain(TERMINALS.iter().map(|&(t, args, _)| (t.into(), args)))
             .any(|(terminal, args)| reap(Command::new(terminal).args(args).arg(program).stdin(Stdio::null()).spawn()))
     }
 }

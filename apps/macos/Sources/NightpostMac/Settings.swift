@@ -184,7 +184,7 @@ private struct AppearancePane: View {
             }
             Help(t("language-help"))
         }
-        Block(title: t("mac-terminal")) {
+        Block(title: t("terminal")) {
             HStack(spacing: 10) {
                 terminalPill("", t("theme-system"))
                 ForEach(Terminal.installed, id: \.path) { terminalPill($0.path, $0.deletingPathExtension().lastPathComponent) }

@@ -91,6 +91,7 @@ fn Appearance() -> Element {
     let theme = *state.theme.read();
     // A signal: choosing the language already spoken redraws nothing else.
     let mut chosen = use_signal(i18n::chosen);
+    let mut terminal = use_signal(|| std::fs::read_to_string(dir().join(crate::tray::TERMINAL_FILE)).unwrap_or_default().trim().to_string());
     let options = [(Theme::System, t!("theme-system"), "#0f1522", "#f4f5f7"), (Theme::Dark, t!("theme-dark"), "#0f1522", "#111a29"), (Theme::Light, t!("theme-light"), "#f4f5f7", "#ffffff")];
     rsx! {
         section { class: "block",
@@ -135,6 +136,28 @@ fn Appearance() -> Element {
                 }
             }
             p { class: "help", {t!("language-help")} }
+        }
+        section { class: "block",
+            h2 { {t!("terminal")} }
+            div { class: "themes", role: "radiogroup", "aria-label": t!("terminal"),
+                for (command, label) in std::iter::once(("", t!("theme-system"))).chain(crate::tray::installed().into_iter().map(|(c, n)| (c, n.to_string()))) {
+                    button {
+                        key: "{label}",
+                        class: if command == *terminal.read() { "language-option on" } else { "language-option" },
+                        role: "radio",
+                        "aria-checked": "{command == *terminal.read()}",
+                        onclick: move |_| {
+                            let file = dir().join(crate::tray::TERMINAL_FILE);
+                            let saved = if command.is_empty() { std::fs::remove_file(file).or(Ok(())) } else { std::fs::write(file, command) };
+                            if saved.is_ok() {
+                                terminal.set(command.to_string());
+                            }
+                        },
+                        "{label}"
+                    }
+                }
+            }
+            p { class: "help", {t!("terminal-help")} }
         }
     }
 }
