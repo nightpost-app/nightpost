@@ -18,7 +18,8 @@ use zeroize::Zeroizing;
 
 const USAGE: &str = "\
 usage:
-  nightpost                        the terminal interface
+  nightpost                        the terminal interface (starts the daemon
+                                   in the background if none runs)
   nightpost daemon                 run the daemon (Tor) in the foreground
   nightpost invite <name>          print a one-time link for <name>
   nightpost invite --code <name>   a 12-digit code to read out (10 minutes)
@@ -65,7 +66,10 @@ async fn run(args: Vec<String>) -> Result<()> {
         bail!(nightpost_core::t!("old-daemon", running = running.unwrap_or_else(|| "?".into()), mine = nightpost_core::VERSION));
     }
     let request = match args.as_slice() {
-        [] => return tui::run(&dir).await,
+        [] => {
+            start_daemon(&dir).await?;
+            return tui::run(&dir).await;
+        }
         ["daemon"] => return daemon(&dir).await,
         ["--version" | "version"] => {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
@@ -363,6 +367,65 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
             let _ = notification.show();
         });
     }
+}
+
+/// `nightpost daemon` in the background when none answers, as the window
+/// does: the passphrase asked here goes on its stdin, its output to
+/// daemon.log, and Tor's progress shows on one line until it listens.
+async fn start_daemon(dir: &Path) -> Result<()> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    use nightpost_core::t;
+    if Client::connect(dir).await.is_ok() {
+        return Ok(());
+    }
+    let asks = dbkey::passphrase_file().is_none() && dbkey::uses_passphrase(dir);
+    for _ in 0..3 {
+        let passphrase = if asks { Some(Zeroizing::new(rpassword::prompt_password("Passphrase: ")?)) } else { None };
+        let log_path = dir.join("daemon.log");
+        let log = std::fs::File::create(&log_path)?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command.arg("daemon").stdin(if asks { Stdio::piped() } else { Stdio::null() }).stdout(log.try_clone()?).stderr(log);
+        // Its own process group: Ctrl+C here, or the terminal closing,
+        // leaves it running.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut daemon = command.spawn().context("starting the daemon")?;
+        if let (Some(passphrase), Some(mut stdin)) = (passphrase, daemon.stdin.take()) {
+            stdin.write_all(Zeroizing::new(format!("{}\n", passphrase.as_str())).as_bytes())?;
+        }
+        let mut shown = String::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // While Tor starts, the daemon takes requests and answers them
+            // once it is up.
+            let ready = async { Client::connect(dir).await?.call(&Request::Status).await };
+            if let Ok(Ok(Reply::Status { .. })) = tokio::time::timeout(std::time::Duration::from_millis(400), ready).await {
+                eprint!("\r\x1b[K");
+                return Ok(());
+            }
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if let Some(status) = daemon.try_wait()? {
+                if text.contains("wrong key") {
+                    eprintln!("\r\x1b[K{}", t!("wrong-passphrase"));
+                    break;
+                }
+                bail!("the daemon stopped ({status}): {}", text.lines().last().unwrap_or_default());
+            }
+            let progress = text.lines().rev().find(|l| l.starts_with("Tor:")).map_or_else(|| t!("starting"), String::from);
+            if progress != shown {
+                eprint!("\r\x1b[K{progress}");
+                shown = progress;
+            }
+        }
+    }
+    bail!(t!("wrong-passphrase"))
 }
 
 /// The keychain secret, plus the passphrase if one is configured. Without a
