@@ -74,8 +74,11 @@ impl App {
         let block = self.pane(Focus::List, Span::styled(format!(" {} ", t!("tui-conversations")), BOLD));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let [rows, _, tor] = Layout::vertical([Constraint::Min(2), Constraint::Length(1), Constraint::Length(2)]).areas(inner);
         let width = inner.width as usize;
+        // How Tor stands, over as many rows as it takes, then who is reachable.
+        let (state, _) = self.network.summary();
+        let state = wrap_words(&state, width.saturating_sub(3));
+        let [rows, _, tor] = Layout::vertical([Constraint::Min(2), Constraint::Length(1), Constraint::Length(state.len() as u16 + 1)]).areas(inner);
         // Keep the selected one in view.
         let shown = (rows.height as usize / 2).max(1);
         self.list_top = self.list_top.min(self.selected).max((self.selected + 1).saturating_sub(shown));
@@ -104,14 +107,15 @@ impl App {
         }
         frame.render_widget(Paragraph::new(lines), rows);
 
-        let (state, _) = self.network.summary();
         let ok = self.network.percent == 100 && !self.network.blocked();
         let dot = if self.network.blocked() { Span::styled("● ", Style::new().fg(Color::Red)) } else if ok { Span::styled("● ", Style::new().fg(ACCENT)) } else { Span::styled(format!("{} ", self.spinner()), Style::new().fg(ACCENT)) };
         let reachable = self.conversations.iter().filter(|c| self.reachable(&c.name)).count();
-        let lines = vec![
-            Line::from(vec![Span::raw(" "), dot, Span::styled(fit(&state, width.saturating_sub(3)), DIM)]),
-            Line::styled(format!("   {}", t!("reachable-count", reachable = reachable, total = self.conversations.len())), DIM),
-        ];
+        let mut lines: Vec<Line> = state
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| Line::from(vec![Span::raw(" "), if i == 0 { dot.clone() } else { Span::raw("  ") }, Span::styled(row, DIM)]))
+            .collect();
+        lines.push(Line::styled(format!("   {}", t!("reachable-count", reachable = reachable, total = self.conversations.len())), DIM));
         frame.render_widget(Paragraph::new(lines), tor);
     }
 
