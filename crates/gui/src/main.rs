@@ -631,7 +631,7 @@ fn Sidebar() -> Element {
     rows.sort_by(|a, b| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time)).then_with(|| a.0.cmp(&b.0)));
     let net = state.network.read().clone();
     let reachable = rows.iter().filter(|(n, _)| reached(&net, state.links.read().get(n).copied())).count();
-    let (title, _) = network_summary(&net);
+    let (title, _) = net.summary();
     let dot = if net.entry == Some(false) || net.circuit == Some(false) {
         "net-dot fail"
     } else if net.percent < 100 {
@@ -717,19 +717,6 @@ fn reached(net: &Network, link: Option<LinkState>) -> bool {
     reach_line("", net, link).0 == "on"
 }
 
-/// What the panel under the list says about Tor.
-fn network_summary(net: &Network) -> (String, String) {
-    let line = net.line.strip_prefix("Tor: ").unwrap_or(&net.line).to_string();
-    if net.entry == Some(false) || net.circuit == Some(false) {
-        (t!("net-blocked"), line)
-    } else if net.percent < 100 {
-        (t!("net-connecting"), if line.is_empty() { format!("{}%", net.percent) } else { line })
-    } else if net.bridged {
-        (t!("net-bridged"), t!("net-bridged-help"))
-    } else {
-        (t!("net-connected"), t!("net-connected-help"))
-    }
-}
 
 /// The photo chosen for them, or three rings, the same for a name on every
 /// machine: an onion of one's own.
@@ -738,19 +725,7 @@ fn avatar(name: &str, photo: Option<&str>, size: u32) -> Element {
         // Our own re-encoded PNG (`person::photo_uri`), checked by the daemon.
         return rsx! { img { class: "photo", width: "{size}", height: "{size}", src: "{photo}", alt: "" } };
     }
-    const RINGS: [[&str; 3]; 8] = [
-        ["#F2B880", "#C8553D", "#2D3047"],
-        ["#A7C4E2", "#3A6EA5", "#F4E285"],
-        ["#B8D8BA", "#5B8E7D", "#EF8354"],
-        ["#D7C3E8", "#7A5C99", "#F2EEF6"],
-        ["#F6D6AD", "#D08C60", "#3F4B3B"],
-        ["#9FD8D3", "#2F7F86", "#FCE7C8"],
-        ["#F4B6C2", "#B04A6C", "#2E294E"],
-        ["#C9D6A3", "#6B8F3A", "#F3EBD3"],
-    ];
-    // FNV-1a: stable across versions and machines, unlike std's hasher.
-    let hash = name.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
-    let [a, b, c] = RINGS[hash as usize % RINGS.len()];
+    let [a, b, c] = nightpost_core::rings(name);
     rsx! {
         svg { width: "{size}", height: "{size}", view_box: "0 0 46 46", "aria-hidden": "true",
             circle { cx: "23", cy: "23", r: "23", fill: a }

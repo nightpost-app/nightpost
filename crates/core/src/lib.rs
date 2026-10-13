@@ -48,5 +48,23 @@ pub fn register_app_id(dir: &std::path::Path) {
     }
 }
 
+/// Three rings for a name without a photo, outside in: the same on every
+/// machine (FNV-1a, unlike std's hasher), so a name always looks the same.
+/// The terminal interface colours names with the middle one.
+pub fn rings(name: &str) -> [&'static str; 3] {
+    const RINGS: [[&str; 3]; 8] = [
+        ["#F2B880", "#C8553D", "#2D3047"],
+        ["#A7C4E2", "#3A6EA5", "#F4E285"],
+        ["#B8D8BA", "#5B8E7D", "#EF8354"],
+        ["#D7C3E8", "#7A5C99", "#F2EEF6"],
+        ["#F6D6AD", "#D08C60", "#3F4B3B"],
+        ["#9FD8D3", "#2F7F86", "#FCE7C8"],
+        ["#F4B6C2", "#B04A6C", "#2E294E"],
+        ["#C9D6A3", "#6B8F3A", "#F3EBD3"],
+    ];
+    let hash = name.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+    RINGS[hash as usize % RINGS.len()]
+}
+
 /// Version of the wire protocol. Peers must match exactly.
 pub const PROTOCOL_VERSION: u16 = 1;

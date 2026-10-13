@@ -154,6 +154,28 @@ pub struct Network {
     pub line: String,
 }
 
+impl Network {
+    /// How Tor stands in a few words, then a line of detail: what the
+    /// interfaces show under the conversations.
+    pub fn summary(&self) -> (String, String) {
+        let line = self.line.strip_prefix("Tor: ").unwrap_or(&self.line).to_string();
+        if self.blocked() {
+            (t!("net-blocked"), line)
+        } else if self.percent < 100 {
+            (t!("net-connecting"), if line.is_empty() { format!("{}%", self.percent) } else { line })
+        } else if self.bridged {
+            (t!("net-bridged"), t!("net-bridged-help"))
+        } else {
+            (t!("net-connected"), t!("net-connected-help"))
+        }
+    }
+
+    /// The last probe failed: nothing goes through.
+    pub fn blocked(&self) -> bool {
+        self.entry == Some(false) || self.circuit == Some(false)
+    }
+}
+
 /// A link to one contact.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

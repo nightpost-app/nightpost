@@ -41,7 +41,7 @@ pub fn run() -> ! {
         let mut misses = 0;
         loop {
             let status = match runtime.block_on(crate::call(Request::Status)) {
-                Ok(Reply::Status { network, .. }) => Some(crate::network_summary(&network).0),
+                Ok(Reply::Status { network, .. }) => Some(network.summary().0),
                 // Tor is starting: requests wait for it.
                 Ok(_) => Some(t!("starting")),
                 Err(_) => None,

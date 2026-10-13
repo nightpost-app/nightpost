@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
 use nightpost_core::{dbkey, i18n, t};
 
-use crate::{State, Theme, View, as_launched, call, dir, network_summary};
+use crate::{State, Theme, View, as_launched, call, dir};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Section {
@@ -195,7 +195,7 @@ fn Appearance() -> Element {
 fn NetworkSection() -> Element {
     let state = use_context::<State>();
     let net = state.network.read().clone();
-    let (title, detail) = network_summary(&net);
+    let (title, detail) = net.summary();
     let dot = if net.entry == Some(false) || net.circuit == Some(false) {
         "net-dot big fail"
     } else if net.percent < 100 {
