@@ -125,13 +125,34 @@ enum Terminal {
         }
     }
 
+    /// Terminals that run a program named on their command line, by bundle:
+    /// how each wants it. Handed a .command file instead, Ghostty asks
+    /// every time whether to run it.
+    static let commandLines = [
+        "com.mitchellh.ghostty": ["-e"],
+        "org.alacritty": ["-e"],
+        "net.kovidgoyal.kitty": [],
+        "com.github.wez.wezterm": ["start", "--"],
+    ]
+
     static func open(_ script: URL) {
         let chosen = UserDefaults.standard.string(forKey: key) ?? ""
-        guard !chosen.isEmpty, FileManager.default.fileExists(atPath: chosen) else {
+        let app = !chosen.isEmpty && FileManager.default.fileExists(atPath: chosen)
+            ? URL(fileURLWithPath: chosen)
+            : NSWorkspace.shared.urlForApplication(toOpen: script)
+        guard let app else {
             NSWorkspace.shared.open(script)
             return
         }
-        NSWorkspace.shared.open([script], withApplicationAt: URL(fileURLWithPath: chosen), configuration: NSWorkspace.OpenConfiguration())
+        let configuration = NSWorkspace.OpenConfiguration()
+        if let id = Bundle(url: app)?.bundleIdentifier, let arguments = commandLines[id] {
+            // As `open -na App --args …`: a running one would ignore them.
+            configuration.arguments = arguments + [script.path]
+            configuration.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+        } else {
+            NSWorkspace.shared.open([script], withApplicationAt: app, configuration: configuration)
+        }
     }
 }
 
