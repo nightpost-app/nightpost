@@ -59,6 +59,9 @@ private struct Pane<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(28)
         }
+        // macOS lets a scroll view's content run on under the toolbar; with
+        // the tabs' bar transparent, it would show through the tabs.
+        .clipped()
         // The same size on every tab: the window does not jump from one to the next.
         .frame(height: 600)
         .background(Palette.ground)
