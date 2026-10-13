@@ -7,6 +7,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
+use crossterm::style::Print;
+use crossterm::terminal::SetTitle;
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, Event as Term, EventStream,
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -160,9 +162,11 @@ pub async fn run(dir: &Path) -> Result<()> {
     app.select(0, &mut requests).await;
 
     let mut terminal = ratatui::init();
-    crossterm::execute!(std::io::stdout(), EnableFocusChange, EnableBracketedPaste)?;
+    // The tab says Nightpost, not the program's path; the terminal's own
+    // title is saved first (CSI 22 t) and given back after (CSI 23 t).
+    crossterm::execute!(std::io::stdout(), Print("\x1b[22;0t"), SetTitle("Nightpost"), EnableFocusChange, EnableBracketedPaste)?;
     let result = app.run(&mut terminal, &mut requests, &mut updated, &updates).await;
-    let _ = crossterm::execute!(std::io::stdout(), DisableFocusChange, DisableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), DisableFocusChange, DisableBracketedPaste, Print("\x1b[23;0t"));
     ratatui::restore();
     result
 }
