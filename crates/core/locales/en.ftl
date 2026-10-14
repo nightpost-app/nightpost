@@ -87,7 +87,7 @@ daemon-silent = Nightpost's daemon does not answer: { $error }
 bridges-button = Tor blocked here? Bridges
 unlock-prompt = Your passphrase opens your messages.
 unlock = Unlock
-wrong-passphrase = That passphrase does not open them. Try again.
+wrong-passphrase = Wrong passphrase. Try again.
 
 ## Window
 

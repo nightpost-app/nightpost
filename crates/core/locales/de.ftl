@@ -84,7 +84,7 @@ daemon-silent = Der Daemon von Nightpost antwortet nicht: { $error }
 bridges-button = Tor hier blockiert? Brücken
 unlock-prompt = Deine Passphrase öffnet deine Nachrichten.
 unlock = Entsperren
-wrong-passphrase = Diese Passphrase öffnet sie nicht. Versuch es noch einmal.
+wrong-passphrase = Falsche Passphrase. Versuch es noch einmal.
 
 ## Fenster
 
