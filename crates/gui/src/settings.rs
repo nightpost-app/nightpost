@@ -323,7 +323,7 @@ fn Notifications() -> Element {
                             1 => p.sound = !p.sound,
                             _ => p.keep_history = !p.keep_history,
                         }
-                        state.prefs.set(p.save());
+                        state.prefs.set(p.save(dir()));
                     },
                     span { class: "card-text", span { class: "card-title", "{label}" } span { class: "help", "{help}" } }
                     span { class: if on { "switch on" } else { "switch" }, span {} }
@@ -342,7 +342,7 @@ fn Notifications() -> Element {
                         onclick: move |_| {
                             let mut p = *state.prefs.read();
                             (p.show_name, p.show_text) = choice;
-                            state.prefs.set(p.save());
+                            state.prefs.set(p.save(dir()));
                         },
                         span { class: "radio" }
                         span { class: "card-text",
@@ -531,7 +531,7 @@ fn Security() -> Element {
                 onclick: move |_| {
                     let mut p = *state.prefs.read();
                     p.lock_on_close = !p.lock_on_close;
-                    state.prefs.set(p.save());
+                    state.prefs.set(p.save(dir()));
                 },
                 span { class: "card-text",
                     span { class: "card-title", {if *has.read() { t!("close-locks") } else { t!("close-quits") }} }

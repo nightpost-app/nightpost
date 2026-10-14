@@ -334,7 +334,7 @@ licences = Lizenzen
 licence-bridges = lyrebird (Brücken)
 licence-icons = Symbole
 
-## Die Terminal-Oberfläche (die Tasten y, n, w und c bleiben, wie sie sind)
+## Die Terminal-Oberfläche (die Taste c bleibt, wie sie ist)
 
 weekday-short-1 = Mo.
 weekday-short-2 = Di.
@@ -354,16 +354,11 @@ tui-muted-forever = { $name } stumm bis /unmute
 tui-muted-until = { $name } stumm bis { $time }
 tui-unmuted = Mitteilungen von { $name } sind wieder an
 tui-unknown-command = Unbekannter Befehl: /help zeigt alle
-tui-looking = Suche läuft (bis zu einigen Minuten)…
 tui-renamed = { $name } heißt jetzt { $to }
 tui-qr-too-small = Der QR-Code braucht ein Terminal mit { $width }×{ $height }: vergrößere es oder kopiere den Link.
 tui-invite-help = Gib sie nur { $name }. Sie gilt einmal, 7 Tage lang.
-tui-confirm-keep = die Ziffern stimmen, behalten
-tui-confirm-refuse = sie weichen ab, ablehnen
-tui-verify-yes = sie stimmen, als verifiziert markieren
-tui-remove-keep = entfernen, Unterhaltung auf diesem Computer behalten
-tui-remove-wipe = entfernen und Unterhaltung löschen
-tui-remove-no = behalten
+tui-remove-wipe = Entfernen und Unterhaltung löschen
+tui-remove-no = Kontakt behalten
 help-send = senden
 help-newline = neue Zeile
 help-scroll = blättern
@@ -426,6 +421,24 @@ arg-name = Name
 arg-link = Link
 arg-code = Code
 arg-new-name = neuer Name
+help-info = was du über diese Person weißt und was du tun kannst
+help-settings = Sprache, Mitteilungen, Passphrase, Über
+help-network = Tor, der Weg zu dieser Person, Brücken
+help-lock = Nightpost beenden; mit Passphrase bleibt es bis zum nächsten Start gesperrt
+hint-confirm = bestätigen
+hint-cancel = abbrechen
+hint-section = Bereich
+hint-change = ändern
+hint-done = fertig
+hint-next-field = nächstes Feld
+hint-hide = ausblenden
+tui-mute-1h = 1 Std. stummschalten
+tui-mute-8h = 8 Std. stummschalten
+tui-mute = Stummschalten
+tui-unmute = Mitteilungen wieder einschalten
+tui-theme-help = Die Farben deines Terminals: Du änderst sie in seinen Einstellungen.
+tui-notify-terminal = Im Terminal laufen Mitteilungen über das Terminal: Ton und Verlauf hängen von seinen Einstellungen ab.
+tui-notify-what = { $name }: { $text }
 
 ## Die macOS-App
 

@@ -101,7 +101,7 @@ pub fn run() -> ! {
                 } else if e.id == *terminal.id() {
                     let program = std::env::current_exe().map(|e| e.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX)));
                     if !program.is_ok_and(|p| open_terminal(&p)) {
-                        crate::notify("Nightpost", &t!("tray-no-terminal"), crate::Prefs::load());
+                        crate::notify("Nightpost", &t!("tray-no-terminal"), nightpost_core::prefs::Prefs::load(crate::dir()));
                     }
                 } else if e.id == *close_terminal.id() {
                     ask(Request::Close { interface: Interface::Terminal });

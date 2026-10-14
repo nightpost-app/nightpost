@@ -327,9 +327,8 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
         if daemon.listeners() > 1 {
             continue;
         }
-        let settings = std::fs::read_to_string(dir.join("gui-settings")).unwrap_or_default();
-        let set = |key: &str, default: bool| settings.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).map_or(default, |v| v == "1");
-        if !set("notify", true) {
+        let prefs = nightpost_core::prefs::Prefs::load(&dir);
+        if !prefs.notify {
             continue;
         }
         let (title, body) = match event {
@@ -339,7 +338,7 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
                 if person.and_then(|p| p.muted_until).is_some_and(|until| until > now) {
                     continue;
                 }
-                match (set("show_name", true), set("show_text", false)) {
+                match (prefs.show_name, prefs.show_text) {
                     (true, true) => (from, nightpost_core::text::notification(&text)),
                     (true, false) => ("Nightpost".to_string(), format!("Message from {from}")),
                     _ => ("Nightpost".to_string(), "New message".to_string()),
@@ -350,7 +349,7 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
         };
         // Kept in the system's history only if asked (a hint of freedesktop servers).
         #[cfg_attr(not(unix), allow(unused_variables))]
-        let (sound, keep) = (set("sound", false), set("keep_history", false));
+        let (sound, keep) = (prefs.sound, prefs.keep_history);
         // Blocking (D-Bus): on a thread of its own. No session bus (a server): nothing shown.
         std::thread::spawn(move || {
             let mut notification = notify_rust::Notification::new();

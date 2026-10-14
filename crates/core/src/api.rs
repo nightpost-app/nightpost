@@ -176,6 +176,64 @@ impl Network {
     }
 }
 
+/// Where a message to someone gets now: the steps reached, the one being
+/// tried (orange), the one that failed. Steps: this computer, the entrance
+/// (a guard, or a bridge), two relays, the meeting point, their device.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Route {
+    pub lit: usize,
+    pub live: Option<usize>,
+    pub fail: Option<usize>,
+}
+
+impl Route {
+    pub fn new(net: &Network, link: Option<LinkState>) -> Route {
+        let at = |lit, live, fail| Route { lit, live, fail };
+        if net.entry == Some(false) {
+            at(1, None, Some(0))
+        } else if net.percent < 100 {
+            at(1, Some(0), None)
+        } else if net.circuit == Some(false) {
+            at(2, None, Some(1))
+        } else {
+            match link {
+                Some(LinkState::Open | LinkState::Idle) => at(6, None, None),
+                Some(LinkState::Trying) => at(4, Some(3), None),
+                Some(LinkState::Unreachable) | None => at(4, None, None),
+                // The meeting point answered, but not in the same language.
+                Some(LinkState::Older | LinkState::Newer) => at(5, None, None),
+            }
+        }
+    }
+
+    /// How the hop that leaves step `i` stands: done, live, fail or wait
+    /// (the window's CSS classes too).
+    pub fn hop(self, i: usize) -> &'static str {
+        if self.live == Some(i) {
+            "live"
+        } else if self.fail == Some(i) {
+            "fail"
+        } else if i + 1 < self.lit {
+            "done"
+        } else {
+            "wait"
+        }
+    }
+
+    /// How step `i` stands, in the same words.
+    pub fn step(self, i: usize) -> &'static str {
+        if i < self.lit {
+            "done"
+        } else if i > 0 && self.live == Some(i - 1) {
+            "live"
+        } else if i > 0 && self.fail == Some(i - 1) {
+            "fail"
+        } else {
+            "wait"
+        }
+    }
+}
+
 /// A link to one contact.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

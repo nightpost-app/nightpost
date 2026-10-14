@@ -334,7 +334,7 @@ licences = Licences
 licence-bridges = lyrebird (ponts)
 licence-icons = Icônes
 
-## L’interface terminal (les touches y, n, w et c restent telles quelles)
+## L’interface terminal (la touche c reste telle quelle)
 
 weekday-short-1 = lun.
 weekday-short-2 = mar.
@@ -354,16 +354,11 @@ tui-muted-forever = { $name } en sourdine jusqu’à /unmute
 tui-muted-until = { $name } en sourdine jusqu’à { $time }
 tui-unmuted = Les notifications de { $name } sont réactivées
 tui-unknown-command = Commande inconnue : /help les liste
-tui-looking = Recherche en cours (jusqu’à quelques minutes)…
 tui-renamed = { $name } s’appelle maintenant { $to }
 tui-qr-too-small = Le QR code demande un terminal de { $width }×{ $height } : agrandis-le, ou copie le lien.
 tui-invite-help = Donne-la à { $name } seulement. Elle sert une fois, pendant 7 jours.
-tui-confirm-keep = les chiffres correspondent, garder
-tui-confirm-refuse = ils diffèrent, refuser
-tui-verify-yes = ils correspondent, marquer comme vérifié
-tui-remove-keep = retirer, garder la conversation sur cet ordinateur
-tui-remove-wipe = retirer et supprimer la conversation
-tui-remove-no = garder ce contact
+tui-remove-wipe = Retirer et supprimer la conversation
+tui-remove-no = Garder ce contact
 help-send = envoyer
 help-newline = aller à la ligne
 help-scroll = défiler
@@ -426,6 +421,24 @@ arg-name = nom
 arg-link = lien
 arg-code = code
 arg-new-name = nouveau nom
+help-info = ce que tu sais de cette personne, et quoi en faire
+help-settings = langue, notifications, phrase de passe, à propos
+help-network = Tor, le trajet vers cette personne, les ponts
+help-lock = arrêter Nightpost ; avec une phrase de passe, il reste verrouillé jusqu’au prochain lancement
+hint-confirm = valider
+hint-cancel = annuler
+hint-section = section
+hint-change = changer
+hint-done = terminé
+hint-next-field = champ suivant
+hint-hide = masquer
+tui-mute-1h = Couper ses notifications 1 heure
+tui-mute-8h = Couper ses notifications 8 heures
+tui-mute = Couper ses notifications
+tui-unmute = Réactiver ses notifications
+tui-theme-help = Les couleurs de ton terminal : elles se changent dans ses réglages.
+tui-notify-terminal = Dans un terminal, la notification passe par lui : le son et l’historique dépendent de ses réglages.
+tui-notify-what = { $name } : { $text }
 
 ## L’app macOS
 

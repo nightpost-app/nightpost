@@ -3,6 +3,7 @@
 //! running daemon and keeps nothing itself, so closing it leaves the daemon
 //! running and reopening it finds everything where it was.
 
+mod panel;
 mod view;
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use crossterm::style::Print;
 use crossterm::terminal::SetTitle;
 use futures::StreamExt as _;
 use nightpost_core::api::{Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request};
+use nightpost_core::prefs::Prefs;
 use nightpost_core::t;
 use ratatui::DefaultTerminal;
 use ratatui::layout::{Position, Rect};
@@ -57,11 +59,18 @@ enum Overlay {
     /// Shown with its QR code when the terminal is big enough for all of it.
     Invite { name: String, link: String, qr: Vec<String> },
     /// Someone used our code: keep them only if the numbers match.
-    Confirm { name: String, number: String },
-    /// Their safety number; y marks it compared.
-    Verify { name: String, number: String },
-    /// y removes them, w also deletes the conversation.
-    Remove { name: String },
+    Confirm { name: String, number: String, selected: usize },
+    /// Their safety number, to mark compared.
+    Verify { name: String, number: String, selected: usize },
+    /// Remove them, maybe with the conversation.
+    Remove { name: String, selected: usize },
+    /// What we know of them, and what can be done about them.
+    Info { name: String, selected: usize },
+    /// An invitation or a code being used: it can take minutes, and goes on
+    /// once this is closed.
+    Looking { name: String, since: Instant },
+    Settings(panel::Settings),
+    Passphrase(panel::Passphrase),
 }
 
 enum Update {
@@ -94,11 +103,15 @@ fn commands() -> Vec<Command> {
         c("/code", arg(t!("arg-name")), t!("help-code")),
         c("/accept", format!("{} {}", arg(t!("arg-link")), arg(t!("arg-name"))), t!("help-accept")),
         c("/acceptcode", format!("{} {}", arg(t!("arg-code")), arg(t!("arg-name"))), t!("help-acceptcode")),
+        c("/info", String::new(), t!("help-info")),
         c("/verify", String::new(), t!("help-verify")),
         c("/rename", arg(t!("arg-new-name")), t!("help-rename")),
         c("/mute", "[1h | 8h]".into(), t!("help-mute")),
         c("/unmute", String::new(), t!("help-unmute")),
         c("/remove", String::new(), t!("help-remove")),
+        c("/settings", String::new(), t!("help-settings")),
+        c("/network", String::new(), t!("help-network")),
+        c("/lock", String::new(), t!("help-lock")),
         c("/quit", String::new(), t!("help-quit")),
     ]
 }
@@ -135,7 +148,11 @@ struct App {
     /// A message for another conversation: from, first line, when.
     notice: Option<(String, String, Instant)>,
     focused: bool,
-    notify: Option<String>,
+    /// A notification to give after the frame: title, then text.
+    notify: Option<(String, String)>,
+    prefs: Prefs,
+    read_receipts: bool,
+    typing_indicators: bool,
     quit: bool,
     /// Who is writing to us, until when. ponytail: one person at a time,
     /// the last one heard; a map if two at once ever matters here.
@@ -191,6 +208,9 @@ pub async fn run(dir: &Path) -> Result<()> {
         notice: None,
         focused: true,
         notify: None,
+        prefs: Prefs::load(dir),
+        read_receipts: false,
+        typing_indicators: false,
         quit: false,
         typing: None,
         pinged: None,
@@ -203,6 +223,12 @@ pub async fn run(dir: &Path) -> Result<()> {
     if let Ok(Reply::Status { network, links }) = requests.call(&Request::Status).await {
         app.network = network;
         app.links = links.into_iter().collect();
+    }
+    if let Ok(Reply::ReadReceipts { on }) = requests.call(&Request::ReadReceipts { on: None }).await {
+        app.read_receipts = on;
+    }
+    if let Ok(Reply::TypingIndicators { on }) = requests.call(&Request::TypingIndicators { on: None }).await {
+        app.typing_indicators = on;
     }
     if app.conversations.is_empty() {
         app.focus = Focus::List;
@@ -249,10 +275,10 @@ impl App {
                 self.notice = None;
             }
             terminal.draw(|frame| self.draw(frame))?;
-            if let Some(text) = self.notify.take() {
+            if let Some((title, text)) = self.notify.take() {
                 // After the frame, never inside it.
                 let mut out = std::io::stdout();
-                let _ = out.write_all(notification(&text, std::env::var_os("TMUX").is_some()).as_bytes());
+                let _ = out.write_all(notification(&title, &text, std::env::var_os("TMUX").is_some()).as_bytes());
                 let _ = out.flush();
             }
             tokio::select! {
@@ -260,7 +286,7 @@ impl App {
                     Term::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key, requests, updates).await,
                     Term::Mouse(mouse) => self.on_mouse(mouse, requests).await,
                     Term::Paste(text) => {
-                        if self.overlay.is_none() {
+                        if !self.on_panel_paste(&text) && self.overlay.is_none() {
                             self.focus = Focus::Input;
                             self.insert(&text.replace("\r\n", "\n"));
                         }
@@ -283,7 +309,10 @@ impl App {
 
     /// Something on screen changes by itself.
     fn moving(&self) -> bool {
-        self.notice.is_some() || self.typing.is_some() || self.current().is_some_and(|c| self.sending(c))
+        self.notice.is_some()
+            || self.typing.is_some()
+            || self.current().is_some_and(|c| self.sending(c))
+            || matches!(self.overlay, Some(Overlay::Looking { .. } | Overlay::Settings(_)))
     }
 
     async fn on_key(&mut self, key: KeyEvent, requests: &mut Client, updates: &mpsc::UnboundedSender<Update>) {
@@ -395,18 +424,17 @@ impl App {
     }
 
     async fn on_overlay_key(&mut self, key: KeyEvent, requests: &mut Client) {
+        if self.on_panel_key(key, requests).await {
+            return;
+        }
         let found = match &self.overlay {
             Some(Overlay::Picker { filter, .. }) => self.found(filter),
             _ => Vec::new(),
         };
         match self.overlay.as_mut() {
-            Some(Overlay::Confirm { name, .. }) => {
-                let keep = match key.code {
-                    KeyCode::Char('y' | 'Y') => true,
-                    KeyCode::Char('n' | 'N') | KeyCode::Esc => false,
-                    _ => return,
-                };
-                let name = name.clone();
+            Some(Overlay::Confirm { name, selected, .. }) => {
+                let Some(answer) = panel::pick(key.code, selected, 2) else { return };
+                let (name, keep) = (name.clone(), answer == 0);
                 self.overlay = None;
                 self.codes.retain(|n| *n != name);
                 self.status = match requests.call(&Request::Confirm { name: name.clone(), keep }).await {
@@ -416,22 +444,23 @@ impl App {
                     Ok(_) => t!("turned-down", name = name),
                 };
             }
-            Some(Overlay::Verify { name, .. }) if matches!(key.code, KeyCode::Char('y' | 'Y')) => {
+            Some(Overlay::Verify { name, selected, .. }) => {
+                let Some(answer) = panel::pick(key.code, selected, 2) else { return };
                 let name = name.clone();
                 self.overlay = None;
-                self.set_person(&name, |p| p.verified = true, requests).await;
+                if answer == 0 {
+                    self.set_person(&name, |p| p.verified = true, requests).await;
+                }
             }
-            Some(Overlay::Remove { name }) => {
-                let wipe = match key.code {
-                    KeyCode::Char('y' | 'Y') => false,
-                    KeyCode::Char('w' | 'W') => true,
-                    KeyCode::Char('n' | 'N') | KeyCode::Esc => return self.overlay = None,
-                    _ => return,
-                };
+            Some(Overlay::Remove { name, selected }) => {
+                let Some(answer) = panel::pick(key.code, selected, 3) else { return };
                 let name = name.clone();
                 self.overlay = None;
+                if answer == 2 {
+                    return;
+                }
                 // The daemon's ContactRemoved event updates the list.
-                if let Err(e) = expect_done(requests.call(&Request::Remove { name, wipe }).await) {
+                if let Err(e) = expect_done(requests.call(&Request::Remove { name, wipe: answer == 1 }).await) {
                     self.status = format!("{e:#}");
                 }
             }
@@ -563,6 +592,10 @@ impl App {
         match words.as_slice() {
             ["help"] => self.overlay = Some(Overlay::Help),
             ["quit"] => self.quit = true,
+            ["lock"] => self.lock(requests).await,
+            ["settings"] => self.open_settings(0, requests).await,
+            ["network"] => self.open_settings(panel::NETWORK, requests).await,
+            ["info"] => self.overlay = Some(Overlay::Info { name: self.current_name()?, selected: 0 }),
             ["invite", name] => {
                 let link = match requests.call(&Request::Invite { name: name.to_string() }).await? {
                     Reply::Invite { link } => link,
@@ -590,17 +623,9 @@ impl App {
                     ],
                 });
             }
-            ["accept", link, name] => self.long(Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
-            ["acceptcode", code, name] => self.long(Request::AcceptCode { code: code.to_string(), name: name.to_string() }, updates),
-            ["verify"] => {
-                let name = self.current_name()?;
-                let number = match requests.call(&Request::Verify { name: name.clone() }).await? {
-                    Reply::SafetyNumber { number, .. } => number,
-                    Reply::Error { message } => bail!("{message}"),
-                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
-                };
-                self.overlay = Some(Overlay::Verify { name, number });
-            }
+            ["accept", link, name] => self.long(name, Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
+            ["acceptcode", code, name] => self.long(name, Request::AcceptCode { code: code.to_string(), name: name.to_string() }, updates),
+            ["verify"] => self.verify(requests).await?,
             ["rename", new @ ..] if !new.is_empty() => {
                 let name = self.current_name()?;
                 expect_done(requests.call(&Request::Rename { name, to: new.join(" ") }).await)?;
@@ -622,9 +647,22 @@ impl App {
                 self.set_person(&name, |p| p.muted_until = None, requests).await;
                 self.status = t!("tui-unmuted", name = name);
             }
-            ["remove"] => self.overlay = Some(Overlay::Remove { name: self.current_name()? }),
+            // Keeping them is the answer given by default.
+            ["remove"] => self.overlay = Some(Overlay::Remove { name: self.current_name()?, selected: 2 }),
             _ => bail!(t!("tui-unknown-command")),
         }
+        Ok(())
+    }
+
+    /// Their safety number, to compare.
+    async fn verify(&mut self, requests: &mut Client) -> Result<()> {
+        let name = self.current_name()?;
+        let number = match requests.call(&Request::Verify { name: name.clone() }).await? {
+            Reply::SafetyNumber { number, .. } => number,
+            Reply::Error { message } => bail!("{message}"),
+            other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
+        };
+        self.overlay = Some(Overlay::Verify { name, number, selected: 0 });
         Ok(())
     }
 
@@ -666,8 +704,8 @@ impl App {
 
     /// A request that can take minutes runs on its own connection, so the
     /// interface stays usable meanwhile.
-    fn long(&mut self, request: Request, updates: &mpsc::UnboundedSender<Update>) {
-        self.status = t!("tui-looking");
+    fn long(&mut self, name: &str, request: Request, updates: &mpsc::UnboundedSender<Update>) {
+        self.overlay = Some(Overlay::Looking { name: name.to_string(), since: Instant::now() });
         let (dir, updates) = (self.dir.clone(), updates.clone());
         tokio::spawn(async move {
             let status = match Client::connect(&dir).await {
@@ -685,7 +723,12 @@ impl App {
 
     async fn on_update(&mut self, update: Update, requests: &mut Client) {
         match update {
-            Update::Done(status) => self.status = status,
+            Update::Done(status) => {
+                if matches!(self.overlay, Some(Overlay::Looking { .. })) {
+                    self.overlay = None;
+                }
+                self.status = status;
+            }
             Update::DaemonGone => {
                 self.status = t!("daemon-stopped");
                 self.quit = true;
@@ -708,8 +751,13 @@ impl App {
                             self.notice = Some((from.clone(), first, Instant::now()));
                         }
                         if c.person.muted_until.is_none_or(|until| until <= now_millis()) {
-                            // The name, never the text: a notification can show on a locked screen.
-                            self.notify = Some(t!("notify-from", name = from));
+                            // As the settings say: a notification can show on a locked screen.
+                            let prefs = Prefs::load(&self.dir);
+                            self.notify = prefs.notify.then(|| match (prefs.show_name, prefs.show_text) {
+                                (true, true) => (from.clone(), nightpost_core::text::notification(c.messages.last().map_or("", |m| m.text.as_str()))),
+                                (true, false) => ("Nightpost".into(), t!("notify-from", name = from)),
+                                _ => ("Nightpost".into(), t!("notify-new")),
+                            });
                         }
                     }
                 }
@@ -776,14 +824,17 @@ impl App {
                 }
                 self.links.insert(name, state);
             }
-            Update::Event(Event::ReadReceipts { .. } | Event::TypingIndicators { .. }) => {}
+            Update::Event(Event::ReadReceipts { on }) => self.read_receipts = on,
+            Update::Event(Event::TypingIndicators { on }) => self.typing_indicators = on,
             Update::Event(Event::Close { interface: Interface::Terminal }) => self.quit = true,
             Update::Event(Event::Show | Event::Close { .. }) => {}
             Update::Event(Event::Typing { from }) => self.typing = Some((from, Instant::now() + TYPING_SHOWN)),
             Update::Event(Event::Fingerprint { name, safety_number }) => {
-                self.notify = Some(t!("notify-used-invite", name = name));
+                if Prefs::load(&self.dir).notify {
+                    self.notify = Some(("Nightpost".into(), t!("notify-used-invite", name = name)));
+                }
                 self.overlay = Some(if self.codes.contains(&name) {
-                    Overlay::Confirm { name, number: safety_number }
+                    Overlay::Confirm { name, number: safety_number, selected: 0 }
                 } else {
                     Overlay::Text {
                         title: t!("waiting-title", name = name),
@@ -876,9 +927,12 @@ fn copy(text: &str) {
 /// terminals ignore the one they do not know). Inside tmux the notification
 /// goes through its passthrough (`allow-passthrough on`); the bell stays
 /// outside, so tmux flags the window either way.
-fn notification(text: &str, tmux: bool) -> String {
-    let text: String = text.chars().filter(|c| !c.is_control() && *c != ';').collect();
-    let osc = format!("\x1b]9;{text}\x07\x1b]777;notify;Nightpost;{text}\x07");
+fn notification(title: &str, text: &str, tmux: bool) -> String {
+    let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control() && *c != ';').collect() };
+    let (title, text) = (clean(title), clean(text));
+    // OSC 9 has no title: the name goes before the text.
+    let alone = if title == "Nightpost" { text.clone() } else { t!("tui-notify-what", name = title, text = text) };
+    let osc = format!("\x1b]9;{alone}\x07\x1b]777;notify;{title};{text}\x07");
     if tmux { format!("\x07\x1bPtmux;{}\x1b\\", osc.replace('\x1b', "\x1b\x1b")) } else { format!("\x07{osc}") }
 }
 
@@ -909,8 +963,9 @@ mod tests {
 
     #[test]
     fn notifications_pass_through_tmux_and_keep_the_bell_outside() {
-        assert_eq!(notification("hi", false), "\x07\x1b]9;hi\x07\x1b]777;notify;Nightpost;hi\x07");
-        let wrapped = notification("a;b\x1b", true);
+        assert_eq!(notification("Nightpost", "hi", false), "\x07\x1b]9;hi\x07\x1b]777;notify;Nightpost;hi\x07");
+        assert_eq!(notification("bob", "yo", false), "\x07\x1b]9;bob: yo\x07\x1b]777;notify;bob;yo\x07");
+        let wrapped = notification("Nightpost", "a;b\x1b", true);
         assert!(wrapped.starts_with("\x07\x1bPtmux;\x1b\x1b]9;ab\x07"));
         assert!(wrapped.ends_with("\x1b\\"));
     }

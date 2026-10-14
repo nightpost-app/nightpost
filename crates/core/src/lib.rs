@@ -7,6 +7,7 @@ pub mod dbkey;
 pub mod i18n;
 pub mod identity;
 pub mod invite;
+pub mod prefs;
 pub mod proto;
 pub mod session;
 pub mod store;

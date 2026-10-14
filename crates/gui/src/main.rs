@@ -13,7 +13,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
-use nightpost_core::api::{self, Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request};
+use nightpost_core::api::{self, Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request, Route};
+use nightpost_core::prefs::Prefs;
 use nightpost_core::{dbkey, i18n, t};
 
 mod chrome;
@@ -168,49 +169,6 @@ struct State {
     typing: Signal<HashMap<String, u64>>,
     /// The language spoken; choosing another draws everything again.
     language: Signal<&'static str>,
-}
-
-/// How notifications behave; nothing about anyone, so a plain file.
-#[derive(Clone, Copy, PartialEq)]
-struct Prefs {
-    notify: bool,
-    sound: bool,
-    /// Who wrote, or only that something came.
-    show_name: bool,
-    /// What they wrote too (with show_name).
-    show_text: bool,
-    /// The system may keep notifications in its history.
-    keep_history: bool,
-    /// Closing the window stops the daemon too.
-    lock_on_close: bool,
-    /// The list of people is folded away.
-    side_hidden: bool,
-}
-
-impl Prefs {
-    const FILE: &str = "gui-settings";
-
-    fn load() -> Prefs {
-        let text = std::fs::read_to_string(dir().join(Prefs::FILE)).unwrap_or_default();
-        let off = |key: &str| text.lines().any(|l| l == format!("{key}=0"));
-        let on = |key: &str| text.lines().any(|l| l == format!("{key}=1"));
-        Prefs { notify: !off("notify"), sound: on("sound"), show_name: !off("show_name"), show_text: on("show_text"), keep_history: on("keep_history"), lock_on_close: on("lock_on_close"), side_hidden: on("side_hidden") }
-    }
-
-    fn save(self) -> Prefs {
-        let text = format!(
-            "notify={}\nsound={}\nshow_name={}\nshow_text={}\nkeep_history={}\nlock_on_close={}\nside_hidden={}\n",
-            u8::from(self.notify),
-            u8::from(self.sound),
-            u8::from(self.show_name),
-            u8::from(self.show_text),
-            u8::from(self.keep_history),
-            u8::from(self.lock_on_close),
-            u8::from(self.side_hidden)
-        );
-        let _ = std::fs::write(dir().join(Prefs::FILE), text);
-        self
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -462,7 +420,7 @@ fn App() -> Element {
         people: Signal::new(HashMap::new()),
         arrival: Signal::new(None),
         theme: Signal::new(Theme::load()),
-        prefs: Signal::new(Prefs::load()),
+        prefs: Signal::new(Prefs::load(dir())),
         view: Signal::new(View::Chat),
         panel: Signal::new(false),
         maximized: Signal::new(false),
@@ -550,7 +508,7 @@ fn SideToggle() -> Element {
             "aria-expanded": if hidden { "false" } else { "true" },
             onclick: move |_| {
                 let p = *state.prefs.peek();
-                state.prefs.set(Prefs { side_hidden: !p.side_hidden, ..p }.save());
+                state.prefs.set(Prefs { side_hidden: !p.side_hidden, ..p }.save(dir()));
             },
             svg { width: "18", height: "18", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
                 rect { x: "3", y: "3", width: "18", height: "18", rx: "2" }
@@ -753,62 +711,6 @@ fn rows(messages: &[HistoryItem]) -> Vec<Row> {
         rows.push(Row::Slip { m: m.clone(), meta: last || (m.outgoing && !m.delivered) });
     }
     rows
-}
-
-/// Where a message to someone gets now: the steps reached, the one being
-/// tried (orange), the one that failed. Steps: this computer, the entrance
-/// (a guard, or a bridge), two relays, the meeting point, their device.
-#[derive(Clone, Copy, PartialEq)]
-struct Route {
-    lit: usize,
-    live: Option<usize>,
-    fail: Option<usize>,
-}
-
-impl Route {
-    fn new(net: &Network, link: Option<LinkState>) -> Route {
-        let at = |lit, live, fail| Route { lit, live, fail };
-        if net.entry == Some(false) {
-            at(1, None, Some(0))
-        } else if net.percent < 100 {
-            at(1, Some(0), None)
-        } else if net.circuit == Some(false) {
-            at(2, None, Some(1))
-        } else {
-            match link {
-                Some(LinkState::Open | LinkState::Idle) => at(6, None, None),
-                Some(LinkState::Trying) => at(4, Some(3), None),
-                Some(LinkState::Unreachable) | None => at(4, None, None),
-                // The meeting point answered, but not in the same language.
-                Some(LinkState::Older | LinkState::Newer) => at(5, None, None),
-            }
-        }
-    }
-
-    /// The class of the hop that leaves step `i`.
-    fn hop(self, i: usize) -> &'static str {
-        if self.live == Some(i) {
-            "live"
-        } else if self.fail == Some(i) {
-            "fail"
-        } else if i + 1 < self.lit {
-            "done"
-        } else {
-            "wait"
-        }
-    }
-
-    fn step(self, i: usize) -> &'static str {
-        if i < self.lit {
-            "done"
-        } else if i > 0 && self.live == Some(i - 1) {
-            "live"
-        } else if i > 0 && self.fail == Some(i - 1) {
-            "fail"
-        } else {
-            "wait"
-        }
-    }
 }
 
 /// The steps on a 900 × 140 drawing, rising and falling like a route.

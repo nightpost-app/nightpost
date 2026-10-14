@@ -337,7 +337,7 @@ licences = Licences
 licence-bridges = lyrebird (bridges)
 licence-icons = Icons
 
-## The terminal interface (keys y, n, w and c stay as they are)
+## The terminal interface (the key c stays as it is)
 
 weekday-short-1 = Mon
 weekday-short-2 = Tue
@@ -357,16 +357,11 @@ tui-muted-forever = { $name } muted until /unmute
 tui-muted-until = { $name } muted until { $time }
 tui-unmuted = Notifications from { $name } are back on
 tui-unknown-command = Unknown command: /help lists them
-tui-looking = Looking for them (up to a few minutes)…
 tui-renamed = { $name } is now { $to }
 tui-qr-too-small = The QR code needs a { $width }×{ $height } terminal: enlarge it, or copy the link.
 tui-invite-help = Give it to { $name } only. It works once, for 7 days.
-tui-confirm-keep = the digits match, keep them
-tui-confirm-refuse = they differ, turn down
-tui-verify-yes = they match, mark as verified
-tui-remove-keep = remove, keep the conversation on this computer
-tui-remove-wipe = remove and delete the conversation
-tui-remove-no = keep them
+tui-remove-wipe = Remove and delete the conversation
+tui-remove-no = Keep them
 help-send = send
 help-newline = new line
 help-scroll = scroll
@@ -429,6 +424,24 @@ arg-name = name
 arg-link = link
 arg-code = code
 arg-new-name = new name
+help-info = what you know of this person, and what to do about it
+help-settings = language, notifications, passphrase, about
+help-network = Tor, the way to this person, bridges
+help-lock = stop Nightpost; with a passphrase, it stays locked until the next start
+hint-confirm = confirm
+hint-cancel = cancel
+hint-section = section
+hint-change = change
+hint-done = done
+hint-next-field = next field
+hint-hide = hide
+tui-mute-1h = Mute for 1 hour
+tui-mute-8h = Mute for 8 hours
+tui-mute = Mute
+tui-unmute = Unmute
+tui-theme-help = The terminal's own colours: change them in its settings.
+tui-notify-terminal = In a terminal, notifications go through it: whether they make a sound or stay in the history depends on its settings.
+tui-notify-what = { $name }: { $text }
 
 ## The macOS app
 

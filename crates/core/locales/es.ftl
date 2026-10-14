@@ -334,7 +334,7 @@ licences = Licencias
 licence-bridges = lyrebird (puentes)
 licence-icons = Iconos
 
-## La interfaz de terminal (las teclas y, n, w y c se quedan como están)
+## La interfaz de terminal (la tecla c se queda como está)
 
 weekday-short-1 = lun
 weekday-short-2 = mar
@@ -354,16 +354,11 @@ tui-muted-forever = { $name } silenciado hasta /unmute
 tui-muted-until = { $name } silenciado hasta las { $time }
 tui-unmuted = Las notificaciones de { $name } vuelven a estar activadas
 tui-unknown-command = Comando desconocido: /help los muestra
-tui-looking = Buscando (hasta unos minutos)…
 tui-renamed = { $name } ahora es { $to }
 tui-qr-too-small = El código QR necesita un terminal de { $width }×{ $height }: agrándalo o copia el enlace.
 tui-invite-help = Dásela solo a { $name }. Sirve una vez, durante 7 días.
-tui-confirm-keep = las cifras coinciden, aceptar
-tui-confirm-refuse = no coinciden, rechazar
-tui-verify-yes = coinciden, marcar como verificado
-tui-remove-keep = eliminar, conservar la conversación en este ordenador
-tui-remove-wipe = eliminar y borrar la conversación
-tui-remove-no = conservar el contacto
+tui-remove-wipe = Eliminar y borrar la conversación
+tui-remove-no = Conservar el contacto
 help-send = enviar
 help-newline = línea nueva
 help-scroll = desplazar
@@ -426,6 +421,24 @@ arg-name = nombre
 arg-link = enlace
 arg-code = código
 arg-new-name = nombre nuevo
+help-info = lo que sabes de esta persona y qué hacer
+help-settings = idioma, notificaciones, frase de contraseña, acerca de
+help-network = Tor, el camino hasta esta persona, los puentes
+help-lock = detener Nightpost; con una frase de contraseña, queda bloqueado hasta el próximo inicio
+hint-confirm = aceptar
+hint-cancel = cancelar
+hint-section = sección
+hint-change = cambiar
+hint-done = listo
+hint-next-field = campo siguiente
+hint-hide = ocultar
+tui-mute-1h = Silenciar 1 hora
+tui-mute-8h = Silenciar 8 horas
+tui-mute = Silenciar
+tui-unmute = Reactivar sus notificaciones
+tui-theme-help = Los colores de tu terminal: se cambian en su configuración.
+tui-notify-terminal = En una terminal, la notificación pasa por ella: el sonido y el historial dependen de su configuración.
+tui-notify-what = { $name }: { $text }
 
 ## La app de macOS
 

@@ -12,12 +12,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use unicode_width::UnicodeWidthChar as _;
 
+use super::panel::{answer_keys, answers};
 use super::{App, Command, Conversation, Focus, Overlay, matching, now_millis};
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Style = Style::new().fg(Color::DarkGray);
-const STRONG: Style = Style::new().fg(ACCENT).add_modifier(ratatui::style::Modifier::BOLD);
-const BOLD: Style = Style::new().add_modifier(ratatui::style::Modifier::BOLD);
+pub(super) const ACCENT: Color = Color::Cyan;
+pub(super) const DIM: Style = Style::new().fg(Color::DarkGray);
+pub(super) const STRONG: Style = Style::new().fg(ACCENT).add_modifier(ratatui::style::Modifier::BOLD);
+pub(super) const BOLD: Style = Style::new().add_modifier(ratatui::style::Modifier::BOLD);
 const LIST_WIDTH: u16 = 30;
 const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
 /// Rows of the command menu.
@@ -31,7 +32,7 @@ fn name_style(name: &str) -> Style {
 }
 
 /// Keys drawn as keys, each followed by what it does.
-fn keycaps(pairs: &[(impl AsRef<str>, String)]) -> Line<'static> {
+pub(super) fn keycaps(pairs: &[(impl AsRef<str>, String)]) -> Line<'static> {
     let mut spans = Vec::new();
     for (key, what) in pairs {
         spans.push(Span::styled(format!(" {} ", key.as_ref()), Style::new().fg(Color::Black).bg(Color::Gray)));
@@ -41,7 +42,7 @@ fn keycaps(pairs: &[(impl AsRef<str>, String)]) -> Line<'static> {
 }
 
 impl App {
-    fn spinner(&self) -> &'static str {
+    pub(super) fn spinner(&self) -> &'static str {
         SPINNER[(self.started.elapsed().as_millis() / 120) as usize % SPINNER.len()]
     }
 
@@ -172,7 +173,7 @@ impl App {
     }
 
     /// How they can be reached, as the window says it.
-    fn reach(&self, c: &Conversation) -> (String, Style) {
+    pub(super) fn reach(&self, c: &Conversation) -> (String, Style) {
         let net = &self.network;
         if net.blocked() {
             return (t!("net-blocked"), Style::new().fg(Color::Red));
@@ -394,41 +395,35 @@ impl App {
                 lines.extend([Line::default(), Line::styled(link.clone(), Style::new().fg(ACCENT)), Line::default(), Line::styled(t!("tui-invite-help", name = name), DIM)]);
                 popup(frame, &t!("invite-title", name = name), lines, Some(keycaps(&[("c", t!("hint-copy")), ("Esc", t!("hint-close"))])));
             }
-            Some(Overlay::Confirm { name, number }) => {
+            Some(Overlay::Confirm { name, number, selected }) => {
                 let mut lines = vec![Line::from(t!("confirm-help")), Line::default()];
                 lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, BOLD)));
                 lines.extend([
                     Line::default(),
                     Line::styled(t!("confirm-warning", name = name), Style::new().fg(Color::Red).add_modifier(ratatui::style::Modifier::BOLD)),
                 ]);
-                let keys = keycaps(&[("y", t!("tui-confirm-keep")), ("n", t!("tui-confirm-refuse"))]);
-                popup(frame, &t!("confirm-title", name = name), lines, Some(keys));
+                lines.extend(answers(&[(t!("digits-match"), Style::new()), (t!("digits-differ"), Style::new())], *selected));
+                popup(frame, &t!("confirm-title", name = name), lines, Some(answer_keys()));
             }
-            Some(Overlay::Verify { name, number }) => {
+            Some(Overlay::Verify { name, number, selected }) => {
                 let mut lines = vec![Line::from(t!("safety-help")), Line::default()];
                 lines.extend(number_lines(number).into_iter().map(|l| Line::styled(l, BOLD)));
                 lines.extend([
                     Line::default(),
                     Line::styled(t!("safety-warning", name = name), Style::new().fg(Color::Red).add_modifier(ratatui::style::Modifier::BOLD)),
                 ]);
-                let keys = keycaps(&[("y", t!("tui-verify-yes")), ("Esc", t!("hint-close"))]);
-                popup(frame, &t!("safety-label", name = name), lines, Some(keys));
+                lines.extend(answers(&[(t!("they-match"), Style::new()), (t!("not-now"), Style::new())], *selected));
+                popup(frame, &t!("safety-label", name = name), lines, Some(answer_keys()));
             }
-            Some(Overlay::Remove { name }) => popup(
-                frame,
-                &t!("remove-title", name = name),
-                vec![
-                    Line::from(t!("remove-help", name = name)),
-                    Line::default(),
-                    keycaps(&[("y", t!("tui-remove-keep"))]),
-                    {
-                        let mut wipe = keycaps(&[("w", t!("tui-remove-wipe"))]);
-                        wipe.spans[1].style = Style::new().fg(Color::Red);
-                        wipe
-                    },
-                ],
-                Some(keycaps(&[("n", t!("tui-remove-no"))])),
-            ),
+            Some(Overlay::Remove { name, selected }) => {
+                let mut lines = vec![Line::from(t!("remove-help", name = name))];
+                lines.extend(answers(&remove_answers(name), *selected));
+                popup(frame, &t!("remove-title", name = name), lines, Some(answer_keys()));
+            }
+            Some(Overlay::Info { name, selected }) => self.draw_info(frame, name, *selected),
+            Some(Overlay::Looking { name, since }) => self.draw_looking(frame, name, *since),
+            Some(Overlay::Settings(s)) => self.draw_settings(frame, s),
+            Some(Overlay::Passphrase(p)) => self.draw_passphrase(frame, p),
         }
     }
 
@@ -505,6 +500,11 @@ impl App {
     }
 }
 
+/// Removing someone: keep the conversation, delete it too, or not at all.
+pub(super) fn remove_answers(name: &str) -> [(String, Style); 3] {
+    [(t!("remove-name", name = name), Style::new()), (t!("tui-remove-wipe"), Style::new().fg(Color::Red)), (t!("tui-remove-no"), Style::new())]
+}
+
 /// Their last message, first line, as the list shows it.
 fn preview(c: &Conversation) -> String {
     match c.messages.last() {
@@ -521,13 +521,16 @@ fn pad(r: Rect) -> Rect {
 
 /// A framed window in the middle, as small as its content and never wider
 /// than the screen (long lines wrap), keys at the bottom.
-fn popup(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>) {
+pub(super) fn popup(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>) {
     let area = frame.area();
     lines.insert(0, Line::default());
     if let Some(keys) = keys {
         lines.extend([Line::default(), keys]);
     }
-    let width = (lines.iter().map(Line::width).max().unwrap_or(0).max(cols(title) + 4) as u16 + 4).min(area.width);
+    // Text wraps at a width that reads well (a QR code still fits); lines
+    // made of several pieces, like the columns of the help, keep theirs.
+    let widest = lines.iter().map(|l| if l.spans.len() > 1 { l.width() } else { l.width().min(80) }).max().unwrap_or(0);
+    let width = (widest.max(cols(title) + 4) as u16 + 4).min(area.width);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let height = (paragraph.line_count(width.saturating_sub(4)) as u16 + 3).min(area.height);
     let rect = Rect { x: (area.width - width) / 2, y: (area.height - height) / 2, width, height };
@@ -542,7 +545,7 @@ fn popup(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line
 
 /// Logical lines cut to `width` columns, by character: what the input box
 /// shows, row by row.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for line in text.split('\n') {
@@ -570,7 +573,7 @@ fn cursor_at(text: &str, cursor: usize, width: usize) -> (usize, usize) {
 }
 
 /// Display columns.
-fn cols(s: &str) -> usize {
+pub(super) fn cols(s: &str) -> usize {
     s.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
 
@@ -594,7 +597,7 @@ fn fit(text: &str, width: usize) -> String {
 
 /// Lines cut between words to fit `width` columns; a longer word is cut
 /// by character, as [`wrap`] does.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for line in text.split('\n') {
