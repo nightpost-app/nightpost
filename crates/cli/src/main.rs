@@ -248,7 +248,9 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
                 // arti warns whenever a spare onion circuit is slower than 80 % of
                 // the previous ones and so dropped, which Tor does by design to
                 // about one in five: noise, rebuilt 30 s later.
-                .unwrap_or_else(|_| "warn,nightpost_core=info,tor_circmgr::hspool=error".into()),
+                // arti also reports "missing previous key … Regenerating" as an ERROR
+                // at every start: our keystore is in memory by design. RUST_LOG=debug shows it.
+                .unwrap_or_else(|_| "warn,nightpost_core=info,tor_circmgr::hspool=error,tor_hsservice::ipt_mgr=off".into()),
         )
         .init();
     if Client::connect(dir).await.is_ok() {

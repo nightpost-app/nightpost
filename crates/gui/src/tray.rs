@@ -26,6 +26,9 @@ pub fn run() -> ! {
     if !lock.as_ref().is_ok_and(|f| f.try_lock().is_ok()) {
         std::process::exit(0);
     }
+    // The library warns on every start that it is deprecated: nothing we can fix.
+    #[cfg(target_os = "linux")]
+    gtk::glib::log_set_handler(Some("libayatana-appindicator"), gtk::glib::LogLevels::all(), false, false, |_, _, _| {});
     let event_loop = EventLoopBuilder::<Wake>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     MenuEvent::set_event_handler(Some({
