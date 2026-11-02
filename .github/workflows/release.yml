@@ -1,0 +1,100 @@
+name: Release
+# Runs on a signed tag such as v0.1.0-alpha.1. macOS comes later.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+env:
+  TOR_BUNDLE: "15.0.24"
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev gnupg
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch lyrebird (signed by the Tor Browser developers)
+        run: |
+          f=tor-expert-bundle-linux-x86_64-$TOR_BUNDLE.tar.gz
+          u=https://dist.torproject.org/torbrowser/$TOR_BUNDLE/$f
+          curl -fsSLO "$u" -O "$u.asc"
+          export GNUPGHOME=$(mktemp -d)
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --fingerprint EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+          gpg --verify "$f.asc" "$f"
+          mkdir tb && tar xzf "$f" -C tb
+          cp "$(find tb -name lyrebird -type f)" lyrebird
+      - run: cargo build --release --workspace --locked
+      - name: Archive
+        run: |
+          d=nightpost; mkdir $d
+          cp target/release/nightpost target/release/nightpost-gui lyrebird $d/
+          cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/bridges.md $d/BRIDGES.md
+          mkdir out; tar czf out/nightpost-linux-x86_64.tar.gz $d
+      - name: Packages
+        run: |
+          cp lyrebird target/release/lyrebird
+          cargo install cargo-deb cargo-generate-rpm --locked
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          rv=${v/-/\~}
+          cargo deb -p nightpost-gui --no-build -o out/
+          cargo generate-rpm -p crates/gui -s "version = \"$rv\"" -s 'release = "1"' -o out/
+      - uses: actions/upload-artifact@v4
+        with: { name: linux, path: out/* }
+
+  windows:
+    runs-on: windows-latest
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: x86_64-pc-windows-gnu }
+      - run: choco install protoc nsis -y
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch lyrebird (signed by the Tor Browser developers)
+        run: |
+          f=tor-expert-bundle-windows-x86_64-$TOR_BUNDLE.tar.gz
+          u=https://dist.torproject.org/torbrowser/$TOR_BUNDLE/$f
+          curl -fsSLO "$u" -O "$u.asc"
+          export GNUPGHOME=$(mktemp -d)
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --verify "$f.asc" "$f"
+          mkdir tb && tar xzf "$f" -C tb
+          cp "$(find tb -name lyrebird.exe -type f)" lyrebird.exe
+      - run: cargo build --release --workspace --locked --target x86_64-pc-windows-gnu
+      - name: Zip and installer
+        run: |
+          t=target/x86_64-pc-windows-gnu/release
+          d=dist; mkdir $d out
+          cp $t/nightpost.exe $t/nightpost-gui.exe lyrebird.exe $d/
+          # the GUI loads this dll at run time in windows-gnu builds
+          cp "$(find $t -name WebView2Loader.dll | head -1)" $d/
+          cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/bridges.md $d/BRIDGES.md
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          powershell -Command "Compress-Archive -Path dist/* -DestinationPath out/nightpost-windows-x86_64.zip"
+          # NSIS wants a numeric version
+          makensis -DVERSION="${v%%-*}" -DDIST="$PWD/dist" -DOUT="$PWD/out/nightpost-setup-x86_64.exe" packaging/windows/nightpost.nsi
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: out/* }
+
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - run: cd out && sha256sum * > SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: "out/*" }
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes $pre
