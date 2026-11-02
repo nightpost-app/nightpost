@@ -307,6 +307,7 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
 
             let daemon = Daemon::open(store, net)?;
             daemon.set_network(status_changes.borrow_and_update().clone());
+            let tor_up = status_changes.borrow().percent == 100;
             let forward = daemon.clone();
             tokio::task::spawn_local(async move {
                 while status_changes.changed().await.is_ok() {
@@ -318,7 +319,12 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
             nightpost_core::register_app_id(dir);
             #[cfg(not(target_os = "macos"))]
             tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf()));
-            eprintln!("ready");
+            // The daemon answers; Tor may still be connecting, and messages wait for it.
+            if !tor_up {
+                eprintln!("ready (Tor is still connecting: messages wait)");
+            } else {
+                eprintln!("ready");
+            }
             tokio::select! {
                 result = api::serve(daemon.clone(), listener, bridges) => result,
                 _ = tokio::signal::ctrl_c() => Ok(()),
