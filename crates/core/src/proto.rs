@@ -159,7 +159,14 @@ pub enum Body {
     /// They are writing to us now. Sent only by someone who turned typing
     /// indicators on, over a link already open, never queued.
     Typing,
+    /// Messages between us now disappear after this many seconds (0: they
+    /// stay). Either side sets it; the last one to speak wins.
+    Timer(u32),
 }
+
+/// The timers a conversation can have, in seconds: off, an hour, eight
+/// hours, a day, a week, four weeks.
+pub const TIMERS: [u32; 6] = [0, 3_600, 28_800, 86_400, 604_800, 2_419_200];
 
 /// Longest text message, in bytes.
 pub const MAX_TEXT: usize = 64 * 1024;

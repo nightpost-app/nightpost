@@ -136,6 +136,9 @@ impl App {
         if c.person.verified {
             marks.push(format!("✓ {}", t!("verified")));
         }
+        if c.timer > 0 {
+            marks.push(format!("⏱ {}", nightpost_core::api::timer_label(c.timer)));
+        }
         if let Some(until) = c.person.muted_until.filter(|&u| u > now_millis()) {
             marks.push(if until == u64::MAX { t!("muted") } else { t!("muted-until", time = clock(until)) });
         }

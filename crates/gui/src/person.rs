@@ -65,6 +65,8 @@ pub fn PersonPanel(name: String) -> Element {
     let mutes = [("on", t!("mute-on"), None), ("1h", t!("mute-1h"), Some(HOUR)), ("8h", t!("mute-8h"), Some(8 * HOUR)), ("off", t!("mute-off"), Some(u64::MAX))];
 
     let (pick, rings, rename, compare, remove) = (name.clone(), name.clone(), name.clone(), name.clone(), name.clone());
+    let timer = state.timers.read().get(&name).copied().unwrap_or(0);
+    let timer_name = name.clone();
     rsx! {
         aside { class: "person", "aria-label": t!("about-name", name = name),
             div { class: "person-top",
@@ -176,6 +178,28 @@ pub fn PersonPanel(name: String) -> Element {
                     }
                 }
                 p { class: "help", "{mute_help}" }
+            }
+
+            section { class: "block",
+                h2 { class: "panel-title", {t!("timer-title")} }
+                select {
+                    class: "name-field",
+                    "aria-label": t!("timer-title"),
+                    value: "{timer}",
+                    onchange: move |e| {
+                        let (name, seconds) = (timer_name.clone(), e.value().parse::<u32>().unwrap_or(0));
+                        spawn(async move {
+                            match call(Request::Timer { name, seconds }).await {
+                                Ok(Reply::Done) => {}
+                                other => state.fail(other),
+                            }
+                        });
+                    },
+                    for seconds in [0u32, 3_600, 28_800, 86_400, 604_800, 2_419_200] {
+                        option { key: "{seconds}", value: "{seconds}", selected: seconds == timer, {nightpost_core::api::timer_label(seconds)} }
+                    }
+                }
+                p { class: "help", {t!("timer-help", name = name)} }
             }
 
             section { class: "block danger-zone",

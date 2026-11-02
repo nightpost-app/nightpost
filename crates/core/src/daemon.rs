@@ -32,7 +32,7 @@ use crate::api::{ContactInfo, Event, HistoryItem, LinkState, MAX_PHOTO, Network,
 use crate::dbkey::Secret;
 use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite, InviteError};
-use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service};
+use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service, TIMERS};
 use crate::session::{self, WireBundle};
 use crate::store::{NOTE_ACCOUNT, Store};
 use crate::{PROTOCOL_VERSION, t};
@@ -165,6 +165,58 @@ impl<T: Transport + 'static> Daemon<T> {
         }
         self.refresh_service().await?;
         spawn_local(self.clone().deliver());
+        spawn_local(self.clone().sweeper());
+        Ok(())
+    }
+
+    /// Deletes what has disappeared, every half minute while the daemon runs.
+    async fn sweeper(self: Rc<Self>) {
+        loop {
+            if let Err(e) = self.sweep(now_millis()) {
+                tracing::warn!("deleting expired messages: {e:#}");
+            }
+            // Gone with the daemon: `stop` waits for nothing to hold it.
+            tokio::select! {
+                _ = sleep(Duration::from_secs(30)) => {}
+                _ = self.stopped() => return,
+            }
+        }
+    }
+
+    /// Deletes the messages that ended by `now`, and tells which conversations changed.
+    pub fn sweep(&self, now: u64) -> Result<()> {
+        let accounts = self.store.expire(now)?;
+        for contact in self.contacts_raw()?.into_iter().filter(|c| accounts.contains(&c.identity)) {
+            let _ = self.events.send(Event::Expired { name: contact.name });
+        }
+        Ok(())
+    }
+
+    /// How long messages with `contact` last, in seconds; 0 for good.
+    fn timer(&self, contact: &Contact) -> Result<u32> {
+        Ok(self.store.get("timer", &hex(&contact.identity))?.and_then(|v| v.try_into().ok()).map_or(0, u32::from_le_bytes))
+    }
+
+    fn keep_timer(&self, contact: &Contact, seconds: u32) -> Result<()> {
+        ensure!(TIMERS.contains(&seconds), "not a timer a conversation can have");
+        self.store.put("timer", &hex(&contact.identity), &seconds.to_le_bytes())?;
+        Ok(())
+    }
+
+    /// Messages with `name` disappear after `seconds` (0: they stay), for
+    /// them too: they are told, like any message.
+    pub fn set_timer(&self, name: &str, seconds: u32) -> Result<()> {
+        ensure!(!self.is_note(name)?, t!("err-note-no-timer"));
+        let contact = self.contact_named(name)?;
+        let devices = self.devices_of(&contact)?;
+        let id: [u8; 16] = OsRng.unwrap_err().random();
+        let envelope = postcard::to_stdvec(&Envelope { id, time: now_millis(), body: Body::Timer(seconds) })?;
+        self.store.atomically(|| {
+            self.keep_timer(&contact, seconds).map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+            self.queue(&contact, &devices, &id, &envelope)
+        })?;
+        let _ = self.events.send(Event::TimerChanged { name: name.into(), seconds });
+        self.nudge(&contact, &devices);
         Ok(())
     }
 
@@ -389,8 +441,10 @@ impl<T: Transport + 'static> Daemon<T> {
         let id: [u8; 16] = OsRng.unwrap_err().random();
         let time = now_millis();
         let envelope = postcard::to_stdvec(&Envelope { id, time, body: Body::Text(text.into()) })?;
+        let ttl = self.timer(&contact)?;
         self.store.atomically(|| {
-            self.store.add_message(&contact.identity, &id, true, time, text)?;
+            // Ours end a timer after sending.
+            self.store.add_timed(&contact.identity, &id, true, time, text, ttl, (ttl > 0).then(|| time + u64::from(ttl) * 1000))?;
             self.queue(&contact, &devices, &id, &envelope)
         })?;
         let _ = self.events.send(Event::Sent { to: to.into(), id: hex(&id), time, text: text.into() });
@@ -481,7 +535,7 @@ impl<T: Transport + 'static> Daemon<T> {
         let devices = self.devices_of(&contact)?;
         let receipts = self.read_receipts()?;
         let queued = self.store.atomically(|| {
-            let ids = self.store.read_incoming(&contact.identity)?;
+            let ids = self.store.read_incoming(&contact.identity, now_millis())?;
             if !receipts {
                 return Ok(false);
             }
@@ -512,10 +566,10 @@ impl<T: Transport + 'static> Daemon<T> {
 
     /// The contacts, after the note to ourselves: always there, always first.
     pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
-        let note = ContactInfo { name: self.note_name()?, safety_number: String::new(), person: Person::default(), note: true };
+        let note = ContactInfo { name: self.note_name()?, safety_number: String::new(), person: Person::default(), timer: 0, note: true };
         let mut all = vec![note];
         for c in self.contacts_raw()? {
-            all.push(ContactInfo { safety_number: self.safety_number(&c)?, person: self.person(&c)?, name: c.name, note: false });
+            all.push(ContactInfo { safety_number: self.safety_number(&c)?, person: self.person(&c)?, timer: self.timer(&c)?, name: c.name, note: false });
         }
         Ok(all)
     }
@@ -906,13 +960,18 @@ impl<T: Transport + 'static> Daemon<T> {
             }
             // As read receipts: taken only from someone we tell too.
             Body::Typing => return Ok(self.typing_indicators()?.then(|| Event::Typing { from: contact.name.clone() })),
+            Body::Timer(seconds) => {
+                self.keep_timer(contact, seconds)?;
+                return Ok(Some(Event::TimerChanged { name: contact.name.clone(), seconds }));
+            }
         };
         ensure!(text.len() <= MAX_TEXT, "message too long");
         let text = crate::text::message(&text);
         // The sender's clock, unless it claims a time more than a day ahead.
         let now = now_millis();
         let time = if envelope.time > now + 86_400_000 { now } else { envelope.time };
-        if !self.store.add_message(&contact.identity, &id, false, time, &text)? {
+        // Theirs end a timer after we read them.
+        if !self.store.add_timed(&contact.identity, &id, false, time, &text, self.timer(contact)?, None)? {
             return Ok(None);
         }
         Ok(Some(Event::Message { from: contact.name.clone(), id: hex(&id), time, text }))
@@ -1375,6 +1434,57 @@ mod tests {
 
     /// A code is checked for typos at once, and whoever uses it is kept
     /// only once the inviter confirms, after comparing safety numbers.
+    /// Ours end a timer after sending, theirs a timer after being read; the
+    /// other side applies the same timer, and nothing ends before its time.
+    #[tokio::test]
+    async fn messages_disappear_after_the_timer() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (alice, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                alice.start().await.unwrap();
+                bob.start().await.unwrap();
+                let (mut alice_events, mut bob_events) = (alice.subscribe(), bob.subscribe());
+                let link = alice.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                next(&mut bob_events).await;
+                next(&mut alice_events).await;
+
+                assert!(alice.set_timer("bob", 5).is_err());
+                alice.set_timer("bob", 3_600).unwrap();
+                assert_eq!(next(&mut alice_events).await, Event::TimerChanged { name: "bob".into(), seconds: 3_600 });
+                assert_eq!(next(&mut bob_events).await, Event::TimerChanged { name: "alice".into(), seconds: 3_600 });
+                assert_eq!(others(&bob)[0].timer, 3_600);
+
+                let id = alice.send("bob", "secret").unwrap();
+                assert!(message("alice", id, "secret")(&next(&mut bob_events).await));
+                let hour = 3_600_000;
+                let now = now_millis();
+                // Not read yet: it does not count down.
+                bob.sweep(now + 2 * hour).unwrap();
+                assert_eq!(bob.history("alice", 10).unwrap().len(), 1);
+                bob.mark_read("alice").unwrap();
+                bob.sweep(now + hour / 2).unwrap();
+                assert_eq!(bob.history("alice", 10).unwrap().len(), 1);
+                bob.sweep(now + 2 * hour).unwrap();
+                assert_eq!(next(&mut bob_events).await, Event::Expired { name: "alice".into() });
+                assert!(bob.history("alice", 10).unwrap().is_empty());
+
+                // Ours, from sending.
+                alice.sweep(now + 2 * hour).unwrap();
+                assert!(alice.history("bob", 10).unwrap().is_empty());
+
+                // Off again: it stays.
+                alice.set_timer("bob", 0).unwrap();
+                alice.send("bob", "pour toujours").unwrap();
+                alice.sweep(now + 10_000 * hour).unwrap();
+                assert_eq!(alice.history("bob", 10).unwrap().len(), 1);
+                assert!(alice.set_timer(&alice.contacts().unwrap()[0].name, 3_600).is_err());
+            })
+            .await;
+    }
+
     /// The note to ourselves is first, kept on this device only, and cannot be removed.
     #[tokio::test]
     async fn the_note_to_ourselves_stays_here() {

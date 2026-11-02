@@ -68,4 +68,5 @@ pub fn rings(name: &str) -> [&'static str; 3] {
 }
 
 /// Version of the wire protocol. Peers must match exactly.
+/// Not bumped before the first release: nothing out there speaks another one.
 pub const PROTOCOL_VERSION: u16 = 1;

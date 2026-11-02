@@ -41,6 +41,8 @@ struct Conversation {
     name: String,
     /// The note to ourselves: kept here, nobody to reach.
     note: bool,
+    /// Seconds after which messages disappear; 0 for never.
+    timer: u32,
     person: Person,
     unread: usize,
     messages: Vec<HistoryItem>,
@@ -115,6 +117,7 @@ fn commands() -> Vec<Command> {
         c("/mute", "[1h | 8h]".into(), t!("help-mute")),
         c("/unmute", String::new(), t!("help-unmute")),
         c("/remove", String::new(), t!("help-remove")),
+        c("/timer", "[off | 1h | 8h | 1d | 1w | 4w]".into(), t!("help-timer")),
         c("/copy", String::new(), t!("help-copy")),
         c("/log", String::new(), t!("help-log")),
         c("/settings", String::new(), t!("help-settings")),
@@ -682,7 +685,26 @@ impl App {
             }
             ["accept", link, name] => self.long(name, Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
             ["acceptcode", code, name] => self.long(name, Request::AcceptCode { code: code.to_string(), name: name.to_string() }, updates),
-            ["verify" | "mute" | "unmute" | "remove" | "info", ..] if self.current().is_some_and(|c| c.note) => bail!(t!("tui-not-for-note")),
+            ["verify" | "mute" | "unmute" | "remove" | "info" | "timer", ..] if self.current().is_some_and(|c| c.note) => bail!(t!("tui-not-for-note")),
+            ["timer", rest @ ..] => {
+                let name = self.current_name()?;
+                let seconds = match rest {
+                    [] => {
+                        let now = self.current().map_or(0, |c| c.timer);
+                        self.status = t!("tui-timer-now", timer = nightpost_core::api::timer_label(now));
+                        return Ok(());
+                    }
+                    ["off"] => 0,
+                    ["1h"] => 3_600,
+                    ["8h"] => 28_800,
+                    ["1d"] => 86_400,
+                    ["1w"] => 604_800,
+                    ["4w"] => 2_419_200,
+                    _ => bail!(t!("tui-timer-usage")),
+                };
+                // The daemon's TimerChanged event updates the conversation and says so.
+                expect_done(requests.call(&Request::Timer { name, seconds }).await)?;
+            }
             ["verify"] => self.verify(requests).await?,
             ["rename", new @ ..] if !new.is_empty() => {
                 let name = self.current_name()?;
@@ -874,6 +896,19 @@ impl App {
                 self.selected = self.selected.min(self.conversations.len().saturating_sub(1));
                 self.status = t!("removed", name = name);
             }
+            Update::Event(Event::TimerChanged { name, seconds }) => {
+                if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
+                    c.timer = seconds;
+                    self.status = t!("tui-timer-set", name = name, timer = nightpost_core::api::timer_label(seconds));
+                }
+            }
+            Update::Event(Event::Expired { name }) => {
+                if let Ok(Reply::History { messages }) = requests.call(&Request::History { name: name.clone(), limit: HISTORY }).await
+                    && let Some(c) = self.conversations.iter_mut().find(|c| c.name == name)
+                {
+                    c.messages = messages;
+                }
+            }
             Update::Event(Event::PersonChanged { name, person }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
                     c.person = person;
@@ -924,7 +959,7 @@ impl App {
                     Reply::Error { message } => bail!("{message}"),
                     other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
-                self.conversations.push(Conversation { name: c.name, note: c.note, person: c.person, unread: 0, messages });
+                self.conversations.push(Conversation { name: c.name, note: c.note, timer: c.timer, person: c.person, unread: 0, messages });
             }
         }
         Ok(())

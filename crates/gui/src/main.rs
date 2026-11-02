@@ -143,6 +143,8 @@ struct State {
     contacts: Signal<Vec<String>>,
     /// The note to ourselves: first, kept here, nobody to reach.
     note: Signal<Option<String>>,
+    /// Seconds after which messages with each person disappear.
+    timers: Signal<HashMap<String, u32>>,
     unread: Signal<HashMap<String, usize>>,
     selected: Signal<Option<String>>,
     messages: Signal<HashMap<String, Vec<HistoryItem>>>,
@@ -244,6 +246,7 @@ impl State {
             Ok(Reply::Contacts { contacts }) => {
                 self.people.set(contacts.iter().map(|c| (c.name.clone(), c.person.clone())).collect());
                 self.note.set(contacts.iter().find(|c| c.note).map(|c| c.name.clone()));
+                self.timers.set(contacts.iter().map(|c| (c.name.clone(), c.timer)).collect());
                 contacts.into_iter().map(|c| c.name).collect()
             }
             other => return self.fail(other),
@@ -401,6 +404,17 @@ impl State {
                     self.panel.set(false);
                 }
             }
+            Event::TimerChanged { name, seconds } => {
+                self.timers.write().insert(name, seconds);
+            }
+            Event::Expired { name } => {
+                // What ended is gone from the daemon: take its history again.
+                spawn(async move {
+                    if let Ok(Reply::History { messages }) = call(Request::History { name: name.clone(), limit: HISTORY }).await {
+                        self.messages.write().insert(name, messages);
+                    }
+                });
+            }
             Event::PersonChanged { name, person } => {
                 self.people.write().insert(name, person);
             }
@@ -418,6 +432,7 @@ fn App() -> Element {
         phase: Signal::new(Phase::Connecting(t!("connecting-daemon"))),
         contacts: Signal::new(Vec::new()),
         note: Signal::new(None),
+        timers: Signal::new(HashMap::new()),
         unread: Signal::new(HashMap::new()),
         selected: Signal::new(None),
         messages: Signal::new(HashMap::new()),
@@ -955,6 +970,18 @@ fn Conversation() -> Element {
                                     span { class: "tip", role: "tooltip",
                                         strong { {t!("verified-title")} }
                                         span { {t!("verified-help", name = name)} }
+                                    }
+                                }
+                            }
+                            if let Some(seconds) = state.timers.read().get(&name).copied().filter(|s| *s > 0) {
+                                span { class: "mark-wrap",
+                                    svg { class: "mark", view_box: "0 0 24 24", role: "img", "aria-label": t!("timer-title"),
+                                        circle { cx: "12", cy: "13", r: "8" }
+                                        path { d: "M12 9v4l2.5 2M9.5 3h5" }
+                                    }
+                                    span { class: "tip", role: "tooltip",
+                                        strong { {t!("timer-title")} }
+                                        span { {t!("timer-mark-help", timer = nightpost_core::api::timer_label(seconds))} }
                                     }
                                 }
                             }

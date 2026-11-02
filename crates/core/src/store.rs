@@ -112,6 +112,15 @@ impl Store {
             db.execute_batch("ALTER TABLE messages ADD COLUMN read INTEGER NOT NULL DEFAULT 0")?;
         }
 
+        let has_ttl: bool = db.query_row("SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'ttl'", [], |row| row.get(0))?;
+        if !has_ttl {
+            // How long a message lives once it counts (seconds, 0: for good), and
+            // when it ends: ours from sending, theirs from when we read it.
+            db.execute_batch("ALTER TABLE messages ADD COLUMN ttl INTEGER NOT NULL DEFAULT 0; ALTER TABLE messages ADD COLUMN expires INTEGER")?;
+        }
+        // What disappears is zeroed in the file, not only unlinked.
+        db.execute_batch("PRAGMA secure_delete = ON")?;
+
         let store = Store { db, path: path.to_path_buf(), salt, secret: unlock.secret(), key: RefCell::new(key) };
         if store.get("self", "identity")?.is_none() {
             let mut rng = OsRng.unwrap_err();
@@ -223,13 +232,24 @@ impl Store {
     }
 
     /// Records a message; false if this id is already there from `account`,
-    /// which is how a message sent twice shows up once.
-    pub(crate) fn add_message(&self, account: &[u8], id: &[u8; 16], outgoing: bool, time: u64, text: &str) -> rusqlite::Result<bool> {
+    /// which is how a message sent twice shows up once. To disappear `ttl` seconds on (`expires`: when,
+    /// in Unix milliseconds; none yet for what we have not read).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_timed(&self, account: &[u8], id: &[u8; 16], outgoing: bool, time: u64, text: &str, ttl: u32, expires: Option<u64>) -> rusqlite::Result<bool> {
         let added = self.db.execute(
-            "INSERT OR IGNORE INTO messages (account, id, outgoing, time, text) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![account, id, outgoing, time as i64, text],
+            "INSERT OR IGNORE INTO messages (account, id, outgoing, time, text, ttl, expires) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![account, id, outgoing, time as i64, text, ttl, expires.map(|e| e as i64)],
         )?;
         Ok(added == 1)
+    }
+
+    /// Deletes what ended by `now`; returns the accounts it was in.
+    /// ponytail: scans for the ends; an index on `expires` when histories get long.
+    pub(crate) fn expire(&self, now: u64) -> rusqlite::Result<Vec<Vec<u8>>> {
+        let mut stmt = self.db.prepare("SELECT DISTINCT account FROM messages WHERE expires IS NOT NULL AND expires <= ?1")?;
+        let accounts: Vec<Vec<u8>> = stmt.query_map(params![now as i64], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+        self.db.execute("DELETE FROM messages WHERE expires IS NOT NULL AND expires <= ?1", params![now as i64])?;
+        Ok(accounts)
     }
 
     /// A note to ourselves: kept as sent and delivered, under a key no contact
@@ -260,10 +280,15 @@ impl Store {
     }
 
     /// Marks what `account` sent us as read; returns what was not yet.
-    pub(crate) fn read_incoming(&self, account: &[u8]) -> rusqlite::Result<Vec<[u8; 16]>> {
+    pub(crate) fn read_incoming(&self, account: &[u8], now: u64) -> rusqlite::Result<Vec<[u8; 16]>> {
         let mut stmt = self.db.prepare("SELECT id FROM messages WHERE account = ?1 AND outgoing = 0 AND read = 0 ORDER BY time")?;
         let ids: Vec<[u8; 16]> = stmt.query_map(params![account], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
         self.db.execute("UPDATE messages SET read = 1 WHERE account = ?1 AND outgoing = 0", params![account])?;
+        // Theirs start counting once we have seen them.
+        self.db.execute(
+            "UPDATE messages SET expires = ?2 + ttl * 1000 WHERE account = ?1 AND outgoing = 0 AND ttl > 0 AND expires IS NULL",
+            params![account, now as i64],
+        )?;
         Ok(ids)
     }
 
@@ -506,7 +531,7 @@ mod tests {
         let path = dir.path().join("nightpost.db");
         let unlock = Unlock::new(Some(Secret::new([7; 32])), None).unwrap();
         let store = Store::open(&path, &unlock).unwrap();
-        store.add_message(b"bob", &[1; 16], true, 1, "avant").unwrap();
+        store.add_timed(b"bob", &[1; 16], true, 1, "avant", 0, None).unwrap();
         store.db.execute_batch("ALTER TABLE messages DROP COLUMN read").unwrap();
         drop(store);
         for _ in 0..2 {

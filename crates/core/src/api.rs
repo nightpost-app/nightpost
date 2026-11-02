@@ -48,6 +48,8 @@ pub enum Request {
     Status,
     /// The name only we see them by.
     Rename { name: String, to: String },
+    /// Messages with them disappear after `seconds` (0: they stay).
+    Timer { name: String, seconds: u32 },
     /// Revokes their access to our onion service: they can no longer reach
     /// us nor tell when we are online. `wipe` also deletes the conversation.
     Remove { name: String, wipe: bool },
@@ -130,6 +132,10 @@ pub enum Event {
     ContactRenamed { name: String, to: String },
     ContactRemoved { name: String },
     PersonChanged { name: String, person: Person },
+    /// Messages with them now disappear after this many seconds (0: never).
+    TimerChanged { name: String, seconds: u32 },
+    /// Messages of this conversation disappeared: show its history again.
+    Expired { name: String },
     Show,
     Close { interface: Interface },
 }
@@ -141,6 +147,18 @@ pub enum Interface {
     Window,
     /// The terminal interface.
     Terminal,
+}
+
+/// What a timer is called, for the interfaces: "1 day", "off".
+pub fn timer_label(seconds: u32) -> String {
+    match seconds {
+        3_600 => t!("timer-hour"),
+        28_800 => t!("timer-8-hours"),
+        86_400 => t!("timer-day"),
+        604_800 => t!("timer-week"),
+        2_419_200 => t!("timer-4-weeks"),
+        _ => t!("timer-off"),
+    }
 }
 
 /// How far Tor got, for interfaces to draw the route a message takes.
@@ -277,6 +295,9 @@ pub struct ContactInfo {
     /// The note to ourselves: no one to reach, nothing to verify.
     #[serde(default)]
     pub note: bool,
+    /// Seconds after which messages with them disappear; 0 for never.
+    #[serde(default)]
+    pub timer: u32,
 }
 
 /// What we keep about a contact besides the name, in the encrypted
@@ -520,6 +541,10 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
                 daemon.set_typing_indicators(on)?;
             }
             Reply::TypingIndicators { on: daemon.typing_indicators()? }
+        }
+        Request::Timer { name, seconds } => {
+            daemon.set_timer(&name, seconds)?;
+            Reply::Done
         }
         Request::Rename { name, to } => {
             daemon.rename(&name, &to)?;
