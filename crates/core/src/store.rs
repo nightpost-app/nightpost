@@ -43,6 +43,9 @@ pub struct Store {
     key: RefCell<Secret>,
 }
 
+/// Where the notes to ourselves are kept in `messages`.
+pub(crate) const NOTE_ACCOUNT: &[u8] = b"nightpost-note-to-self";
+
 impl Store {
     /// Opens the database at `path`, creating it (and a new identity) if it
     /// does not exist. A wrong key fails here, not on first use.
@@ -227,6 +230,16 @@ impl Store {
             params![account, id, outgoing, time as i64, text],
         )?;
         Ok(added == 1)
+    }
+
+    /// A note to ourselves: kept as sent and delivered, under a key no contact
+    /// has (theirs are public keys).
+    pub(crate) fn add_note(&self, id: &[u8; 16], time: u64, text: &str) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT INTO messages (account, id, outgoing, time, text, delivered, read) VALUES (?1, ?2, 1, ?3, ?4, 1, 1)",
+            params![NOTE_ACCOUNT, id, time as i64, text],
+        )?;
+        Ok(())
     }
 
     /// The last `limit` messages with `account`, oldest first.

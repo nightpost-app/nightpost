@@ -34,7 +34,7 @@ use crate::identity::{Device, DeviceList, Role, SignedDeviceList, safety_number}
 use crate::invite::{self, Code, CodeError, Invite, InviteError};
 use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Peer, Proof, Service};
 use crate::session::{self, WireBundle};
-use crate::store::Store;
+use crate::store::{NOTE_ACCOUNT, Store};
 use crate::{PROTOCOL_VERSION, t};
 use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_key, onion};
 
@@ -377,6 +377,13 @@ impl<T: Transport + 'static> Daemon<T> {
     /// Queues `text` for every device of `to`; returns the message id.
     pub fn send(&self, to: &str, text: &str) -> Result<[u8; 16]> {
         ensure!(!text.is_empty() && text.len() <= MAX_TEXT, "a message is 1 to {MAX_TEXT} bytes");
+        if self.is_note(to)? {
+            let id: [u8; 16] = OsRng.unwrap_err().random();
+            let time = now_millis();
+            self.store.add_note(&id, time, text)?;
+            let _ = self.events.send(Event::Sent { to: to.into(), id: hex(&id), time, text: text.into() });
+            return Ok(id);
+        }
         let contact = self.contacts_raw()?.into_iter().find(|c| c.name == to).with_context(|| t!("err-no-contact"))?;
         let devices = self.devices_of(&contact)?;
         let id: [u8; 16] = OsRng.unwrap_err().random();
@@ -467,6 +474,9 @@ impl<T: Transport + 'static> Daemon<T> {
     /// We have seen what `name` wrote so far; with read receipts on, they
     /// are told which messages.
     pub fn mark_read(&self, name: &str) -> Result<()> {
+        if self.is_note(name)? {
+            return Ok(());
+        }
         let contact = self.contact_named(name)?;
         let devices = self.devices_of(&contact)?;
         let receipts = self.read_receipts()?;
@@ -491,24 +501,47 @@ impl<T: Transport + 'static> Daemon<T> {
 
     /// The last `limit` messages with `name`, oldest first.
     pub fn history(&self, name: &str, limit: u32) -> Result<Vec<HistoryItem>> {
-        let contact = self.contact_named(name)?;
+        let account = if self.is_note(name)? { NOTE_ACCOUNT.to_vec() } else { self.contact_named(name)?.identity };
         Ok(self
             .store
-            .history(&contact.identity, limit)?
+            .history(&account, limit)?
             .into_iter()
             .map(|(id, outgoing, time, text, delivered, read)| HistoryItem { id: hex(&id), outgoing, time, text, delivered, read: outgoing && read })
             .collect())
     }
 
+    /// The contacts, after the note to ourselves: always there, always first.
     pub fn contacts(&self) -> Result<Vec<ContactInfo>> {
-        self.contacts_raw()?
-            .into_iter()
-            .map(|c| Ok(ContactInfo { safety_number: self.safety_number(&c)?, person: self.person(&c)?, name: c.name }))
-            .collect()
+        let note = ContactInfo { name: self.note_name()?, safety_number: String::new(), person: Person::default(), note: true };
+        let mut all = vec![note];
+        for c in self.contacts_raw()? {
+            all.push(ContactInfo { safety_number: self.safety_number(&c)?, person: self.person(&c)?, name: c.name, note: false });
+        }
+        Ok(all)
+    }
+
+    /// What the note to ourselves is called: the language of the first start,
+    /// kept so that it does not change with it, and renamed like a contact.
+    fn note_name(&self) -> Result<String> {
+        if let Some(name) = self.store.get("self", "note_name")? {
+            return Ok(String::from_utf8(name)?);
+        }
+        let name = t!("note-name");
+        self.store.put("self", "note_name", name.as_bytes())?;
+        Ok(name)
+    }
+
+    fn is_note(&self, name: &str) -> Result<bool> {
+        Ok(self.note_name()? == name)
     }
 
     pub fn rename(&self, name: &str, to: &str) -> Result<()> {
         self.check_name(to)?;
+        if self.is_note(name)? {
+            self.store.put("self", "note_name", to.as_bytes())?;
+            let _ = self.events.send(Event::ContactRenamed { name: name.into(), to: to.into() });
+            return Ok(());
+        }
         let mut contact = self.contact_named(name)?;
         contact.name = to.into();
         self.store.put("contact", &hex(&contact.identity), &postcard::to_stdvec(&contact)?)?;
@@ -524,6 +557,7 @@ impl<T: Transport + 'static> Daemon<T> {
     /// reach us or tell we are online, and stops sending to them. An open
     /// link closes at its next turn ([`Self::run_link`] looks them up).
     pub async fn remove(self: &Rc<Self>, name: &str, wipe: bool) -> Result<()> {
+        ensure!(!self.is_note(name)?, t!("err-note-fixed"));
         let contact = self.contact_named(name)?;
         let key = hex(&contact.identity);
         self.store.atomically(|| {
@@ -949,7 +983,7 @@ impl<T: Transport + 'static> Daemon<T> {
             !name.trim().is_empty() && name.chars().count() <= MAX_NAME && !name.chars().any(char::is_control),
             "a name is 1 to {MAX_NAME} characters, without control characters"
         );
-        ensure!(self.contacts_raw()?.iter().all(|c| c.name != name), t!("err-name-taken", name = name));
+        ensure!(self.contacts_raw()?.iter().all(|c| c.name != name) && !self.is_note(name)?, t!("err-name-taken", name = name));
         Ok(())
     }
 }
@@ -1012,6 +1046,11 @@ mod tests {
     use std::path::Path;
     use tokio::task::LocalSet;
 
+    /// The contacts, without the note to ourselves that is always first.
+    fn others(daemon: &Daemon<MemoryTransport>) -> Vec<ContactInfo> {
+        daemon.contacts().unwrap().into_iter().filter(|c| !c.note).collect()
+    }
+
     fn open(dir: &Path, name: &str, net: &Network) -> Rc<Daemon<MemoryTransport>> {
         let secret = Secret::new([name.len() as u8; 32]);
         let store = Store::open(&dir.join(name), &Unlock::new(Some(secret), None).unwrap()).unwrap();
@@ -1057,13 +1096,13 @@ mod tests {
                 bob.accept(&link, "alice").await.unwrap();
                 assert_eq!(next(&mut bob_events).await, Event::ContactAdded { name: "alice".into() });
                 assert_eq!(next(&mut alice_events).await, Event::ContactAdded { name: "bob".into() });
-                assert_eq!(alice.contacts().unwrap()[0].safety_number, bob.contacts().unwrap()[0].safety_number);
+                assert_eq!(others(&alice)[0].safety_number, others(&bob)[0].safety_number);
 
                 // The link is spent: someone else holding it gets nowhere.
                 let carol = open(dir.path(), "carol", &net);
                 carol.start().await.unwrap();
                 assert!(carol.accept(&link, "alice").await.is_err());
-                assert!(carol.contacts().unwrap().is_empty());
+                assert!(others(&carol).is_empty());
 
                 let id = bob.send("alice", "bonjour").unwrap();
                 assert!(message("bob", id, "bonjour")(&next(&mut alice_events).await));
@@ -1118,13 +1157,13 @@ mod tests {
                 let person = Person { verified: true, muted_until: Some(u64::MAX), photo: None };
                 alice.set_person("robert", person.clone()).unwrap();
                 assert_eq!(next(&mut alice_events).await, Event::PersonChanged { name: "robert".into(), person: person.clone() });
-                assert_eq!(alice.contacts().unwrap()[0].person, person);
+                assert_eq!(others(&alice)[0].person, person);
                 let bad = Person { photo: Some("data:text/html,<script>".into()), ..Person::default() };
                 assert!(alice.set_person("robert", bad).is_err());
 
                 alice.remove("robert", true).await.unwrap();
                 assert_eq!(next(&mut alice_events).await, Event::ContactRemoved { name: "robert".into() });
-                assert!(alice.contacts().unwrap().is_empty());
+                assert!(others(&alice).is_empty());
                 assert!(alice.store.history(&bob.identity.identity_key().serialize(), 10).unwrap().is_empty());
                 // Bob can no longer reach Alice's service, so his messages
                 // no longer get through.
@@ -1336,6 +1375,34 @@ mod tests {
 
     /// A code is checked for typos at once, and whoever uses it is kept
     /// only once the inviter confirms, after comparing safety numbers.
+    /// The note to ourselves is first, kept on this device only, and cannot be removed.
+    #[tokio::test]
+    async fn the_note_to_ourselves_stays_here() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let alice = open(dir.path(), "alice", &net);
+                alice.start().await.unwrap();
+                let first = alice.contacts().unwrap().remove(0);
+                assert!(first.note && !first.name.is_empty());
+                let mut events = alice.subscribe();
+                alice.send(&first.name, "le code du wifi : 1234").unwrap();
+                assert!(matches!(next(&mut events).await, Event::Sent { to, text, .. } if to == first.name && text == "le code du wifi : 1234"));
+                let kept = alice.history(&first.name, 10).unwrap();
+                assert_eq!((kept.len(), kept[0].outgoing, kept[0].delivered), (1, true, true));
+                // Nothing waits to be sent anywhere.
+                assert!(alice.store.queued_for().unwrap().is_empty());
+                assert!(alice.remove(&first.name, true).await.is_err());
+                // A contact cannot take its name; renamed, it keeps its notes.
+                assert!(alice.invite(&first.name).await.is_err());
+                alice.rename(&first.name, "carnet").unwrap();
+                assert_eq!(alice.history("carnet", 10).unwrap().len(), 1);
+                assert_eq!(alice.contacts().unwrap()[0].name, "carnet");
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn an_oral_code_waits_for_the_inviters_confirmation() {
         LocalSet::new()
@@ -1363,7 +1430,7 @@ mod tests {
                 assert_eq!(name, "bob");
                 let Event::Fingerprint { safety_number: bobs, .. } = next(&mut bob_events).await else { panic!() };
                 assert_eq!(safety_number, bobs);
-                assert!(bob.contacts().unwrap().is_empty() && alice.contacts().unwrap().is_empty());
+                assert!(others(&bob).is_empty() && others(&alice).is_empty());
                 alice.confirm("bob", true).unwrap();
                 accepting.await.unwrap().unwrap();
                 assert_eq!(next(&mut bob_events).await, Event::ContactAdded { name: "alice".into() });
@@ -1385,8 +1452,8 @@ mod tests {
                 }
                 alice.confirm("carol", false).unwrap();
                 assert!(accepting.await.unwrap().is_err());
-                assert!(carol.contacts().unwrap().is_empty());
-                assert_eq!(alice.contacts().unwrap().len(), 1);
+                assert!(others(&carol).is_empty());
+                assert_eq!(others(&alice).len(), 1);
             })
             .await;
     }

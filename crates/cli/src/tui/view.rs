@@ -97,7 +97,7 @@ impl App {
             let name = fit(&c.name, width.saturating_sub(4 + cols(&right.content)));
             lines.push(Line::from(vec![
                 bar.clone(),
-                Span::styled(if reachable { "● " } else { "○ " }, if reachable { Style::new().fg(ACCENT) } else { DIM }),
+                if c.note { Span::styled("✎ ", Style::new().fg(ACCENT)) } else { Span::styled(if reachable { "● " } else { "○ " }, if reachable { Style::new().fg(ACCENT) } else { DIM }) },
                 Span::styled(name, name_style(&c.name)),
                 Span::raw(" "),
                 right,
@@ -110,13 +110,13 @@ impl App {
 
         let ok = self.network.percent == 100 && !self.network.blocked();
         let dot = if self.network.blocked() { Span::styled("● ", Style::new().fg(Color::Red)) } else if ok { Span::styled("● ", Style::new().fg(ACCENT)) } else { Span::styled(format!("{} ", self.spinner()), Style::new().fg(ACCENT)) };
-        let reachable = self.conversations.iter().filter(|c| self.reachable(&c.name)).count();
+        let reachable = self.conversations.iter().filter(|c| !c.note && self.reachable(&c.name)).count();
         let mut lines: Vec<Line> = state
             .into_iter()
             .enumerate()
             .map(|(i, row)| Line::from(vec![Span::raw(" "), if i == 0 { dot.clone() } else { Span::raw("  ") }, Span::styled(row, DIM)]))
             .collect();
-        lines.push(Line::styled(format!("   {}", t!("reachable-count", reachable = reachable, total = self.conversations.len())), DIM));
+        lines.push(Line::styled(format!("   {}", t!("reachable-count", reachable = reachable, total = self.conversations.iter().filter(|c| !c.note).count())), DIM));
         frame.render_widget(Paragraph::new(lines), tor);
     }
 
@@ -178,6 +178,9 @@ impl App {
 
     /// How they can be reached, as the window says it.
     pub(super) fn reach(&self, c: &Conversation) -> (String, Style) {
+        if c.note {
+            return (format!("✎ {}", t!("note-here")), DIM);
+        }
         let net = &self.network;
         if net.blocked() {
             return (t!("net-blocked"), Style::new().fg(Color::Red));
@@ -203,7 +206,7 @@ impl App {
         let mut lines = Vec::new();
         let mut starts = Vec::new();
         if c.messages.is_empty() {
-            lines.push(Line::styled(t!("no-messages"), DIM));
+            lines.push(Line::styled(if c.note { t!("note-empty") } else { t!("no-messages") }, DIM));
         }
         let sending = self.sending(c);
         for (i, m) in c.messages.iter().enumerate() {
@@ -222,6 +225,8 @@ impl App {
             }
             let mark = match (m.outgoing, m.delivered, m.read) {
                 (false, ..) => None,
+                // A note has no one to deliver to.
+                (true, ..) if c.note => None,
                 (true, false, _) if sending => Some(Span::styled(format!("{} {}", self.spinner(), t!("tui-sending")), Style::new().fg(ACCENT))),
                 (true, false, _) => Some(Span::styled(t!("tui-pending"), DIM)),
                 (true, true, false) => Some(Span::styled("✓✓", DIM)),

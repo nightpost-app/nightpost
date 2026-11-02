@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf, prelude::*};
 use interprocess::local_socket::{ListenerOptions, Name};
 use rand::{TryRngCore, rngs::OsRng};
@@ -274,6 +274,9 @@ pub struct ContactInfo {
     pub safety_number: String,
     #[serde(default)]
     pub person: Person,
+    /// The note to ourselves: no one to reach, nothing to verify.
+    #[serde(default)]
+    pub note: bool,
 }
 
 /// What we keep about a contact besides the name, in the encrypted
@@ -483,7 +486,10 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
         Request::Contacts => Reply::Contacts { contacts: daemon.contacts()? },
         Request::History { name, limit } => Reply::History { messages: daemon.history(&name, limit.min(1000))? },
         Request::Verify { name } => {
-            let number = daemon.contacts()?.into_iter().find(|c| c.name == name).with_context(|| t!("err-no-contact"))?.safety_number;
+            let contact = daemon.contacts()?.into_iter().find(|c| c.name == name).with_context(|| t!("err-no-contact"))?;
+            // The note is ours alone: no one to compare numbers with.
+            ensure!(!contact.note, t!("err-no-contact"));
+            let number = contact.safety_number;
             Reply::SafetyNumber { name, number }
         }
         Request::Status => Reply::Status { network: daemon.network(), links: daemon.links() },

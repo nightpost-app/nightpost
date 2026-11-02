@@ -141,6 +141,8 @@ enum View {
 struct State {
     phase: Signal<Phase>,
     contacts: Signal<Vec<String>>,
+    /// The note to ourselves: first, kept here, nobody to reach.
+    note: Signal<Option<String>>,
     unread: Signal<HashMap<String, usize>>,
     selected: Signal<Option<String>>,
     messages: Signal<HashMap<String, Vec<HistoryItem>>>,
@@ -241,6 +243,7 @@ impl State {
         let names: Vec<String> = match call(Request::Contacts).await {
             Ok(Reply::Contacts { contacts }) => {
                 self.people.set(contacts.iter().map(|c| (c.name.clone(), c.person.clone())).collect());
+                self.note.set(contacts.iter().find(|c| c.note).map(|c| c.name.clone()));
                 contacts.into_iter().map(|c| c.name).collect()
             }
             other => return self.fail(other),
@@ -310,7 +313,9 @@ impl State {
                 }
             }
             Event::Sent { to, id, time, text } => {
-                self.messages.write().entry(to).or_default().push(HistoryItem { id, outgoing: true, time, text, delivered: false, read: false });
+                // A note has no one to deliver to: it is there once kept.
+                let kept = self.note.read().as_deref() == Some(to.as_str());
+                self.messages.write().entry(to).or_default().push(HistoryItem { id, outgoing: true, time, text, delivered: kept, read: false });
             }
             Event::Delivered { to, id } => {
                 if let Some(m) = self.messages.write().get_mut(&to).and_then(|ms| ms.iter_mut().find(|m| m.id == id)) {
@@ -378,6 +383,9 @@ impl State {
                 for n in self.contacts.write().iter_mut().filter(|n| **n == name) {
                     *n = to.clone();
                 }
+                if self.note.read().as_deref() == Some(name.as_str()) {
+                    self.note.set(Some(to.clone()));
+                }
                 if self.selected.read().as_deref() == Some(name.as_str()) {
                     self.selected.set(Some(to));
                 }
@@ -409,6 +417,7 @@ fn App() -> Element {
     let mut state = use_context_provider(|| State {
         phase: Signal::new(Phase::Connecting(t!("connecting-daemon"))),
         contacts: Signal::new(Vec::new()),
+        note: Signal::new(None),
         unread: Signal::new(HashMap::new()),
         selected: Signal::new(None),
         messages: Signal::new(HashMap::new()),
@@ -601,9 +610,12 @@ fn Sidebar() -> Element {
         let messages = state.messages.read();
         state.contacts.read().iter().map(|n| (n.clone(), messages.get(n).and_then(|m| m.last().cloned()))).collect()
     };
-    rows.sort_by(|a, b| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time)).then_with(|| a.0.cmp(&b.0)));
+    let note = state.note.read().clone();
+    // The note first, then the latest.
+    rows.sort_by(|a, b| (note.as_ref() != Some(&a.0)).cmp(&(note.as_ref() != Some(&b.0))).then_with(|| b.1.as_ref().map(|m| m.time).cmp(&a.1.as_ref().map(|m| m.time))).then_with(|| a.0.cmp(&b.0)));
     let net = state.network.read().clone();
-    let reachable = rows.iter().filter(|(n, _)| reached(&net, state.links.read().get(n).copied())).count();
+    let people = rows.iter().filter(|(n, _)| note.as_ref() != Some(n)).count();
+    let reachable = rows.iter().filter(|(n, _)| note.as_ref() != Some(n) && reached(&net, state.links.read().get(n).copied())).count();
     let (title, _) = net.summary();
     let dot = if net.entry == Some(false) || net.circuit == Some(false) {
         "net-dot fail"
@@ -613,7 +625,7 @@ fn Sidebar() -> Element {
         "net-dot"
     };
     let in_settings = matches!(*state.view.read(), View::Settings(_));
-    let count = (!rows.is_empty()).then(|| t!("reachable-count", reachable = reachable, total = rows.len()));
+    let count = (people > 0).then(|| t!("reachable-count", reachable = reachable, total = people));
     rsx! {
         aside {
             div { class: "brand", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized,
@@ -632,7 +644,8 @@ fn Sidebar() -> Element {
                             None => t!("no-messages"),
                         };
                         let when = last.as_ref().map(|m| short_time(m.time)).unwrap_or_default();
-                        let on = reached(&net, state.links.read().get(&name).copied());
+                        let is_note = note.as_ref() == Some(&name);
+                        let on = !is_note && reached(&net, state.links.read().get(&name).copied());
                         let photo = state.people.read().get(&name).and_then(|p| p.photo.clone());
                         let pick = name.clone();
                         rsx! {
@@ -643,7 +656,7 @@ fn Sidebar() -> Element {
                                 },
                                 span { class: "avatar",
                                     {avatar(&name, photo.as_deref(), 44)}
-                                    span { class: if on { "dot on" } else { "dot" } }
+                                    if !is_note { span { class: if on { "dot on" } else { "dot" } } }
                                 }
                                 span { class: "lines",
                                     span { class: "name", "{name}" }
@@ -871,6 +884,8 @@ fn Conversation() -> Element {
             p { class: "status", "{state.status}" } }
         };
     };
+    let is_note = state.note.read().as_deref() == Some(name.as_str());
+    let alone = state.contacts.read().len() <= 1;
     let rows = rows(state.messages.read().get(&name).map(Vec::as_slice).unwrap_or_default());
     let typing = state.typing.read().contains_key(&name);
     let mut typed = {
@@ -889,7 +904,7 @@ fn Conversation() -> Element {
         }
     };
     let link = state.links.read().get(&name).copied();
-    let (reach_class, reach) = reach_line(&name, &state.network.read(), link);
+    let (reach_class, reach) = if is_note { ("", t!("note-here")) } else { reach_line(&name, &state.network.read(), link) };
     let waiting = if matches!(link, Some(LinkState::Unreachable | LinkState::Older | LinkState::Newer)) { t!("waiting-reachable", name = name) } else { t!("sending") };
 
     let send = {
@@ -970,19 +985,26 @@ fn Conversation() -> Element {
                         span { class: "state {reach_class}", "{reach}" }
                     }
                 }
-                button { class: if open { "info on" } else { "info" }, title: t!("about-name", name = name), "aria-label": t!("about-name", name = name), onclick: toggle,
+                if !is_note { button { class: if open { "info on" } else { "info" }, title: t!("about-name", name = name), "aria-label": t!("about-name", name = name), onclick: toggle,
                     svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", "aria-hidden": "true",
                         circle { cx: "12", cy: "12", r: "9" }
                         path { d: "M12 11v5M12 7.6v.1" }
                     }
-                }
+                } }
                 div { class: "drag-fill", onmousedown: chrome::drag, ondoubleclick: chrome::toggle_maximized }
             }
-            RouteView { name: name.clone() }
+            if !is_note { RouteView { name: name.clone() } }
             // Reversed column: the newest message sits at the bottom and the
             // view stays there as messages arrive.
             div { class: "thread",
                 div { class: "column",
+                    if is_note && rows.is_empty() {
+                        div { class: "empty note",
+                            p { {t!("note-empty-window")} }
+                            // Only the note so far: how to find someone is here too.
+                            if alone { button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} } }
+                        }
+                    }
                     if typing {
                         div { class: "bubble-row in",
                             div { class: "bubble typing", "aria-hidden": "true", i {} i {} i {} }
@@ -1001,7 +1023,7 @@ fn Conversation() -> Element {
                                             if m.outgoing && !m.delivered {
                                                 svg { class: "tick", view_box: "0 0 16 16", "aria-hidden": "true", circle { cx: "8", cy: "8", r: "6" } }
                                                 span { class: "waiting", "{waiting}" }
-                                            } else if m.outgoing {
+                                            } else if m.outgoing && !is_note {
                                                 // Signal's marks: two rings once delivered, filled once read.
                                                 svg { class: if m.read { "tick read" } else { "tick" }, view_box: "2 0 24 16", role: "img",
                                                     "aria-label": if m.read { t!("read") } else { t!("delivered") },
@@ -1054,7 +1076,7 @@ fn Conversation() -> Element {
                 button { class: "primary", onclick: move |_| send_click(), {t!("send")} }
             }
             p { class: "status", "{state.status}" }
-            if open { PersonPanel { key: "{name}", name: name.clone() } }
+            if open && !is_note { PersonPanel { key: "{name}", name: name.clone() } }
         }
     }
 }

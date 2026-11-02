@@ -39,6 +39,8 @@ const NOTICE_SHOWN: Duration = Duration::from_secs(8);
 
 struct Conversation {
     name: String,
+    /// The note to ourselves: kept here, nobody to reach.
+    note: bool,
     person: Person,
     unread: usize,
     messages: Vec<HistoryItem>,
@@ -242,7 +244,8 @@ pub async fn run(dir: &Path) -> Result<()> {
     if app.conversations.is_empty() {
         app.focus = Focus::List;
     }
-    app.select(0, &mut requests).await;
+    // The note is first; on starting, the first person, if there is one.
+    app.select(usize::from(app.conversations.len() > 1), &mut requests).await;
 
     let mut terminal = ratatui::init();
     // The tab says Nightpost, not the program's path; the terminal's own
@@ -581,7 +584,7 @@ impl App {
         if self.input.starts_with('/') || self.pinged.is_some_and(|at| at.elapsed() < TYPING_EVERY) {
             return;
         }
-        if let Some(c) = self.conversations.get(self.selected) {
+        if let Some(c) = self.conversations.get(self.selected).filter(|c| !c.note) {
             self.pinged = Some(Instant::now());
             let _ = requests.call(&Request::Typing { name: c.name.clone() }).await;
         }
@@ -634,7 +637,8 @@ impl App {
             ["quit"] => self.quit = true,
             ["lock"] => self.lock(requests).await,
             ["copy"] => {
-                let last = self.current().and_then(|c| c.messages.iter().rev().find(|m| !m.outgoing)).map(|m| m.text.clone());
+                // What they wrote; in the note, what we did.
+                let last = self.current().and_then(|c| c.messages.iter().rev().find(|m| c.note || !m.outgoing)).map(|m| m.text.clone());
                 let Some(text) = last else { bail!(t!("tui-nothing-to-copy")) };
                 copy(&text);
                 self.status = t!("tui-message-copied");
@@ -678,6 +682,7 @@ impl App {
             }
             ["accept", link, name] => self.long(name, Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
             ["acceptcode", code, name] => self.long(name, Request::AcceptCode { code: code.to_string(), name: name.to_string() }, updates),
+            ["verify" | "mute" | "unmute" | "remove" | "info", ..] if self.current().is_some_and(|c| c.note) => bail!(t!("tui-not-for-note")),
             ["verify"] => self.verify(requests).await?,
             ["rename", new @ ..] if !new.is_empty() => {
                 let name = self.current_name()?;
@@ -919,7 +924,7 @@ impl App {
                     Reply::Error { message } => bail!("{message}"),
                     other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
-                self.conversations.push(Conversation { name: c.name, person: c.person, unread: 0, messages });
+                self.conversations.push(Conversation { name: c.name, note: c.note, person: c.person, unread: 0, messages });
             }
         }
         Ok(())
