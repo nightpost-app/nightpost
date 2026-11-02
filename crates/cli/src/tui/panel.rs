@@ -101,6 +101,7 @@ enum Act {
     EditLines,
     SaveBridges,
     Passphrase(Change),
+    Recovery,
     ReadReceipts,
     Typing,
     Lock,
@@ -259,6 +260,19 @@ impl App {
                 let fields = vec![String::new(); if change == Change::Replace { 3 } else if change == Change::Add { 2 } else { 1 }];
                 self.overlay = Some(Overlay::Passphrase(Passphrase { change, fields, at: 0, error: String::new() }));
             }
+            Act::Recovery => match requests.call(&Request::RecoveryPhrase).await {
+                Ok(Reply::RecoveryPhrase { phrase }) => {
+                    // Six rows of four, numbered, as they are written down.
+                    let words: Vec<&str> = phrase.split(' ').collect();
+                    let mut body = vec![t!("recovery-help"), String::new()];
+                    for (row, chunk) in words.chunks(4).enumerate() {
+                        let cells: Vec<String> = chunk.iter().enumerate().map(|(i, w)| format!("{:>2}. {:<9}", row * 4 + i + 1, w)).collect();
+                        body.push(format!("  {}", cells.join("  ").trim_end()));
+                    }
+                    self.overlay = Some(Overlay::Text { title: t!("recovery-title"), body });
+                }
+                other => self.status = unexpected(other),
+            },
             Act::ReadReceipts => match requests.call(&Request::ReadReceipts { on: Some(!self.read_receipts) }).await {
                 Ok(Reply::ReadReceipts { on }) => self.read_receipts = on,
                 other => self.status = unexpected(other),
@@ -416,6 +430,7 @@ impl App {
                 } else {
                     items.push(row(t!("passphrase-add"), Mark::Plain(Style::new()), None, Act::Passphrase(Change::Add)));
                 }
+                items.push(row(t!("recovery-show"), Mark::Plain(Style::new()), None, Act::Recovery));
                 items.extend([
                     Item::Gap,
                     Item::Title(t!("read-receipts")),

@@ -85,6 +85,19 @@ bridges-button = ¿Tor bloqueado aquí? Puentes
 unlock-prompt = Tu frase de contraseña abre tus mensajes.
 unlock = Desbloquear
 wrong-passphrase = Frase de contraseña incorrecta. Inténtalo de nuevo.
+err-recovery-phrase = Esa frase de recuperación no es válida: revisa las palabras y su orden.
+err-recovery-keychain = Sin llavero, la frase de contraseña es la única clave: no hay frase de recuperación.
+err-keychain-lost = Este llavero no tiene la clave de Nightpost. ¿Cambiaste de escritorio o de ordenador? Vuelve a iniciar con tu frase de recuperación: nightpost daemon --recovery
+err-recovery-store = La base se abrió, pero este llavero rechazó la clave ({ $error }).
+recovery-ask = ¿Usar tu frase de recuperación? [y/N]
+recovery-prompt = Frase de recuperación:
+recovery-cli = Frase de recuperación (anótala y guárdala lejos de este ordenador):
+recovery-cli-after = Abre tus mensajes, con tu frase de contraseña si tienes una, cuando el llavero no tiene la clave.
+recovery-use = Usar la frase de recuperación
+recovery-title = Frase de recuperación
+recovery-help = Anota estas 24 palabras, en orden, y guárdalas lejos de este ordenador. Cuando el llavero no tiene la clave (otro escritorio, un ordenador nuevo), abren tus mensajes, con tu frase de contraseña si tienes una. Quien las tenga junto con tu frase de contraseña puede leer tus mensajes.
+recovery-show = Mostrar la frase de recuperación
+recovery-hide = Ocultar la frase de recuperación
 
 ## Ventana
 

@@ -430,7 +430,7 @@ fn App() -> Element {
         language: Signal::new(i18n::language()),
     });
 
-    use_future(move || run(state, None));
+    use_future(move || run(state, None, None));
     #[cfg(target_os = "linux")]
     use_hook(chrome::cut_corners);
     #[cfg(target_os = "linux")]
@@ -520,8 +520,8 @@ fn SideToggle() -> Element {
 
 /// Attaches to the daemon (starting it, with the passphrase if given) and
 /// follows its events for as long as it runs.
-async fn run(mut state: State, passphrase: Option<String>) {
-    let mut events = match attach(state.phase, passphrase).await {
+async fn run(mut state: State, passphrase: Option<String>, recovery: Option<String>) {
+    let mut events = match attach(state.phase, passphrase, recovery).await {
         Ok(Some(events)) => events,
         Ok(None) => return,
         Err(e) => {
@@ -557,22 +557,37 @@ async fn run(mut state: State, passphrase: Option<String>) {
 fn Locked(why: String) -> Element {
     let state = use_context::<State>();
     let mut passphrase = use_signal(String::new);
+    let mut words = use_signal(String::new);
+    // Offered after a refusal: the right passphrase can meet another keychain.
+    let mut recover = use_signal(|| false);
+    let has_passphrase = dbkey::uses_passphrase(dir());
     let mut unlock = move || {
         let given = passphrase.read().clone();
-        if given.is_empty() {
+        let recovery = recover.read().then(|| words.read().split_whitespace().collect::<Vec<_>>().join(" "));
+        if (has_passphrase && given.is_empty()) || recovery.as_ref().is_some_and(String::is_empty) {
             return;
         }
         passphrase.set(String::new());
+        words.set(String::new());
         // Not `spawn`: this screen goes away as the daemon starts.
-        dioxus::core::spawn_forever(run(state, Some(given)));
+        dioxus::core::spawn_forever(run(state, has_passphrase.then_some(given), recovery));
     };
     rsx! {
         form { class: "splash", onsubmit: move |e| { e.prevent_default(); unlock(); },
             p { class: "wordmark", "Nightpost" }
-            label { r#for: "passphrase", {t!("unlock-prompt")} }
-            input { id: "passphrase", class: "name-field", r#type: "password", autofocus: true, value: "{passphrase}", oninput: move |e| passphrase.set(e.value()) }
+            if has_passphrase {
+                label { r#for: "passphrase", {t!("unlock-prompt")} }
+                input { id: "passphrase", class: "name-field", r#type: "password", autofocus: !*recover.read(), value: "{passphrase}", oninput: move |e| passphrase.set(e.value()) }
+            }
+            if *recover.read() {
+                label { r#for: "words", {t!("recovery-prompt")} }
+                textarea { id: "words", class: "lines-field", rows: "3", autofocus: true, spellcheck: false, value: "{words}", oninput: move |e| words.set(e.value()) }
+            }
             if !why.is_empty() { p { class: "warning", "{why}" } }
             button { class: "primary", r#type: "submit", {t!("unlock")} }
+            if !why.is_empty() && !*recover.read() {
+                button { class: "ghost", r#type: "button", onclick: move |_| recover.set(true), {t!("recovery-use")} }
+            }
         }
     }
 }
@@ -1268,7 +1283,7 @@ async fn call(request: Request) -> Result<Reply> {
 
 /// The event stream, starting the daemon first if none answers. `None`:
 /// the daemon needs the passphrase (again) and the phase now asks for it.
-async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<Option<Client>> {
+async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>, recovery: Option<String>) -> Result<Option<Client>> {
     // A daemon left running from before an update: it would not know what
     // this window asks. Stop it; the one next to this program takes over.
     if api::running_version(dir()).as_deref() != Some(nightpost_core::VERSION) && Client::connect(dir()).await.is_ok() {
@@ -1286,13 +1301,13 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
     }
     // It answers, but not this yet: a daemon is starting Tor.
     let starting = Client::connect(dir()).await.is_ok();
-    let asked = passphrase.is_some();
+    let asked = passphrase.is_some() || recovery.is_some();
     if !starting && !asked && dbkey::uses_passphrase(dir()) {
         phase.set(Phase::Locked(String::new()));
         return Ok(None);
     }
     phase.set(Phase::Connecting(t!("starting")));
-    let mut daemon = if starting { None } else { Some(start_daemon(passphrase)?) };
+    let mut daemon = if starting { None } else { Some(start_daemon(passphrase, recovery)?) };
     let log = dir().join("daemon.log");
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1301,7 +1316,9 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>) -> Result<
         }
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         if let Some(status) = daemon.as_mut().map(std::process::Child::try_wait).transpose()?.flatten() {
-            if asked && text.contains("wrong key") {
+            // A wrong key, or a keychain that does not have it (another
+            // desktop): the words are the way out, offered on that screen.
+            if (asked && text.contains("wrong key")) || text.contains(&t!("err-keychain-lost")) {
                 phase.set(Phase::Locked(t!("wrong-passphrase")));
                 return Ok(None);
             }
@@ -1323,12 +1340,16 @@ async fn listen() -> Result<Client> {
 
 /// `nightpost daemon`, from next to this program, outliving it: closing the
 /// window must not take the messages offline.
-fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
+fn start_daemon(passphrase: Option<String>, recovery: Option<String>) -> Result<std::process::Child> {
     let exe = std::env::current_exe()?.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX));
     let log = std::fs::File::create(dir().join("daemon.log"))?;
     let mut command = std::process::Command::new(&exe);
-    let stdin = if passphrase.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() };
-    command.arg("daemon").stdin(stdin).stdout(log.try_clone()?).stderr(log);
+    let stdin = if passphrase.is_some() || recovery.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+    command.arg("daemon");
+    if recovery.is_some() {
+        command.arg("--recovery");
+    }
+    command.stdin(stdin).stdout(log.try_clone()?).stderr(log);
     as_launched(&mut command);
     #[cfg(unix)]
     {
@@ -1342,10 +1363,13 @@ fn start_daemon(passphrase: Option<String>) -> Result<std::process::Child> {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = command.spawn().with_context(|| format!("starting {}", exe.display()))?;
-    // One line on its stdin, then closed: never in its arguments or environment.
-    if let (Some(passphrase), Some(mut stdin)) = (passphrase, child.stdin.take()) {
+    // The passphrase, then the recovery words, a line each on its stdin and
+    // then closed: never in its arguments or environment.
+    if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write as _;
-        stdin.write_all(zeroize::Zeroizing::new(passphrase + "\n").as_bytes())?;
+        for line in passphrase.into_iter().chain(recovery) {
+            stdin.write_all(zeroize::Zeroizing::new(line + "\n").as_bytes())?;
+        }
     }
     Ok(child)
 }

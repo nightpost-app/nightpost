@@ -55,6 +55,10 @@ pub enum Request {
     SetPerson { name: String, person: Person },
     /// Adds, changes or removes the passphrase over the keychain secret.
     SetPassphrase { current: Option<String>, new: Option<String> },
+    /// The keychain secret as 24 words, to write down: it opens the
+    /// database (with the passphrase, if any) when the keychain does not
+    /// have it, on another desktop or computer.
+    RecoveryPhrase,
     /// We have seen `name`'s messages so far: with read receipts on, they
     /// learn it.
     MarkRead { name: String },
@@ -99,6 +103,7 @@ pub enum Reply {
     ReadReceipts { on: bool },
     TypingIndicators { on: bool },
     Bridges { lines: Vec<String> },
+    RecoveryPhrase { phrase: String },
     Error { message: String },
 }
 
@@ -527,6 +532,10 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
             daemon.set_passphrase(bytes(current), bytes(new))?;
             Reply::Done
         }
+        Request::RecoveryPhrase => match daemon.recovery_phrase() {
+            Some(phrase) => Reply::RecoveryPhrase { phrase: phrase.to_string() },
+            None => Reply::Error { message: t!("err-recovery-keychain") },
+        },
         Request::Listen | Request::Shutdown | Request::Bridges { .. } | Request::Language => unreachable!("answered by the caller"),
     })
 }

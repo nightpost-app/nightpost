@@ -288,4 +288,27 @@ mod tests {
         assert!(Store::open(&path, &unlock(1, Some("p"))).is_err());
         assert_eq!(Store::open(&path, &unlock(1, None)).unwrap().identity().unwrap().serialize(), identity);
     }
+
+    /// The words written down open the database when the keychain gives
+    /// another secret (another desktop), with the passphrase if any.
+    #[test]
+    fn the_recovery_phrase_opens_what_another_keychain_cannot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nightpost.db");
+        let store = Store::open(&path, &unlock(1, Some("1234"))).unwrap();
+        let identity = store.identity().unwrap().serialize();
+        let phrase = store.recovery_phrase().unwrap();
+        drop(store);
+
+        // Another keychain made another secret: right passphrase, still shut.
+        assert!(Store::open(&path, &unlock(2, Some("1234"))).is_err());
+        // The words give the first one back; the passphrase is still needed.
+        let recovered = Unlock::new(Some(crate::dbkey::secret_from_phrase(&phrase).unwrap()), Some(Zeroizing::new(b"1234".to_vec()))).unwrap();
+        assert_eq!(Store::open(&path, &recovered).unwrap().identity().unwrap().serialize(), identity);
+        let no_passphrase = Unlock::new(Some(crate::dbkey::secret_from_phrase(&phrase).unwrap()), None).unwrap();
+        assert!(Store::open(&path, &no_passphrase).is_err());
+        // Only a keychain secret has words.
+        let alone = Unlock::new(None, Some(Zeroizing::new(b"p".to_vec()))).unwrap();
+        assert!(Store::open(&dir.path().join("other.db"), &alone).unwrap().recovery_phrase().is_none());
+    }
 }

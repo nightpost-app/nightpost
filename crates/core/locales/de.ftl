@@ -85,6 +85,19 @@ bridges-button = Tor hier blockiert? Brücken
 unlock-prompt = Deine Passphrase öffnet deine Nachrichten.
 unlock = Entsperren
 wrong-passphrase = Falsche Passphrase. Versuch es noch einmal.
+err-recovery-phrase = Diese Wiederherstellungsphrase ist ungültig: Prüfe die Wörter und ihre Reihenfolge.
+err-recovery-keychain = Ohne Schlüsselbund ist die Passphrase der einzige Schlüssel: Es gibt keine Wiederherstellungsphrase.
+err-keychain-lost = Dieser Schlüsselbund hat den Schlüssel von Nightpost nicht. Hast du den Desktop oder Computer gewechselt? Starte mit deiner Wiederherstellungsphrase neu: nightpost daemon --recovery
+err-recovery-store = Die Datenbank wurde geöffnet, aber dieser Schlüsselbund hat den Schlüssel abgelehnt ({ $error }).
+recovery-ask = Wiederherstellungsphrase verwenden? [y/N]
+recovery-prompt = Wiederherstellungsphrase:
+recovery-cli = Wiederherstellungsphrase (aufschreiben, getrennt von diesem Computer aufbewahren):
+recovery-cli-after = Sie öffnet deine Nachrichten, mit deiner Passphrase falls du eine hast, wenn der Schlüsselbund den Schlüssel nicht hat.
+recovery-use = Wiederherstellungsphrase verwenden
+recovery-title = Wiederherstellungsphrase
+recovery-help = Schreibe diese 24 Wörter der Reihe nach auf und bewahre sie getrennt von diesem Computer auf. Wenn der Schlüsselbund den Schlüssel nicht hat (anderer Desktop, neuer Computer), öffnen sie deine Nachrichten, mit deiner Passphrase falls du eine hast. Wer sie zusammen mit deiner Passphrase hat, kann deine Nachrichten lesen.
+recovery-show = Wiederherstellungsphrase anzeigen
+recovery-hide = Wiederherstellungsphrase ausblenden
 
 ## Fenster
 

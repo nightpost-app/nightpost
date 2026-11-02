@@ -480,6 +480,7 @@ fn Security() -> Element {
                 }
             }
         }
+        Recovery {}
         section { class: "block",
             h2 { {t!("read-receipts")} }
             button {
@@ -549,6 +550,39 @@ fn Security() -> Element {
                     {if *has.read() { t!("quit-lock") } else { t!("quit") }}
                 }
             }
+        }
+    }
+}
+
+/// The 24 words that open the database where the keychain has no key: shown
+/// only on request, and forgotten when hidden.
+#[component]
+fn Recovery() -> Element {
+    let state = use_context::<State>();
+    let mut phrase = use_signal(|| None::<String>);
+    let show = move |_| {
+        if phrase.read().is_some() {
+            return phrase.set(None);
+        }
+        spawn(async move {
+            match call(Request::RecoveryPhrase).await {
+                Ok(Reply::RecoveryPhrase { phrase: words }) => phrase.set(Some(words)),
+                other => state.fail(other),
+            }
+        });
+    };
+    rsx! {
+        section { class: "block",
+            h2 { {t!("recovery-title")} }
+            p { class: "help", {t!("recovery-help")} }
+            if let Some(words) = phrase.read().as_ref() {
+                ol { class: "recovery",
+                    for (i, word) in words.split(' ').enumerate() {
+                        li { key: "{i}", "{word}" }
+                    }
+                }
+            }
+            div { button { class: "ghost", onclick: show, {if phrase.read().is_some() { t!("recovery-hide") } else { t!("recovery-show") }} } }
         }
     }
 }

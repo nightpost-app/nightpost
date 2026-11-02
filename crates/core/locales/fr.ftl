@@ -85,6 +85,19 @@ bridges-button = Tor bloqué ici ? Ponts
 unlock-prompt = Ta phrase de passe ouvre tes messages.
 unlock = Déverrouiller
 wrong-passphrase = Phrase de passe incorrecte. Réessaie.
+err-recovery-phrase = Cette phrase de récupération n’est pas valide : vérifie les mots et leur ordre.
+err-recovery-keychain = Sans trousseau, la phrase de passe est la seule clé : il n’y a pas de phrase de récupération.
+err-keychain-lost = Ce trousseau n’a pas la clé de Nightpost. As-tu changé de bureau ou d’ordinateur ? Relance avec ta phrase de récupération : nightpost daemon --recovery
+err-recovery-store = La base s’est ouverte, mais ce trousseau a refusé la clé ({ $error }).
+recovery-ask = Utiliser ta phrase de récupération ? [y/N]
+recovery-prompt = Phrase de récupération :
+recovery-cli = Phrase de récupération (note-la, garde-la loin de cet ordinateur) :
+recovery-cli-after = Elle ouvre tes messages, avec ta phrase de passe si tu en as une, quand le trousseau n’a pas la clé.
+recovery-use = Utiliser la phrase de récupération
+recovery-title = Phrase de récupération
+recovery-help = Note ces 24 mots, dans l’ordre, et garde-les loin de cet ordinateur. Quand le trousseau n’a pas la clé (autre bureau, nouvel ordinateur), ils ouvrent tes messages, avec ta phrase de passe si tu en as une. Qui les a, avec ta phrase de passe, peut lire tes messages.
+recovery-show = Afficher la phrase de récupération
+recovery-hide = Masquer la phrase de récupération
 
 ## Fenêtre
 

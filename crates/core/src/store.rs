@@ -125,6 +125,12 @@ impl Store {
         Ok(store)
     }
 
+    /// The keychain secret as 24 words to write down; `None` without one
+    /// (a passphrase alone is the key).
+    pub fn recovery_phrase(&self) -> Option<Zeroizing<String>> {
+        self.secret.as_ref().map(crate::dbkey::recovery_phrase)
+    }
+
     /// Encrypts the database again, for the same keychain secret with `new`
     /// rather than `current` as the passphrase (`None`: no passphrase), once
     /// `current` is shown to be the one in use. The marker next to the

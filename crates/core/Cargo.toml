@@ -24,6 +24,7 @@ rand = "0.9"
 # a key behaves as plain SQLite.
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
 argon2 = "0.6"
+bip39 = "2"
 # Where the database secret lives by default: the OS keychain (Secret Service
 # over D-Bus on Linux, Keychain on macOS, Credential Manager on Windows).
 # zbus is pure Rust, so no libdbus to install at build time.

@@ -88,6 +88,19 @@ bridges-button = Tor blocked here? Bridges
 unlock-prompt = Your passphrase opens your messages.
 unlock = Unlock
 wrong-passphrase = Wrong passphrase. Try again.
+err-recovery-phrase = That recovery phrase is not valid: check the words and their order.
+err-recovery-keychain = Without a keychain, the passphrase is the only key: there is no recovery phrase.
+err-keychain-lost = This keychain does not have Nightpost's key. Did you change desktop or computer? Start it again with your recovery phrase: nightpost daemon --recovery
+err-recovery-store = The database opened, but this keychain refused the key ({ $error }).
+recovery-ask = Use your recovery phrase instead? [y/N]
+recovery-prompt = Recovery phrase:
+recovery-cli = Recovery phrase (write it down, keep it apart from this computer):
+recovery-cli-after = It opens your messages, with your passphrase if you have one, when the keychain does not have the key.
+recovery-use = Use the recovery phrase
+recovery-title = Recovery phrase
+recovery-help = Write these 24 words down, in order, and keep them away from this computer. When the keychain does not have the key (another desktop, a new computer), they open your messages, with your passphrase if you have one. Anyone who has them and your passphrase can read your messages.
+recovery-show = Show the recovery phrase
+recovery-hide = Hide the recovery phrase
 
 ## Window
 

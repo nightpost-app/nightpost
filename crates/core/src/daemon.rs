@@ -548,6 +548,10 @@ impl<T: Transport + 'static> Daemon<T> {
         Ok(())
     }
 
+    pub fn recovery_phrase(&self) -> Option<zeroize::Zeroizing<String>> {
+        self.store.recovery_phrase()
+    }
+
     pub fn set_passphrase(&self, current: Option<Zeroizing<Vec<u8>>>, new: Option<Zeroizing<Vec<u8>>>) -> Result<()> {
         self.store.set_passphrase(current, new)
     }

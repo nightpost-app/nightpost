@@ -13,7 +13,6 @@ use nightpost_core::daemon::Daemon;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
 use nightpost_core::transport::tor::{Bridges, TorTransport};
-use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 const USAGE: &str = "\
@@ -21,6 +20,10 @@ usage:
   nightpost                        the terminal interface (starts the daemon
                                    in the background if none runs)
   nightpost daemon                 run the daemon (Tor) in the foreground
+  nightpost daemon --recovery      the same, opened with the recovery phrase
+                                   (another keychain answers: new desktop)
+  nightpost recovery               the 24 words that open the database when
+                                   the keychain does not have its secret
   nightpost invite <name>          print a one-time link for <name>
   nightpost invite --code <name>   a 12-digit code to read out (10 minutes)
   nightpost accept <link> <name>   use a link; the inviter becomes <name>
@@ -58,7 +61,7 @@ async fn run(args: Vec<String>) -> Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let dir = nightpost_core::api::data_dir()?;
     // A daemon from another version would not understand all we ask.
-    if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"])
+    if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"] | ["daemon", "--recovery"])
         && Client::connect(&dir).await.is_ok()
         && let running = api::running_version(&dir)
         && running.as_deref() != Some(nightpost_core::VERSION)
@@ -70,7 +73,9 @@ async fn run(args: Vec<String>) -> Result<()> {
             start_daemon(&dir).await?;
             return tui::run(&dir).await;
         }
-        ["daemon"] => return daemon(&dir).await,
+        ["daemon"] => return daemon(&dir, false).await,
+        ["daemon", "--recovery"] => return daemon(&dir, true).await,
+        ["recovery"] => Request::RecoveryPhrase,
         ["--version" | "version"] => {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
             return Ok(());
@@ -114,6 +119,7 @@ async fn run(args: Vec<String>) -> Result<()> {
         Reply::Sent { id } => println!("{id}"),
         Reply::Invite { link } => println!("{link}"),
         Reply::Code { code } => println!("{code}"),
+        Reply::RecoveryPhrase { phrase } => println!("{}\n\n{phrase}\n\n{}", nightpost_core::t!("recovery-cli"), nightpost_core::t!("recovery-cli-after")),
         Reply::Added { name } => println!("{name} added"),
         Reply::Done => {}
         Reply::Contacts { contacts } => {
@@ -232,7 +238,7 @@ fn tray() {
     }
 }
 
-async fn daemon(dir: &Path) -> Result<()> {
+async fn daemon(dir: &Path, recover: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         // Plain text when stderr is a file (the graphical interface's daemon.log).
@@ -248,7 +254,12 @@ async fn daemon(dir: &Path) -> Result<()> {
     if Client::connect(dir).await.is_ok() {
         bail!("a daemon is already running on {}", dir.display());
     }
-    let store = Rc::new(Store::open(&dir.join("nightpost.db"), &unlock(dir)?).context("opening the database (wrong key?)")?);
+    let unlock = unlock(dir, recover)?;
+    let store = Rc::new(Store::open(&dir.join("nightpost.db"), &unlock).context("opening the database (wrong key?)")?);
+    if recover && let Some(secret) = unlock.secret() {
+        // It opened: this keychain keeps the secret from now on.
+        dbkey::store_keychain_secret(&dbkey::keychain_label(dir), &secret).map_err(|e| anyhow::anyhow!(nightpost_core::t!("err-recovery-store", error = e.to_string())))?;
+    }
     // Before 0.1.0-alpha.1 the bridges were a file, in the clear.
     let file = dir.join("bridges.txt");
     if let Ok(text) = std::fs::read_to_string(&file) {
@@ -379,12 +390,17 @@ async fn start_daemon(dir: &Path) -> Result<()> {
         return Ok(());
     }
     let asks = dbkey::passphrase_file().is_none() && dbkey::uses_passphrase(dir);
+    // The words, once the passphrase failed and they were asked for.
+    let mut recovery: Option<Zeroizing<String>> = None;
     for _ in 0..3 {
         let passphrase = if asks { Some(Zeroizing::new(rpassword::prompt_password("Passphrase: ")?)) } else { None };
         let log_path = dir.join("daemon.log");
         let log = std::fs::File::create(&log_path)?;
         let mut command = Command::new(std::env::current_exe()?);
-        command.arg("daemon").stdin(if asks { Stdio::piped() } else { Stdio::null() }).stdout(log.try_clone()?).stderr(log);
+        command.arg("daemon").stdin(if asks || recovery.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(log.try_clone()?).stderr(log);
+        if recovery.is_some() {
+            command.arg("--recovery");
+        }
         // Its own process group: Ctrl+C here, or the terminal closing,
         // leaves it running.
         #[cfg(unix)]
@@ -396,8 +412,11 @@ async fn start_daemon(dir: &Path) -> Result<()> {
             command.creation_flags(CREATE_NO_WINDOW);
         }
         let mut daemon = command.spawn().context("starting the daemon")?;
-        if let (Some(passphrase), Some(mut stdin)) = (passphrase, daemon.stdin.take()) {
-            stdin.write_all(Zeroizing::new(format!("{}\n", passphrase.as_str())).as_bytes())?;
+        if let Some(mut stdin) = daemon.stdin.take() {
+            // The passphrase, then the words: one line each.
+            for line in passphrase.iter().map(|p| p.as_str()).chain(recovery.iter().map(|r| r.as_str())) {
+                stdin.write_all(Zeroizing::new(format!("{line}\n")).as_bytes())?;
+            }
         }
         let mut shown = String::new();
         loop {
@@ -413,6 +432,20 @@ async fn start_daemon(dir: &Path) -> Result<()> {
             if let Some(status) = daemon.try_wait()? {
                 if text.contains("wrong key") {
                     eprintln!("\r\x1b[K{}", t!("wrong-passphrase"));
+                    // Right passphrase, other keychain: the words open it.
+                    eprint!("{} ", t!("recovery-ask"));
+                    std::io::stderr().flush()?;
+                    let mut answer = String::new();
+                    std::io::stdin().read_line(&mut answer)?;
+                    recovery = None;
+                    if answer.trim().eq_ignore_ascii_case("y") {
+                        let words = Zeroizing::new(rpassword::prompt_password(format!("{} ", t!("recovery-prompt")))?);
+                        match dbkey::secret_from_phrase(&words) {
+                            // Single line, normalised: what the daemon reads back.
+                            Ok(secret) => recovery = Some(dbkey::recovery_phrase(&secret)),
+                            Err(e) => eprintln!("{e:#}"),
+                        }
+                    }
                     break;
                 }
                 bail!("the daemon stopped ({status}): {}", text.lines().last().unwrap_or_default());
@@ -429,30 +462,39 @@ async fn start_daemon(dir: &Path) -> Result<()> {
 
 /// The keychain secret, plus the passphrase if one is configured. Without a
 /// keychain (a server), the passphrase alone.
-fn unlock(dir: &Path) -> Result<Unlock> {
-    let passphrase = match dbkey::passphrase_file() {
-        Some(path) => Some(dbkey::read_passphrase(&path).with_context(|| format!("reading {}", path.display()))?),
-        // Typed without echo at a terminal, or one line from whatever started us.
-        None if dbkey::uses_passphrase(dir) => Some(Zeroizing::new(if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            rpassword::prompt_password("Passphrase: ")?
+fn unlock(dir: &Path, recover: bool) -> Result<Unlock> {
+    // Typed without echo at a terminal, or one line from whatever started us.
+    let line = |prompt: &str| -> Result<String> {
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            Ok(rpassword::prompt_password(prompt)?)
         } else {
             let mut line = String::new();
             std::io::stdin().read_line(&mut line)?;
             line.truncate(line.trim_end_matches(['\r', '\n']).len());
-            line
-        }.into_bytes())),
+            Ok(line)
+        }
+    };
+    let passphrase = match dbkey::passphrase_file() {
+        Some(path) => Some(dbkey::read_passphrase(&path).with_context(|| format!("reading {}", path.display()))?),
+        None if dbkey::uses_passphrase(dir) => Some(Zeroizing::new(line("Passphrase: ")?.into_bytes())),
         None => None,
     };
-    // One keychain entry per data directory, so test instances do not share.
-    let digest = Sha256::digest(dir.to_string_lossy().as_bytes());
-    let label: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    let secret = match dbkey::keychain_secret(&label) {
-        Ok(secret) => Some(secret),
-        Err(e) if passphrase.is_some() => {
-            eprintln!("no keychain ({e}): using the passphrase alone");
-            None
+    let secret = if recover {
+        Some(dbkey::secret_from_phrase(&line(&format!("{} ", nightpost_core::t!("recovery-prompt")))?)?)
+    } else {
+        // A database made earlier is never opened with a secret made now:
+        // another keychain answering (another desktop) says so, and the
+        // words are the way out.
+        let made = dir.join("nightpost.db").exists();
+        match dbkey::keychain_secret(&dbkey::keychain_label(dir), !made) {
+            Ok(Some(secret)) => Some(secret),
+            Ok(None) => bail!(nightpost_core::t!("err-keychain-lost")),
+            Err(e) if passphrase.is_some() => {
+                eprintln!("no keychain ({e}): using the passphrase alone");
+                None
+            }
+            Err(e) => bail!("no keychain ({e}); set NIGHTPOST_PASSPHRASE_FILE to use a passphrase instead"),
         }
-        Err(e) => bail!("no keychain ({e}); set NIGHTPOST_PASSPHRASE_FILE to use a passphrase instead"),
     };
     Unlock::new(secret, passphrase).context("nothing to derive the database key from")
 }
