@@ -691,7 +691,7 @@ impl App {
                 let seconds = match rest {
                     [] => {
                         let now = self.current().map_or(0, |c| c.timer);
-                        self.status = t!("tui-timer-now", timer = nightpost_core::api::timer_label(now));
+                        self.status = t!("tui-timer-now", timer = nightpost_core::api::timer_label(now).to_lowercase());
                         return Ok(());
                     }
                     ["off"] => 0,
@@ -899,7 +899,7 @@ impl App {
             Update::Event(Event::TimerChanged { name, seconds }) => {
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
                     c.timer = seconds;
-                    self.status = t!("tui-timer-set", name = name, timer = nightpost_core::api::timer_label(seconds));
+                    self.status = t!("tui-timer-set", name = name, timer = nightpost_core::api::timer_label(seconds).to_lowercase());
                 }
             }
             Update::Event(Event::Expired { name }) => {
