@@ -383,6 +383,9 @@ impl App {
                 popup(frame, &t!("tui-conversations"), lines, Some(keys));
             }
             Some(Overlay::Text { title, body }) => popup(frame, title, body.iter().map(|l| Line::from(l.clone())).collect(), Some(close())),
+            Some(Overlay::Recovery { body, .. }) => {
+                popup(frame, &t!("recovery-title"), body.iter().map(|l| Line::from(l.clone())).collect(), Some(keycaps(&[("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close"))])))
+            }
             Some(Overlay::Invite { name, link, qr }) => {
                 let qr_width = qr.first().map_or(0, |l| l.chars().count());
                 // Dark on light whatever the theme: not every phone reads

@@ -56,6 +56,8 @@ enum Overlay {
     /// Ctrl+K: the conversations, filtered by what is typed.
     Picker { filter: String, selected: usize },
     Text { title: String, body: Vec<String> },
+    /// The recovery phrase: `c` copies it.
+    Recovery { body: Vec<String>, phrase: String },
     /// Shown with its QR code when the terminal is big enough for all of it.
     Invite { name: String, link: String, qr: Vec<String> },
     /// Someone used our code: keep them only if the numbers match.
@@ -463,6 +465,10 @@ impl App {
                 if let Err(e) = expect_done(requests.call(&Request::Remove { name, wipe: answer == 1 }).await) {
                     self.status = format!("{e:#}");
                 }
+            }
+            Some(Overlay::Recovery { phrase, .. }) if key.code == KeyCode::Char('c') => {
+                copy(phrase);
+                self.status = t!("tui-phrase-copied");
             }
             Some(Overlay::Invite { link, .. }) if key.code == KeyCode::Char('c') => {
                 copy(link);

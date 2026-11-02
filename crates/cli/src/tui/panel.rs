@@ -269,7 +269,7 @@ impl App {
                         let cells: Vec<String> = chunk.iter().enumerate().map(|(i, w)| format!("{:>2}. {:<9}", row * 4 + i + 1, w)).collect();
                         body.push(format!("  {}", cells.join("  ").trim_end()));
                     }
-                    self.overlay = Some(Overlay::Text { title: t!("recovery-title"), body });
+                    self.overlay = Some(Overlay::Recovery { body, phrase: phrase.to_string() });
                 }
                 other => self.status = unexpected(other),
             },

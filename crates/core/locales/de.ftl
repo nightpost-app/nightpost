@@ -475,3 +475,6 @@ mac-photo-not-picture = es ist kein Bild
 mac-photo-resize = es konnte nicht verkleinert werden
 mac-photo-reencode = es konnte nicht neu kodiert werden
 err-no-daemon = Nightpost läuft nicht. Starte es zuerst: nightpost daemon (oder öffne einfach nightpost).
+copy-phrase = Phrase kopieren
+tui-phrase-copied = Phrase kopiert (wenn das Terminal es erlaubt). Füge sie in deinen Passwortmanager ein, nicht in eine Nachricht.
+hint-copy-phrase = Phrase kopieren

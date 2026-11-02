@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use nightpost_core::api::{Reply, Request};
 use nightpost_core::{dbkey, i18n, t};
 
-use crate::{State, Theme, View, as_launched, call, dir};
+use crate::{CopyButton, State, Theme, View, as_launched, call, dir};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Section {
@@ -582,7 +582,12 @@ fn Recovery() -> Element {
                     }
                 }
             }
-            div { button { class: "ghost", onclick: show, {if phrase.read().is_some() { t!("recovery-hide") } else { t!("recovery-show") }} } }
+            div { class: "row",
+                button { class: "ghost", onclick: show, {if phrase.read().is_some() { t!("recovery-hide") } else { t!("recovery-show") }} }
+                if let Some(words) = phrase.read().as_ref() {
+                    CopyButton { text: words.clone(), label: t!("copy-phrase") }
+                }
+            }
         }
     }
 }
