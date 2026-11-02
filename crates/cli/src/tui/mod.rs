@@ -330,7 +330,8 @@ impl App {
         }
         let empty = self.input.is_empty();
         match key.code {
-            KeyCode::Tab => return self.focus = next(self.focus, 1),
+            // With the command menu open, Tab completes (in on_input_key).
+            KeyCode::Tab if self.focus != Focus::Input || matching(&self.input).is_empty() => return self.focus = next(self.focus, 1),
             KeyCode::BackTab => return self.focus = next(self.focus, 2),
             KeyCode::PageUp => return self.scroll += 10,
             KeyCode::PageDown => return self.scroll = self.scroll.saturating_sub(10),
