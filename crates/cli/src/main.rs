@@ -113,7 +113,7 @@ async fn run(args: Vec<String>) -> Result<()> {
         }
     };
 
-    let mut client = Client::connect(&dir).await.context("is `nightpost daemon` running?")?;
+    let mut client = Client::connect(&dir).await.map_err(|_| anyhow::anyhow!(nightpost_core::t!("err-no-daemon")))?;
     match client.call(&request).await? {
         Reply::Error { message } => bail!("{message}"),
         Reply::Sent { id } => println!("{id}"),
@@ -204,7 +204,7 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
 }
 
 async fn listen(dir: &Path) -> Result<Client> {
-    let mut client = Client::connect(dir).await.context("is `nightpost daemon` running?")?;
+    let mut client = Client::connect(dir).await.map_err(|_| anyhow::anyhow!(nightpost_core::t!("err-no-daemon")))?;
     match client.call(&Request::Listen).await? {
         Reply::Listening => Ok(client),
         other => bail!("unexpected reply {other:?}"),

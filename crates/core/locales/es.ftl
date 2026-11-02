@@ -474,3 +474,4 @@ mac-show-in-finder = Mostrar en el Finder
 mac-photo-not-picture = no es una imagen
 mac-photo-resize = no se pudo redimensionar
 mac-photo-reencode = no se pudo volver a codificar
+err-no-daemon = Nightpost no está en marcha. Inícialo primero: nightpost daemon (o simplemente abre nightpost).
