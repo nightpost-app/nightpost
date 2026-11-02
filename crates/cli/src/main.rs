@@ -443,8 +443,9 @@ async fn start_daemon(dir: &Path) -> Result<()> {
             }
             let text = std::fs::read_to_string(&log_path).unwrap_or_default();
             if let Some(status) = daemon.try_wait()? {
-                if text.contains("wrong key") {
-                    eprintln!("\r\x1b[K{}", t!("wrong-passphrase"));
+                let lost = text.contains(&t!("err-keychain-lost"));
+                if lost || text.contains("wrong key") {
+                    eprintln!("\r\x1b[K{}", if lost { t!("err-keychain-lost") } else { t!("wrong-passphrase") });
                     // Right passphrase, other keychain: the words open it.
                     eprint!("{} ", t!("recovery-ask"));
                     std::io::stderr().flush()?;
