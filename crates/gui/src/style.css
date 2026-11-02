@@ -381,11 +381,10 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 
 /* Someone's panel, over the right of the conversation. */
 .person { position: absolute; top: 0; right: 0; bottom: 0; z-index: 4; width: min(340px, 100%); overflow-y: auto; background: var(--side); border-left: 1px solid var(--line); box-shadow: -18px 0 40px -24px var(--shadow); padding: 14px 22px 28px; display: flex; flex-direction: column; gap: 24px; }
-/* Stays at the top while the panel scrolls, the close button with it; the
-   rest scrolls under the button, which hides it. */
-.person-top { position: sticky; top: 0; z-index: 1; pointer-events: none; display: flex; justify-content: flex-start; margin: 0 0 -12px -10px; }
-.person-top > * { pointer-events: auto; }
-.person-top .close { background: var(--side); }
+/* A bar that stays at the top while the panel scrolls, solid, so that what
+   scrolls goes under it and not under the close button or the window's
+   (the controls sit at 22px, 26px high: the bar is taller than they are). */
+.person-top { position: sticky; top: -14px; z-index: 1; display: flex; align-items: center; justify-content: flex-start; height: 70px; margin: -14px -22px 0; padding: 0 12px; background: var(--side); border-bottom: 1px solid var(--line); flex: none; }
 .person-top .close:hover { background: var(--selected); }
 .person-photo { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .row { display: flex; gap: 8px; align-items: center; }
