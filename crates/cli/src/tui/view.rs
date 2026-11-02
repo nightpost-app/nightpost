@@ -145,9 +145,13 @@ impl App {
         let inner = pad(block.inner(area));
         frame.render_widget(block, area);
 
-        let mut lines = self.thread_lines(c, inner.width as usize);
+        let (mut lines, starts) = self.thread_lines(c, inner.width as usize);
         let height = inner.height as usize;
         let room = lines.len().saturating_sub(height);
+        if let Some(i) = self.jump.take() {
+            // The message a little below the top, with its header above it.
+            self.scroll = room.saturating_sub(starts.get(i).copied().unwrap_or(0).saturating_sub(3));
+        }
         self.scroll = self.scroll.min(room);
         // Few messages sit at the bottom, by the box, as in any conversation.
         if lines.len() < height {
@@ -194,8 +198,10 @@ impl App {
 
     /// The conversation: a rule between days, each run of messages under
     /// its sender's name and time, ours marked sent, delivered or read.
-    fn thread_lines(&self, c: &Conversation, width: usize) -> Vec<Line<'static>> {
+    /// The rows, and the row where each message starts.
+    fn thread_lines(&self, c: &Conversation, width: usize) -> (Vec<Line<'static>>, Vec<usize>) {
         let mut lines = Vec::new();
+        let mut starts = Vec::new();
         if c.messages.is_empty() {
             lines.push(Line::styled(t!("no-messages"), DIM));
         }
@@ -221,6 +227,7 @@ impl App {
                 (true, true, false) => Some(Span::styled("✓✓", DIM)),
                 (true, true, true) => Some(Span::styled(t!("tui-read-mark"), Style::new().fg(ACCENT))),
             };
+            starts.push(lines.len());
             let mut rows: Vec<Line> = wrap_words(&m.text, width.saturating_sub(2)).into_iter().map(|r| Line::from(format!("  {r}"))).collect();
             if let (Some(mark), Some(last)) = (mark, rows.last_mut()) {
                 // After the text, or under it when it does not fit.
@@ -237,7 +244,7 @@ impl App {
             lines.push(Line::default());
             lines.push(Line::from(vec![Span::styled(format!("{} ", self.spinner()), Style::new().fg(ACCENT)), Span::styled(t!("typing", name = c.name), DIM)]));
         }
-        lines
+        (lines, starts)
     }
 
     /// The box wraps by characters, the same way the cursor is placed.
@@ -360,6 +367,30 @@ impl App {
         match &self.overlay {
             None => {}
             Some(Overlay::Help) => popup(frame, &t!("tui-shortcuts"), self.help(), Some(close())),
+            Some(Overlay::Search { query, selected }) => {
+                let hits = self.hits(query);
+                let mut lines = vec![Line::from(vec![Span::styled(format!("{} ", t!("tui-search")), DIM), Span::raw(query.clone()), Span::styled("▏", Style::new().fg(ACCENT))]), Line::default()];
+                if let Some(c) = self.current() {
+                    if hits.is_empty() && !query.is_empty() {
+                        lines.push(Line::styled(t!("tui-no-match"), DIM));
+                    }
+                    // A window of what fits, around the one chosen.
+                    let at = (*selected).min(hits.len().saturating_sub(1));
+                    for (row, &i) in hits.iter().enumerate().skip(at.saturating_sub(5)).take(8) {
+                        let m = &c.messages[i];
+                        let who = if m.outgoing { t!("tui-you") } else { c.name.clone() };
+                        let text: String = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        lines.push(Line::from(vec![
+                            Span::styled(if row == at { "› " } else { "  " }, Style::new().fg(ACCENT)),
+                            Span::styled(format!("{} ", short_time(m.time)), DIM),
+                            Span::styled(fit(&who, 10), if m.outgoing { STRONG } else { name_style(&c.name) }),
+                            Span::styled(fit(&text, 40).trim_end().to_string(), if row == at { Style::new() } else { DIM }),
+                        ]));
+                    }
+                }
+                let keys = keycaps(&[("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-show")), ("Esc", t!("hint-close"))]);
+                popup(frame, &t!("tui-search-title"), lines, Some(keys));
+            }
             Some(Overlay::Picker { filter, selected }) => {
                 let found = self.found(filter);
                 let mut lines = vec![Line::from(vec![Span::styled(format!("{} ", t!("tui-go-to")), DIM), Span::raw(filter.clone()), Span::styled("▏", Style::new().fg(ACCENT))]), Line::default()];
@@ -439,6 +470,7 @@ impl App {
                 vec![
                     ("Tab".into(), t!("help-next-pane")),
                     ("Ctrl+K".into(), t!("help-go-to")),
+                    ("Ctrl+F".into(), t!("help-search")),
                     (format!("{} {}", t!("key-pgup"), t!("key-pgdn")), t!("help-scroll-thread")),
                     (format!("{}  {}", t!("key-home"), t!("key-end")), t!("help-top-bottom")),
                     ("Ctrl+C".into(), t!("help-quit")),

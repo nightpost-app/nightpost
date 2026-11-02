@@ -55,6 +55,8 @@ enum Overlay {
     Help,
     /// Ctrl+K: the conversations, filtered by what is typed.
     Picker { filter: String, selected: usize },
+    /// Ctrl+R: the messages of this conversation with what is typed in them.
+    Search { query: String, selected: usize },
     Text { title: String, body: Vec<String> },
     /// The recovery phrase: `c` copies it.
     Recovery { body: Vec<String>, phrase: String },
@@ -111,6 +113,8 @@ fn commands() -> Vec<Command> {
         c("/mute", "[1h | 8h]".into(), t!("help-mute")),
         c("/unmute", String::new(), t!("help-unmute")),
         c("/remove", String::new(), t!("help-remove")),
+        c("/copy", String::new(), t!("help-copy")),
+        c("/log", String::new(), t!("help-log")),
         c("/settings", String::new(), t!("help-settings")),
         c("/network", String::new(), t!("help-network")),
         c("/lock", String::new(), t!("help-lock")),
@@ -141,6 +145,8 @@ struct App {
     menu_top: usize,
     /// Lines scrolled up from the end of the conversation.
     scroll: usize,
+    /// A message to bring into view (its index), set by the search.
+    jump: Option<usize>,
     status: String,
     overlay: Option<Overlay>,
     /// Names we gave a code to and wait for.
@@ -202,6 +208,7 @@ pub async fn run(dir: &Path) -> Result<()> {
         menu: 0,
         menu_top: 0,
         scroll: 0,
+        jump: None,
         status: String::new(),
         overlay: None,
         codes: Vec::new(),
@@ -323,6 +330,7 @@ impl App {
         match key.code {
             KeyCode::Char('c' | 'q') if ctrl => return self.quit = true,
             KeyCode::Char('k') if ctrl => return self.overlay = Some(Overlay::Picker { filter: String::new(), selected: 0 }),
+            KeyCode::Char('f' | 'r') if ctrl && self.overlay.is_none() && self.current().is_some() => return self.overlay = Some(Overlay::Search { query: String::new(), selected: 0 }),
             _ => {}
         }
         if self.overlay.is_some() {
@@ -434,6 +442,10 @@ impl App {
             Some(Overlay::Picker { filter, .. }) => self.found(filter),
             _ => Vec::new(),
         };
+        let hits = match &self.overlay {
+            Some(Overlay::Search { query, .. }) => self.hits(query),
+            _ => Vec::new(),
+        };
         match self.overlay.as_mut() {
             Some(Overlay::Confirm { name, selected, .. }) => {
                 let Some(answer) = panel::pick(key.code, selected, 2) else { return };
@@ -475,6 +487,27 @@ impl App {
                 copy(link);
                 self.status = t!("tui-link-copied");
             }
+            Some(Overlay::Search { query, selected }) => match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Down => *selected = (*selected + 1).min(hits.len().saturating_sub(1)),
+                KeyCode::Backspace => {
+                    query.pop();
+                    *selected = 0;
+                }
+                KeyCode::Char(c) => {
+                    query.push(c);
+                    *selected = 0;
+                }
+                KeyCode::Enter => {
+                    self.jump = hits.get(*selected).copied();
+                    self.overlay = None;
+                    if self.jump.is_some() {
+                        self.focus = Focus::Thread;
+                    }
+                }
+                _ => {}
+            },
             Some(Overlay::Picker { filter, selected }) => match key.code {
                 KeyCode::Esc => self.overlay = None,
                 KeyCode::Up => *selected = selected.saturating_sub(1),
@@ -600,6 +633,19 @@ impl App {
             ["help"] => self.overlay = Some(Overlay::Help),
             ["quit"] => self.quit = true,
             ["lock"] => self.lock(requests).await,
+            ["copy"] => {
+                let last = self.current().and_then(|c| c.messages.iter().rev().find(|m| !m.outgoing)).map(|m| m.text.clone());
+                let Some(text) = last else { bail!(t!("tui-nothing-to-copy")) };
+                copy(&text);
+                self.status = t!("tui-message-copied");
+            }
+            ["log"] => {
+                let text = std::fs::read_to_string(self.dir.join("daemon.log")).unwrap_or_default();
+                let lines: Vec<&str> = text.lines().collect();
+                // Nothing in it that could move the cursor or draw outside the box.
+                let body = lines[lines.len().saturating_sub(30)..].iter().map(|l| l.chars().filter(|c| !c.is_control()).collect()).collect();
+                self.overlay = Some(Overlay::Text { title: t!("log-title"), body });
+            }
             ["settings"] => self.open_settings(0, requests).await,
             ["network"] => self.open_settings(panel::NETWORK, requests).await,
             ["info"] => self.overlay = Some(Overlay::Info { name: self.current_name()?, selected: 0 }),
@@ -679,6 +725,13 @@ impl App {
 
     fn current_name(&self) -> Result<String> {
         Ok(self.current().with_context(|| t!("tui-no-selection"))?.name.clone())
+    }
+
+    /// The messages of this conversation with `query` in them, the latest first.
+    fn hits(&self, query: &str) -> Vec<usize> {
+        let query = query.to_lowercase();
+        let Some(c) = self.current().filter(|_| !query.is_empty()) else { return Vec::new() };
+        (0..c.messages.len()).rev().filter(|&i| c.messages[i].text.to_lowercase().contains(&query)).collect()
     }
 
     /// The conversations whose name has `filter` in it, as indices.
@@ -983,7 +1036,7 @@ mod tests {
         assert_eq!(names("/ac"), ["/accept", "/acceptcode"]);
         // Starts with first, then contains.
         assert_eq!(names("/mute"), ["/mute", "/unmute"]);
-        assert_eq!(names("/co"), ["/code", "/acceptcode"]);
+        assert_eq!(names("/co"), ["/code", "/copy", "/acceptcode"]);
         // Arguments being typed: the menu is gone.
         assert!(names("/invite bob").is_empty());
         assert!(names("salut").is_empty());
