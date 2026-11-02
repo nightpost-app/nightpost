@@ -286,11 +286,16 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
                 eprintln!("no lyrebird next to nightpost nor on the PATH: on a network that blocks Tor, Nightpost cannot get around it");
             }
             let mut shown = String::new();
+            let mut top = 0;
             // The daemon only exists once Tor is up; until then the latest state waits here.
             let (status, mut status_changes) = tokio::sync::watch::channel(Network::default());
             let bridges_config = lyrebird.map(|lyrebird| Bridges { lyrebird, lines });
             let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges_config, move |network| {
-                if network.line != shown {
+                // Until Tor is up, arti counts again from the start when it goes on to
+                // the bridge: a number that goes back reads as a second start.
+                top = top.max(network.percent);
+                let back = network.percent < top && top < 100;
+                if network.line != shown && !back {
                     eprintln!("{}", network.line);
                     shown = network.line.clone();
                 }
