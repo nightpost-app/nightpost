@@ -374,7 +374,7 @@ impl App {
         let close = || keycaps(&[("Esc", t!("hint-close"))]);
         match &self.overlay {
             None => {}
-            Some(Overlay::Help) => popup(frame, &t!("tui-shortcuts"), self.help(), Some(close())),
+            Some(Overlay::Help) => popup(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(close())),
             Some(Overlay::Search { query, selected }) => {
                 let hits = self.hits(query);
                 let mut lines = vec![Line::from(vec![Span::styled(format!("{} ", t!("tui-search")), DIM), Span::raw(query.clone()), Span::styled("▏", Style::new().fg(ACCENT))]), Line::default()];
@@ -469,8 +469,9 @@ impl App {
         }
     }
 
-    /// Every key, grouped by where it works, in two columns.
-    fn help(&self) -> Vec<Line<'static>> {
+    /// Every key, grouped by where it works, in two columns (one when the
+    /// screen is too narrow for both).
+    fn help(&self, room: u16) -> Vec<Line<'static>> {
         let enter = t!("key-enter");
         let left: Vec<(String, Vec<(String, String)>)> = vec![
             (
@@ -528,11 +529,14 @@ impl App {
         };
         let (left, right) = (column(&left), column(&right));
         let left_width = left.iter().map(|l| l.iter().map(|s| cols(&s.content)).sum::<usize>()).max().unwrap_or(0) + 4;
+        let width_of = |c: &Vec<Vec<Span>>| c.iter().map(|l| l.iter().map(|s| cols(&s.content)).sum::<usize>()).max().unwrap_or(0);
+        let narrow = left_width + width_of(&right) + 6 > room as usize;
+        let (left, right) = if narrow { ([left, vec![Vec::new()], right].concat(), Vec::new()) } else { (left, right) };
         let mut lines: Vec<Line> = (0..left.len().max(right.len()))
             .map(|i| {
                 let mut spans = left.get(i).cloned().unwrap_or_default();
                 let used: usize = spans.iter().map(|s| cols(&s.content)).sum();
-                spans.push(Span::raw(" ".repeat(left_width - used)));
+                spans.push(Span::raw(" ".repeat(left_width.saturating_sub(used))));
                 spans.extend(right.get(i).cloned().unwrap_or_default());
                 Line::from(spans)
             })
