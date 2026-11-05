@@ -71,6 +71,8 @@ enum Overlay {
     Confirm { name: String, number: String, selected: usize },
     /// Their safety number, to mark compared.
     Verify { name: String, number: String, selected: usize },
+    /// Add someone: four ways in, each one leaves its command in the box.
+    Add { selected: usize },
     /// Remove them, maybe with the conversation.
     Remove { name: String, selected: usize },
     /// What we know of them, and what can be done about them.
@@ -108,6 +110,7 @@ fn commands() -> Vec<Command> {
     let c = |name, args: String, about| Command { name, args, about };
     vec![
         c("/help", String::new(), t!("help-help")),
+        c("/add", String::new(), t!("help-add")),
         c("/invite", arg(t!("arg-name")), t!("help-invite")),
         c("/code", arg(t!("arg-name")), t!("help-code")),
         c("/accept", format!("{} {}", arg(t!("arg-link")), arg(t!("arg-name"))), t!("help-accept")),
@@ -365,6 +368,7 @@ impl App {
                     self.insert("/");
                 }
                 KeyCode::Char('v') => self.run_command("verify", requests, updates).await,
+                KeyCode::Char('a') => self.overlay = Some(Overlay::Add { selected: 0 }),
                 KeyCode::Char('?') => self.overlay = Some(Overlay::Help(0)),
                 KeyCode::Char('q') => self.quit = true,
                 _ => {}
@@ -487,6 +491,21 @@ impl App {
                 if answer == 0 {
                     self.set_person(&name, |p| p.verified = true, requests).await;
                 }
+            }
+            Some(Overlay::Add { selected }) => {
+                let Some(answer) = panel::pick(key.code, selected, 5) else { return };
+                self.overlay = None;
+                let (command, hint) = match answer {
+                    0 => ("/invite ", t!("add-type-name")),
+                    1 => ("/code ", t!("add-type-name")),
+                    2 => ("/accept ", t!("add-type-link")),
+                    3 => ("/acceptcode ", t!("add-type-code")),
+                    _ => return,
+                };
+                self.input = command.to_string();
+                self.cursor = self.input.len();
+                self.focus = Focus::Input;
+                self.status = hint;
             }
             Some(Overlay::Remove { name, selected }) => {
                 let Some(answer) = panel::pick(key.code, selected, 3) else { return };
@@ -664,6 +683,7 @@ impl App {
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
             ["help"] => self.overlay = Some(Overlay::Help(0)),
+            ["add"] => self.overlay = Some(Overlay::Add { selected: 0 }),
             ["quit"] => self.quit = true,
             ["lock"] => self.lock(requests).await,
             ["copy"] => {

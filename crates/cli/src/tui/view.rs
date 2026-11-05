@@ -123,6 +123,11 @@ impl App {
             let style = if on || c.unread > 0 { Style::new() } else { DIM };
             lines.push(Line::from(vec![bar, Span::styled(format!("  {}", fit(&preview, width.saturating_sub(3))), style)]));
         }
+        // Alone with the note: say how to add someone.
+        if self.conversations.len() <= 1 {
+            lines.push(Line::default());
+            lines.extend(wrap_words(&t!("tui-add-hint"), width.saturating_sub(2)).into_iter().map(|row| Line::styled(format!(" {row}"), Style::new().fg(ACCENT))));
+        }
         frame.render_widget(Paragraph::new(lines), rows);
 
         let ok = self.network.percent == 100 && !self.network.blocked();
@@ -304,6 +309,7 @@ impl App {
             Focus::List => vec![
                 ("↑↓".into(), t!("hint-choose")),
                 (t!("key-enter"), t!("hint-write")),
+                ("a".into(), t!("hint-add")),
                 ("Tab".into(), t!("hint-pane")),
                 ("v".into(), t!("hint-verify")),
                 ("?".into(), t!("hint-help")),
@@ -488,6 +494,10 @@ impl App {
                 lines.extend(answers(&[(t!("they-match"), Style::new()), (t!("not-now"), Style::new())], *selected));
                 popup(frame, &t!("safety-label", name = name), lines, Some(answer_keys()));
             }
+            Some(Overlay::Add { selected }) => {
+                let lines = answers(&add_answers(), *selected);
+                popup(frame, &t!("add-title"), lines, Some(answer_keys()));
+            }
             Some(Overlay::Remove { name, selected }) => {
                 let mut lines = vec![Line::from(t!("remove-help", name = name))];
                 lines.extend(answers(&remove_answers(name), *selected));
@@ -522,6 +532,7 @@ impl App {
                     ("↑ ↓   j k".into(), t!("hint-choose")),
                     (enter.clone(), t!("help-write-to")),
                     ("v".into(), t!("hint-verify")),
+                    ("a".into(), t!("help-add")),
                     ("?".into(), t!("help-help")),
                     ("q".into(), t!("hint-quit")),
                 ],
@@ -576,6 +587,17 @@ impl App {
         lines.push(Line::styled(t!("tui-commands-hint"), DIM));
         lines
     }
+}
+
+/// Adding someone: what they have (or want) is the way in.
+pub(super) fn add_answers() -> [(String, Style); 5] {
+    [
+        (t!("add-create-link"), Style::new()),
+        (t!("add-create-code"), Style::new()),
+        (t!("add-use-link"), Style::new()),
+        (t!("add-use-code"), Style::new()),
+        (t!("cancel"), Style::new()),
+    ]
 }
 
 /// Removing someone: keep the conversation, delete it too, or not at all.
