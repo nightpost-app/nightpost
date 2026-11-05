@@ -260,7 +260,13 @@ impl<T: Transport + 'static> Daemon<T> {
     /// What the transport reports; told to interfaces when it changes.
     pub fn set_network(&self, network: Network) {
         if *self.network.borrow() != network {
-            *self.network.borrow_mut() = network.clone();
+            let before = std::mem::replace(&mut *self.network.borrow_mut(), network.clone());
+            // Tor is back (the network came back, or it finished connecting):
+            // the waits that grew while it was away are no use now.
+            if (before.blocked() && !network.blocked()) || (before.percent < 100 && network.percent == 100) {
+                self.backoff.borrow_mut().clear();
+                self.wake.notify_one();
+            }
             let _ = self.events.send(Event::Network { network });
         }
     }
@@ -1186,6 +1192,31 @@ mod tests {
                 bob.start().await.unwrap();
                 assert!(message("alice", id, "tu es là ?")(&next(&mut bob_events).await));
                 assert_eq!(next(&mut alice_events).await, Event::Delivered { to: "bob".into(), id: hex(&id) });
+            })
+            .await;
+    }
+
+    /// Tor coming back clears the waits that grew while it was away, so
+    /// what is queued goes at once instead of after the last wait.
+    #[tokio::test]
+    async fn tor_coming_back_clears_the_waits() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let alice = open(dir.path(), "alice", &Network::default());
+                let target = (vec![1u8; 33], 1u8);
+                let waiting = || alice.backoff.borrow_mut().insert(target.clone(), (5, Instant::now() + Duration::from_secs(600)));
+                let tor = |percent, entry| crate::api::Network { percent, entry, ..Default::default() };
+                alice.set_network(tor(100, Some(false)));
+                waiting();
+                alice.set_network(tor(100, Some(false)));
+                assert!(!alice.backoff.borrow().is_empty(), "blocked: still waiting");
+                alice.set_network(tor(100, Some(true)));
+                assert!(alice.backoff.borrow().is_empty(), "back: the waits are gone");
+                waiting();
+                alice.set_network(tor(50, None));
+                alice.set_network(tor(100, None));
+                assert!(alice.backoff.borrow().is_empty(), "connected: the waits are gone");
             })
             .await;
     }
