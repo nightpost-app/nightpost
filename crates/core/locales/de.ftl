@@ -381,6 +381,7 @@ help-code = ein 12-stelliger Code zum Vorlesen
 help-accept = einen Link verwenden
 help-acceptcode = einen vorgelesenen Code verwenden
 help-add = jemanden hinzufügen, Schritt für Schritt
+code-preparing = Code wird erstellt…
 add-title = Jemanden hinzufügen
 add-create-link = Einen Link zum Verschicken erstellen
 add-create-code = Einen Code zum Vorlesen erstellen

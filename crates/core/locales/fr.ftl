@@ -381,6 +381,7 @@ help-code = un code de 12 chiffres à lire
 help-accept = utiliser un lien
 help-acceptcode = utiliser un code qu’on t’a lu
 help-add = ajouter quelqu’un, pas à pas
+code-preparing = Création du code…
 add-title = Ajouter quelqu’un
 add-create-link = Créer un lien à lui envoyer
 add-create-code = Créer un code à lui lire

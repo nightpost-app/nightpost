@@ -384,6 +384,7 @@ help-code = a 12-digit code to read out
 help-accept = use a link
 help-acceptcode = use a code read out to you
 help-add = add someone, step by step
+code-preparing = Making the code…
 add-title = Add someone
 add-create-link = Create a link to send them
 add-create-code = Create a code to read out to them

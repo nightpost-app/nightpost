@@ -89,6 +89,8 @@ enum Update {
     Event(Event),
     /// A long request (accepting an invitation) finished.
     Done(String),
+    /// The code for someone is ready (the daemon takes a second to make it), or why not.
+    Code(String, Result<String, String>),
     DaemonGone,
 }
 
@@ -746,21 +748,20 @@ impl App {
                 self.overlay = Some(Overlay::Invite { name: name.to_string(), link, qr });
             }
             ["code", name] => {
-                let code = match requests.call(&Request::InviteCode { name: name.to_string() }).await? {
-                    Reply::Code { code } => code,
-                    Reply::Error { message } => bail!("{message}"),
-                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
-                };
-                self.codes.push(name.to_string());
-                self.overlay = Some(Overlay::Text {
-                    title: t!("code-title", name = name),
-                    body: vec![
-                        t!("code-help"),
-                        String::new(),
-                        format!("    {}", code.replace('-', "  ")),
-                        String::new(),
-                        t!("code-after", name = name),
-                    ],
+                // The daemon spends about a second on it: the screen keeps going.
+                self.status = t!("code-preparing");
+                let (dir, name, updates) = (self.dir.clone(), name.to_string(), updates.clone());
+                tokio::spawn(async move {
+                    let result = match Client::connect(&dir).await {
+                        Ok(mut client) => match client.call(&Request::InviteCode { name: name.clone() }).await {
+                            Ok(Reply::Code { code }) => Ok(code),
+                            Ok(Reply::Error { message }) => Err(message),
+                            Ok(other) => Err(t!("err-unexpected", reply = format!("{other:?}"))),
+                            Err(e) => Err(format!("{e:#}")),
+                        },
+                        Err(e) => Err(format!("{e:#}")),
+                    };
+                    let _ = updates.send(Update::Code(name, result));
                 });
             }
             ["accept", link, name] => self.long(name, Request::Accept { link: link.to_string(), name: name.to_string() }, updates),
@@ -895,6 +896,15 @@ impl App {
                     self.overlay = None;
                 }
                 self.status = status;
+            }
+            Update::Code(_, Err(message)) => self.status = message,
+            Update::Code(name, Ok(code)) => {
+                self.status.clear();
+                self.codes.push(name.clone());
+                self.overlay = Some(Overlay::Text {
+                    title: t!("code-title", name = name),
+                    body: vec![t!("code-help"), String::new(), format!("    {}", code.replace('-', "  ")), String::new(), t!("code-after", name = name)],
+                });
             }
             Update::DaemonGone => {
                 self.status = t!("daemon-stopped");

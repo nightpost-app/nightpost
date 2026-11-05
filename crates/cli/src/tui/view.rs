@@ -383,7 +383,11 @@ impl App {
             self.menu_top = self.menu + 1 - MENU_ROWS;
         }
         self.menu_top = self.menu_top.min(menu.len().saturating_sub(MENU_ROWS));
-        let name_width = menu.iter().map(|c| cols(c.name) + 1 + cols(&c.args)).max().unwrap_or(0) + 2;
+        // Room for the descriptions: on a narrow screen only the chosen command
+        // shows what follows its name, and a description is cut to what is left.
+        let wide = input.width >= 70;
+        let args_of = |c: &Command, on: bool| if wide || on { format!(" {}", c.args) } else { String::new() };
+        let name_width = menu.iter().map(|c| cols(c.name) + cols(&args_of(c, wide))).max().unwrap_or(0) + 2;
         let lines: Vec<Line> = menu
             .iter()
             .enumerate()
@@ -392,12 +396,16 @@ impl App {
             .map(|(i, c): (usize, &Command)| {
                 let on = i == self.menu;
                 let name_style = if on { STRONG } else { Style::new() };
-                let pad = " ".repeat(name_width.saturating_sub(cols(c.name) + 1 + cols(&c.args)));
+                let args = args_of(c, on);
+                let used = cols(c.name) + cols(&args);
+                let pad = " ".repeat(name_width.saturating_sub(used));
+                let room = (input.width as usize).saturating_sub(6 + used.max(name_width));
+                let about = if room >= 6 { fit(&c.about, room) } else { String::new() };
                 Line::from(vec![
                     Span::styled(if on { "› " } else { "  " }, Style::new().fg(ACCENT)),
                     Span::styled(c.name.to_string(), name_style),
-                    Span::styled(format!(" {}{pad}", c.args), DIM),
-                    Span::styled(c.about.clone(), DIM),
+                    Span::styled(format!("{args}{pad}"), DIM),
+                    Span::styled(about, DIM),
                 ])
             })
             .collect();
