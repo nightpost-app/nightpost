@@ -56,7 +56,8 @@ enum Focus {
 }
 
 enum Overlay {
-    Help,
+    /// The shortcuts, scrolled by this many lines when they do not fit.
+    Help(usize),
     /// Ctrl+K: the conversations, filtered by what is typed.
     Picker { filter: String, selected: usize },
     /// Ctrl+R: the messages of this conversation with what is typed in them.
@@ -364,7 +365,7 @@ impl App {
                     self.insert("/");
                 }
                 KeyCode::Char('v') => self.run_command("verify", requests, updates).await,
-                KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
+                KeyCode::Char('?') => self.overlay = Some(Overlay::Help(0)),
                 KeyCode::Char('q') => self.quit = true,
                 _ => {}
             },
@@ -376,7 +377,7 @@ impl App {
                     self.focus = Focus::Input;
                     self.insert("/");
                 }
-                KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
+                KeyCode::Char('?') => self.overlay = Some(Overlay::Help(0)),
                 KeyCode::Char('q') => self.quit = true,
                 _ => {}
             },
@@ -417,7 +418,7 @@ impl App {
                 self.insert("\n");
             }
             KeyCode::Enter => self.submit(requests, updates).await,
-            KeyCode::Char('?') if self.input.is_empty() => self.overlay = Some(Overlay::Help),
+            KeyCode::Char('?') if self.input.is_empty() => self.overlay = Some(Overlay::Help(0)),
             KeyCode::Left => self.cursor = prev_boundary(&self.input, self.cursor),
             KeyCode::Right => self.cursor = next_boundary(&self.input, self.cursor),
             KeyCode::Home => self.cursor = 0,
@@ -452,7 +453,21 @@ impl App {
             Some(Overlay::Search { query, .. }) => self.hits(query),
             _ => Vec::new(),
         };
+        let help_len = match self.overlay {
+            Some(Overlay::Help(_)) => self.help(crossterm::terminal::size().map_or(80, |s| s.0)).len(),
+            _ => 0,
+        };
         match self.overlay.as_mut() {
+            Some(Overlay::Help(s)) => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => *s = s.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *s = (*s + 1).min(help_len),
+                KeyCode::PageUp => *s = s.saturating_sub(10),
+                KeyCode::PageDown => *s = (*s + 10).min(help_len),
+                KeyCode::Home => *s = 0,
+                KeyCode::End => *s = help_len,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | '?') => self.overlay = None,
+                _ => {}
+            },
             Some(Overlay::Confirm { name, selected, .. }) => {
                 let Some(answer) = panel::pick(key.code, selected, 2) else { return };
                 let (name, keep) = (name.clone(), answer == 0);
@@ -636,7 +651,7 @@ impl App {
     async fn command(&mut self, command: &str, requests: &mut Client, updates: &mpsc::UnboundedSender<Update>) -> Result<()> {
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
-            ["help"] => self.overlay = Some(Overlay::Help),
+            ["help"] => self.overlay = Some(Overlay::Help(0)),
             ["quit"] => self.quit = true,
             ["lock"] => self.lock(requests).await,
             ["copy"] => {

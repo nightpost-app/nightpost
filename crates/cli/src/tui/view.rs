@@ -374,7 +374,10 @@ impl App {
         let close = || keycaps(&[("Esc", t!("hint-close"))]);
         match &self.overlay {
             None => {}
-            Some(Overlay::Help) => popup(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(close())),
+            Some(Overlay::Help(scroll)) => {
+                let keys = keycaps(&[("↑ ↓", t!("help-scroll")), ("Esc", t!("hint-close"))]);
+                popup_at(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(keys), *scroll)
+            }
             Some(Overlay::Search { query, selected }) => {
                 let hits = self.hits(query);
                 let mut lines = vec![Line::from(vec![Span::styled(format!("{} ", t!("tui-search")), DIM), Span::raw(query.clone()), Span::styled("▏", Style::new().fg(ACCENT))]), Line::default()];
@@ -471,7 +474,7 @@ impl App {
 
     /// Every key, grouped by where it works, in two columns (one when the
     /// screen is too narrow for both).
-    fn help(&self, room: u16) -> Vec<Line<'static>> {
+    pub(super) fn help(&self, room: u16) -> Vec<Line<'static>> {
         let enter = t!("key-enter");
         let left: Vec<(String, Vec<(String, String)>)> = vec![
             (
@@ -568,26 +571,48 @@ fn pad(r: Rect) -> Rect {
 
 /// A framed window in the middle, as small as its content and never wider
 /// than the screen (long lines wrap), keys at the bottom.
-pub(super) fn popup(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>) {
+pub(super) fn popup(frame: &mut Frame, title: &str, lines: Vec<Line>, keys: Option<Line<'static>>) {
+    popup_at(frame, title, lines, keys, 0)
+}
+
+/// The same, with the content scrolled by `scroll` lines when it is taller
+/// than the screen: the keys stay where they are.
+pub(super) fn popup_at(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>, scroll: usize) {
     let area = frame.area();
     lines.insert(0, Line::default());
-    if let Some(keys) = keys {
-        lines.extend([Line::default(), keys]);
-    }
     // Text wraps at a width that reads well (a QR code still fits); lines
     // made of several pieces, like the columns of the help, keep theirs.
-    let widest = lines.iter().map(|l| if l.spans.len() > 1 { l.width() } else { l.width().min(80) }).max().unwrap_or(0);
+    let widest = lines.iter().chain(&keys).map(|l| if l.spans.len() > 1 { l.width() } else { l.width().min(80) }).max().unwrap_or(0);
     let width = (widest.max(cols(title) + 4) as u16 + 4).min(area.width);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let height = (paragraph.line_count(width.saturating_sub(4)) as u16 + 3).min(area.height);
+    // Below the content: a blank row and the keys, then a spare row.
+    let below: u16 = if keys.is_some() { 3 } else { 1 };
+    let content = paragraph.line_count(width.saturating_sub(4)) as u16;
+    let height = (content + below + 2).min(area.height);
     let rect = Rect { x: (area.width - width) / 2, y: (area.height - height) / 2, width, height };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(ACCENT))
         .title(Span::styled(format!(" {title} "), STRONG))
         .padding(Padding::horizontal(1));
+    let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
-    frame.render_widget(paragraph.block(block), rect);
+    frame.render_widget(block, rect);
+    let body = Rect { height: inner.height.saturating_sub(below), ..inner };
+    let hidden = content.saturating_sub(body.height);
+    let top = (scroll.min(hidden as usize)) as u16;
+    frame.render_widget(paragraph.scroll((top, 0)), body);
+    if let Some(keys) = keys {
+        frame.render_widget(keys, Rect { y: inner.y + inner.height.saturating_sub(2), height: 1, ..inner });
+    }
+    // More above or below: an arrow at the edge.
+    let mark = |up: bool| Span::styled(if up { "▲" } else { "▼" }, DIM);
+    if top > 0 {
+        frame.render_widget(mark(true), Rect { x: rect.x + rect.width - 2, y: body.y, width: 1, height: 1 });
+    }
+    if top < hidden {
+        frame.render_widget(mark(false), Rect { x: rect.x + rect.width - 2, y: body.y + body.height.saturating_sub(1), width: 1, height: 1 });
+    }
 }
 
 /// Logical lines cut to `width` columns, by character: what the input box
