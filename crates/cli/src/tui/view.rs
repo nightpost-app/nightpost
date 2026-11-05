@@ -33,10 +33,12 @@ fn name_style(name: &str) -> Style {
     BOLD.fg(Color::Rgb(byte(1), byte(3), byte(5)))
 }
 
-/// A line of keys cut to `width` by dropping whole keys from the end.
+/// A line of keys cut to `width` by dropping keys, the last one (how to
+/// get out) never: the one before it goes first.
 pub(super) fn fit_keys(mut line: Line<'static>, width: usize) -> Line<'static> {
     while line.width() > width && line.spans.len() > 2 {
-        line.spans.truncate(line.spans.len() - 2);
+        let at = line.spans.len() - 4.min(line.spans.len());
+        line.spans.drain(at..at + 2);
     }
     line
 }
@@ -424,7 +426,7 @@ impl App {
         match &self.overlay {
             None => {}
             Some(Overlay::Help(scroll)) => {
-                let keys = keycaps(&[("↑ ↓", t!("help-scroll")), ("Esc", t!("hint-close"))]);
+                let keys = keycaps(&[("↑↓", t!("help-scroll")), ("Esc", t!("hint-close"))]);
                 popup_at(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(keys), *scroll);
             }
             Some(Overlay::Search { query, selected }) => {
@@ -461,7 +463,8 @@ impl App {
                     let last = preview(c);
                     let mut spans = vec![
                         Span::styled(if on { "› " } else { "  " }, Style::new().fg(ACCENT)),
-                        Span::styled(if reachable { "● " } else { "○ " }, if reachable { Style::new().fg(ACCENT) } else { DIM }),
+                        // As in the list: a pencil for the note, a dot for people.
+                        if c.note { Span::styled("✎ ", Style::new().fg(ACCENT)) } else { Span::styled(if reachable { "● " } else { "○ " }, if reachable { Style::new().fg(ACCENT) } else { DIM }) },
                         Span::styled(fit(&c.name, 14), name_style(&c.name)),
                         Span::styled(fit(&last, 36).trim_end().to_string(), if on { Style::new() } else { DIM }),
                     ];
@@ -474,11 +477,11 @@ impl App {
                 popup(frame, &t!("tui-conversations"), lines, Some(keys));
             }
             Some(Overlay::Text { title, body }) => {
-                let keys = keycaps(&[("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                let keys = keycaps(&[("↑↓", t!("help-scroll")), ("Esc", t!("hint-close"))]);
                 self.overlay_scroll.set(popup_at(frame, title, body.iter().map(|l| Line::from(l.clone())).collect(), Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Recovery { body, .. }) => {
-                let keys = keycaps(&[("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                let keys = keycaps(&[("↑↓", t!("help-scroll")), ("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close"))]);
                 self.overlay_scroll.set(popup_at(frame, &t!("recovery-title"), body.iter().map(|l| Line::from(l.clone())).collect(), Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Invite { name, link, qr }) => {
@@ -491,7 +494,7 @@ impl App {
                     vec![Line::styled(t!("tui-qr-too-small", width = qr_width + 8, height = qr.len() + 12), DIM)]
                 };
                 lines.extend([Line::default(), Line::styled(link.clone(), Style::new().fg(ACCENT)), Line::default(), Line::styled(t!("tui-invite-help", name = name), DIM)]);
-                let keys = keycaps(&[("c", t!("hint-copy")), ("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                let keys = keycaps(&[("↑↓", t!("help-scroll")), ("c", t!("hint-copy")), ("Esc", t!("hint-close"))]);
                 self.overlay_scroll.set(popup_at(frame, &t!("invite-title", name = name), lines, Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Confirm { name, number, selected }) => {

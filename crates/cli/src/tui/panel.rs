@@ -528,7 +528,12 @@ impl App {
         let keys = if s.editing {
             keycaps(&[(t!("key-enter").as_str(), t!("hint-newline")), ("Esc", t!("hint-done"))])
         } else {
-            keycaps(&[("←→", t!("hint-section")), ("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-change")), ("Esc", t!("hint-close"))])
+            // About has nothing to choose or change.
+            if s.tab == 4 {
+                keycaps(&[("←→", t!("hint-section")), ("Esc", t!("hint-close"))])
+            } else {
+                keycaps(&[("←→", t!("hint-section")), ("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-change")), ("Esc", t!("hint-close"))])
+            }
         };
         frame.render_widget(fit_keys(keys, inner.width as usize), Rect { y: inner.bottom() - 1, height: 1, ..inner });
     }
@@ -648,7 +653,7 @@ impl App {
         });
         let options: Vec<(String, Style)> = self.sheet(name).into_iter().map(|(text, style, _)| (text, style)).collect();
         lines.extend(answers(&options, selected));
-        popup(frame, &t!("about-name", name = name), lines, Some(answer_keys()));
+        popup(frame, &t!("about-name", name = name), lines, Some(keycaps(&[("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-confirm")), ("Esc", t!("hint-close"))])));
     }
 
     pub(super) fn draw_looking(&self, frame: &mut Frame, name: &str, since: tokio::time::Instant) {
