@@ -55,7 +55,7 @@ tor-from-bridge = Tor: die Brücke kommt nicht durch; Versuch ohne sie…
 
 err-starting = Tor ist noch nicht bereit: gleich noch einmal versuchen.
 err-already-contact = Bereits ein Kontakt.
-err-name-taken = { $name } ist bereits ein Kontakt.
+err-name-taken = Der Name { $name } ist schon vergeben. Wähle einen anderen.
 err-code-waiting = Ein Code für { $name } wartet bereits.
 err-not-confirmed = Nicht bestätigt.
 err-did-not-confirm = { $name } hat nicht bestätigt.
