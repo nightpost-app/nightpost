@@ -265,6 +265,7 @@ async fn watch(
                 if client.bootstrap_status().ready_for_traffic() {
                     let (entry, circuit) = reachable(&client).await;
                     (net.entry, net.circuit) = (Some(entry), Some(circuit));
+                    net.offline = !circuit && no_route();
                     progress(&net);
                 }
                 since = Instant::now();
@@ -276,8 +277,10 @@ async fn watch(
                 if client.bootstrap_status().ready_for_traffic() {
                     let (entry, circuit) = reachable(&client).await;
                     (net.entry, net.circuit) = (Some(entry), Some(circuit));
+                    net.offline = !circuit && no_route();
                     progress(&net);
-                    failures = if circuit { 0 } else { failures + 1 };
+                    // No route at all is not a blocked network: no bridge would help.
+                    failures = if circuit || net.offline { 0 } else { failures + 1 };
                     if failures < 2 {
                         since = Instant::now();
                         continue;
@@ -293,6 +296,12 @@ async fn watch(
             }
         }
     }
+}
+
+/// No route to anywhere: a UDP socket connects without sending anything, and
+/// fails at once when the system has no way out (Wi-Fi off, cable out).
+fn no_route() -> bool {
+    std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect("192.0.2.1:9")).is_err()
 }
 
 fn percent(frac: f32) -> u8 {

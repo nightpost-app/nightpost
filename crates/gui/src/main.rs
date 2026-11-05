@@ -865,7 +865,7 @@ fn RouteView(name: String) -> Element {
 fn reach_line(name: &str, net: &Network, link: Option<LinkState>) -> (&'static str, String) {
     let route = Route::new(net, link);
     if route.fail.is_some() {
-        ("fail", t!("net-blocked"))
+        ("fail", if net.offline { t!("net-offline") } else { t!("net-blocked") })
     } else if route.live == Some(0) {
         ("live", t!("connecting-percent", percent = net.percent))
     } else {

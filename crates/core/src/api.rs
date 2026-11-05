@@ -173,6 +173,10 @@ pub struct Network {
     /// a probe ran since the last start or switch.
     pub entry: Option<bool>,
     pub circuit: Option<bool>,
+    /// The computer has no route to the Internet at all (Wi-Fi off): not
+    /// Tor's doing, and no reason to switch to a bridge.
+    #[serde(default)]
+    pub offline: bool,
     /// The last line for people, as the daemon's log shows it.
     pub line: String,
 }
@@ -182,7 +186,9 @@ impl Network {
     /// interfaces show under the conversations.
     pub fn summary(&self) -> (String, String) {
         let line = self.line.strip_prefix("Tor: ").unwrap_or(&self.line).to_string();
-        if self.blocked() {
+        if self.blocked() && self.offline {
+            (t!("net-offline"), t!("net-offline-help"))
+        } else if self.blocked() {
             (t!("net-blocked"), line)
         } else if self.percent < 100 {
             (t!("net-connecting"), if line.is_empty() { format!("{}%", self.percent) } else { line })

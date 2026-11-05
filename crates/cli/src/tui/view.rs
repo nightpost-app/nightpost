@@ -219,7 +219,7 @@ impl App {
         }
         let net = &self.network;
         if net.blocked() {
-            return (t!("net-blocked"), Style::new().fg(Color::Red));
+            return (if net.offline { t!("net-offline") } else { t!("net-blocked") }, Style::new().fg(Color::Red));
         }
         if net.percent < 100 {
             return (t!("connecting-percent", percent = net.percent), DIM);
