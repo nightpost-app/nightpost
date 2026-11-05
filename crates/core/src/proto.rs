@@ -139,6 +139,10 @@ pub enum Frame {
     Ack { id: [u8; 16] },
     /// After an oral code: the inviter compared safety numbers and kept us.
     Welcome,
+    /// After an oral code: we cannot add you (already contacts). Sent in
+    /// place of a card, so the other side can say why instead of just
+    /// seeing the connection drop.
+    Refused,
 }
 
 /// What a libsignal message holds.

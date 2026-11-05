@@ -355,10 +355,14 @@ impl<T: Transport + 'static> Daemon<T> {
         let me = self.me();
         let hello = hello(&mut stream).await?;
         let (service, challenge) = Service::on_hello(&me, temp, hello).map_err(handshake)?;
-        ensure!(self.contact(&service.hello().account)?.is_none(), t!("err-already-contact"));
         proto::send(&mut stream, &challenge).await?;
         let proof: Proof = timeout(STEP, proto::receive(&mut stream)).await??;
         let peer = service.on_proof(&proof, None).map_err(handshake)?;
+        // Only once they proved who they are, and told rather than dropped.
+        if self.contact(&peer.account.serialize())?.is_some() {
+            proto::send(&mut stream, &Frame::Refused).await?;
+            bail!(t!("err-already-contact"));
+        }
         let (contact, bundle) = self.exchange_cards(&mut stream, &peer, &service.hello().devices, name).await?;
 
         let (keep, kept) = oneshot::channel();
@@ -753,7 +757,10 @@ impl<T: Transport + 'static> Daemon<T> {
         self.check_name(name)?;
         let bundle = WireBundle::new(&session::bundle(&self.store, device_id(DEVICE)?).await?)?;
         proto::send(stream, &Frame::Card { discovery: discovery_key(&self.discovery()), bundle }).await?;
-        let Frame::Card { discovery, bundle } = timeout(STEP, proto::receive(stream)).await?? else {
+        let Frame::Card { discovery, bundle } = (match timeout(STEP, proto::receive(stream)).await?? {
+            Frame::Refused => bail!(t!("err-already-contact")),
+            frame => frame,
+        }) else {
             bail!("expected a contact card");
         };
         let bundle = bundle.bundle()?;
@@ -916,7 +923,7 @@ impl<T: Transport + 'static> Daemon<T> {
                                 let _ = self.events.send(Event::Delivered { to: contact.name.clone(), id: hex(&id) });
                             }
                         }
-                        Some(Frame::Card { .. } | Frame::Welcome) => bail!("an invitation frame on a contact link"),
+                        Some(Frame::Card { .. } | Frame::Welcome | Frame::Refused) => bail!("an invitation frame on a contact link"),
                     },
                     Some(now) = woken.recv() => {
                         // Not queued: nothing waits for its acknowledgement.
@@ -1595,6 +1602,13 @@ mod tests {
                 assert!(accepting.await.unwrap().is_err());
                 assert!(others(&carol).is_empty());
                 assert_eq!(others(&alice).len(), 1);
+
+                // Alice still has bob, who no longer has her: she says so
+                // instead of just dropping the connection.
+                bob.remove("alice", false).await.unwrap();
+                let code = alice.invite_code("bob-again").await.unwrap();
+                let err = bob.accept_code(&code, "alice").await.unwrap_err();
+                assert_eq!(err.to_string(), t!("err-already-contact"));
             })
             .await;
     }
