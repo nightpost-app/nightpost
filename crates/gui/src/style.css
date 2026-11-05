@@ -427,7 +427,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 /* Behind a dialog, the page goes out of focus. A filter on the page itself:
    WebKitGTK does not always draw backdrop-filter. */
 :is(.app, .splash):has(~ .overlay) { filter: blur(7px); }
-.sheet { width: min(520px, 100%); max-height: 100%; overflow: auto; background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); color: var(--text); border: 1px solid color-mix(in srgb, var(--strong) 14%, transparent); border-radius: 14px; padding: 26px 30px 24px; box-shadow: 0 30px 60px -20px var(--shadow); }
+.sheet { width: min(520px, 100%); max-height: 100%; overflow: auto; background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--text); border: 1px solid color-mix(in srgb, var(--strong) 14%, transparent); border-radius: 14px; padding: 26px 30px 24px; box-shadow: 0 30px 60px -20px var(--shadow); }
 .sheet h3 { font: 600 25px/1.2 var(--display); color: var(--strong); margin: 0 0 10px; }
 .sheet p { color: var(--soft); line-height: 1.5; margin-bottom: 8px; }
 .sheet .block :is(p, label) { margin: 0; }
