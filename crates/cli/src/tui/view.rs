@@ -20,6 +20,8 @@ pub(super) const DIM: Style = Style::new().fg(Color::DarkGray);
 pub(super) const STRONG: Style = Style::new().fg(ACCENT).add_modifier(ratatui::style::Modifier::BOLD);
 pub(super) const BOLD: Style = Style::new().add_modifier(ratatui::style::Modifier::BOLD);
 const LIST_WIDTH: u16 = 30;
+/// Below this many columns the list and the conversation take turns.
+const NARROW: u16 = 70;
 const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
 /// Rows of the command menu.
 const MENU_ROWS: usize = 8;
@@ -55,14 +57,29 @@ impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let [main, bar] = Layout::vertical([Constraint::Min(6), Constraint::Length(1)]).areas(area);
-        let [list, right] = Layout::horizontal([Constraint::Length(LIST_WIDTH), Constraint::Min(20)]).areas(main);
+        // Wide: the list beside the conversation. Narrow: one at a time, the
+        // list when it has the focus, else the conversation.
+        let narrow = area.width < NARROW;
+        let list_width = (area.width / 3).clamp(20, LIST_WIDTH);
+        let (list, right) = if !narrow {
+            let [list, right] = Layout::horizontal([Constraint::Length(list_width), Constraint::Min(20)]).areas(main);
+            (list, right)
+        } else if self.focus == Focus::List {
+            (main, Rect { width: 0, height: 0, ..main })
+        } else {
+            (Rect { width: 0, height: 0, ..main }, main)
+        };
         let text_width = right.width.saturating_sub(4).max(1) as usize;
         let rows = wrap(&self.input, text_width).len().clamp(1, 6) as u16;
         let [thread, input] = Layout::vertical([Constraint::Min(3), Constraint::Length(rows + 2)]).areas(right);
         self.areas = [list, thread, input];
-        self.draw_list(frame, list);
-        self.draw_thread(frame, thread);
-        self.draw_input(frame, input, text_width, rows);
+        if list.width > 0 {
+            self.draw_list(frame, list);
+        }
+        if right.width > 0 {
+            self.draw_thread(frame, thread);
+            self.draw_input(frame, input, text_width, rows);
+        }
         self.draw_bar(frame, bar);
         self.draw_notice(frame, thread);
         self.draw_menu(frame, input);
@@ -129,9 +146,10 @@ impl App {
             return;
         };
         let (reach, reach_style) = self.reach(c);
+        let room = (area.width as usize).saturating_sub(cols(&c.name) + 8);
         let mut block = self
             .pane(Focus::Thread, Span::styled(format!(" {} ", c.name), name_style(&c.name)))
-            .title_top(Line::styled(format!(" {reach} "), reach_style).right_aligned());
+            .title_top(Line::styled(format!(" {} ", fit(&reach, room)), reach_style).right_aligned());
         let mut marks = Vec::new();
         if c.person.verified {
             marks.push(format!("✓ {}", t!("verified")));
@@ -209,7 +227,8 @@ impl App {
         let mut lines = Vec::new();
         let mut starts = Vec::new();
         if c.messages.is_empty() {
-            lines.push(Line::styled(if c.note { t!("note-empty") } else { t!("no-messages") }, DIM));
+            let text = if c.note { t!("note-empty") } else { t!("no-messages") };
+            lines.extend(wrap_words(&text, width).into_iter().map(|row| Line::styled(row, DIM)));
         }
         let sending = self.sending(c);
         for (i, m) in c.messages.iter().enumerate() {
@@ -301,12 +320,21 @@ impl App {
                 (t!("key-enter"), t!("help-send")),
                 (newline, t!("hint-newline")),
                 ("/".into(), t!("hint-commands")),
+                ("Esc".into(), t!("hint-list")),
                 ("Tab".into(), t!("hint-pane")),
                 ("Ctrl+K".into(), t!("hint-conversations")),
             ],
         };
-        let mut line = keycaps(&keys);
-        line.spans.insert(0, Span::raw(" "));
+        // The least useful (the last) go first when the line is too long.
+        let mut shown = keys.len();
+        let line = loop {
+            let mut line = keycaps(&keys[..shown]);
+            line.spans.insert(0, Span::raw(" "));
+            if line.width() <= area.width as usize || shown <= 1 {
+                break line;
+            }
+            shown -= 1;
+        };
         frame.render_widget(line, area);
     }
 
