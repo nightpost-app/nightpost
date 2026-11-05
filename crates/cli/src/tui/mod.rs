@@ -810,6 +810,11 @@ impl App {
             }
             // Keeping them is the answer given by default.
             ["remove"] => self.overlay = Some(Overlay::Remove { name: self.current_name()?, selected: 2 }),
+            // A known command with the wrong words: say how it goes.
+            [word, ..] if commands().iter().any(|c| c.name.strip_prefix('/') == Some(word)) => {
+                let c = commands().into_iter().find(|c| c.name.strip_prefix('/') == Some(word)).unwrap_or_else(|| unreachable!());
+                bail!(t!("tui-usage", usage = format!("{} {}", c.name, c.args).trim_end()))
+            }
             _ => bail!(t!("tui-unknown-command")),
         }
         Ok(())

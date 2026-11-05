@@ -367,6 +367,7 @@ tui-muted-forever = { $name } stumm bis /unmute
 tui-muted-until = { $name } stumm bis { $time }
 tui-unmuted = Mitteilungen von { $name } sind wieder an
 tui-unknown-command = Unbekannter Befehl: /help zeigt alle
+tui-usage = Verwendung: { $usage }
 tui-renamed = { $name } heißt jetzt { $to }
 tui-qr-too-small = Der QR-Code braucht ein Terminal mit { $width }×{ $height }: vergrößere es oder kopiere den Link.
 tui-invite-help = Gib sie nur { $name }. Sie gilt einmal, 7 Tage lang.
