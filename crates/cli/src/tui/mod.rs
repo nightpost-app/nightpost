@@ -563,6 +563,18 @@ impl App {
         let at = Position::new(mouse.column, mouse.row);
         let [list, thread, input] = self.areas;
         let menu = if self.focus == Focus::Input { matching(&self.input).len() } else { 0 };
+        let help_len = match self.overlay {
+            Some(Overlay::Help(_)) => self.help(crossterm::terminal::size().map_or(80, |s| s.0)).len(),
+            _ => 0,
+        };
+        match (mouse.kind, self.overlay.as_mut()) {
+            (MouseEventKind::ScrollUp, Some(Overlay::Help(s))) => *s = s.saturating_sub(3),
+            (MouseEventKind::ScrollDown, Some(Overlay::Help(s))) => *s = (*s + 3).min(help_len),
+            _ => {}
+        }
+        if matches!(self.overlay, Some(Overlay::Help(_))) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp if menu > 0 => self.menu = self.menu.saturating_sub(1),
             MouseEventKind::ScrollDown if menu > 0 => self.menu = (self.menu + 1).min(menu - 1),
