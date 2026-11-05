@@ -6,6 +6,7 @@
 mod panel;
 mod view;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -182,6 +183,8 @@ struct App {
     /// the first conversation the list showed: for the mouse.
     areas: [Rect; 3],
     list_top: usize,
+    /// How far a long window (text, recovery phrase, invitation) is scrolled.
+    overlay_scroll: Cell<usize>,
     started: Instant,
 }
 
@@ -207,36 +210,7 @@ pub async fn run(dir: &Path) -> Result<()> {
     // Asked before the screen changes: the answer comes back as input.
     let kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     let tmux = std::env::var_os("TMUX").is_some();
-    let mut app = App {
-        dir: dir.to_path_buf(),
-        conversations: Vec::new(),
-        selected: 0,
-        focus: Focus::Input,
-        input: String::new(),
-        cursor: 0,
-        menu: 0,
-        menu_top: 0,
-        scroll: 0,
-        jump: None,
-        status: String::new(),
-        overlay: None,
-        codes: Vec::new(),
-        network: Network::default(),
-        links: HashMap::new(),
-        notice: None,
-        focused: true,
-        notify: None,
-        prefs: Prefs::load(dir),
-        read_receipts: false,
-        typing_indicators: false,
-        quit: false,
-        typing: None,
-        pinged: None,
-        keys_told_apart: kitty || tmux,
-        areas: [Rect::default(); 3],
-        list_top: 0,
-        started: Instant::now(),
-    };
+    let mut app = App::new(dir, kitty || tmux);
     app.reload_contacts(&mut requests).await?;
     if let Ok(Reply::Status { network, links }) = requests.call(&Request::Status).await {
         app.network = network;
@@ -293,6 +267,9 @@ impl App {
             if self.notice.as_ref().is_some_and(|n| n.2.elapsed() > NOTICE_SHOWN) {
                 self.notice = None;
             }
+            if self.overlay.is_none() {
+                self.overlay_scroll.set(0);
+            }
             terminal.draw(|frame| self.draw(frame))?;
             if let Some((title, text)) = self.notify.take() {
                 // After the frame, never inside it.
@@ -332,6 +309,41 @@ impl App {
             || self.typing.is_some()
             || self.current().is_some_and(|c| self.sending(c))
             || matches!(self.overlay, Some(Overlay::Looking { .. } | Overlay::Settings(_)))
+    }
+
+    /// A blank interface, before the daemon has told it anything.
+    fn new(dir: &Path, keys_told_apart: bool) -> App {
+        App {
+        dir: dir.to_path_buf(),
+        conversations: Vec::new(),
+        selected: 0,
+        focus: Focus::Input,
+        input: String::new(),
+        cursor: 0,
+        menu: 0,
+        menu_top: 0,
+        scroll: 0,
+        jump: None,
+        status: String::new(),
+        overlay: None,
+        codes: Vec::new(),
+        network: Network::default(),
+        links: HashMap::new(),
+        notice: None,
+        focused: true,
+        notify: None,
+        prefs: Prefs::load(dir),
+        read_receipts: false,
+        typing_indicators: false,
+        quit: false,
+        typing: None,
+        pinged: None,
+        keys_told_apart,
+        areas: [Rect::default(); 3],
+        list_top: 0,
+        overlay_scroll: Cell::new(0),
+        started: Instant::now(),
+        }
     }
 
     async fn on_key(&mut self, key: KeyEvent, requests: &mut Client, updates: &mpsc::UnboundedSender<Update>) {
@@ -461,6 +473,18 @@ impl App {
             Some(Overlay::Help(_)) => self.help(crossterm::terminal::size().map_or(80, |s| s.0)).len(),
             _ => 0,
         };
+        if matches!(self.overlay, Some(Overlay::Text { .. } | Overlay::Recovery { .. } | Overlay::Invite { .. })) {
+            let at = self.overlay_scroll.get();
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => return self.overlay_scroll.set(at.saturating_sub(1)),
+                KeyCode::Down | KeyCode::Char('j') => return self.overlay_scroll.set(at + 1),
+                KeyCode::PageUp => return self.overlay_scroll.set(at.saturating_sub(10)),
+                KeyCode::PageDown => return self.overlay_scroll.set(at + 10),
+                KeyCode::Home => return self.overlay_scroll.set(0),
+                KeyCode::End => return self.overlay_scroll.set(usize::MAX / 2),
+                _ => {}
+            }
+        }
         match self.overlay.as_mut() {
             Some(Overlay::Help(s)) => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => *s = s.saturating_sub(1),
@@ -590,6 +614,15 @@ impl App {
             (MouseEventKind::ScrollUp, Some(Overlay::Help(s))) => *s = s.saturating_sub(3),
             (MouseEventKind::ScrollDown, Some(Overlay::Help(s))) => *s = (*s + 3).min(help_len),
             _ => {}
+        }
+        if matches!(self.overlay, Some(Overlay::Text { .. } | Overlay::Recovery { .. } | Overlay::Invite { .. })) {
+            let at = self.overlay_scroll.get();
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.overlay_scroll.set(at.saturating_sub(3)),
+                MouseEventKind::ScrollDown => self.overlay_scroll.set(at + 3),
+                _ => {}
+            }
+            return;
         }
         if matches!(self.overlay, Some(Overlay::Help(_))) {
             return;

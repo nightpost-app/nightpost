@@ -12,7 +12,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
-use super::view::{ACCENT, BOLD, DIM, STRONG, cols, keycaps, popup, wrap, wrap_words};
+use super::view::{ACCENT, BOLD, DIM, STRONG, cols, fit_keys, keycaps, popup, wrap, wrap_words};
 use super::{App, Overlay, now_millis};
 
 /// The settings' tabs, in order.
@@ -511,6 +511,11 @@ impl App {
             tabs.push(Span::styled(name, if i == s.tab { STRONG.add_modifier(ratatui::style::Modifier::UNDERLINED) } else { DIM }));
             tabs.push(Span::raw("   "));
         }
+        // Too many for the width: only this one, with its place among them.
+        if Line::from(tabs.clone()).width() > inner.width as usize {
+            let names = [t!("appearance"), t!("network"), t!("notifications"), t!("security"), t!("about")];
+            tabs = vec![Span::styled(format!("‹ {} › {}/{}", names[s.tab], s.tab + 1, names.len()), STRONG)];
+        }
         frame.render_widget(Line::from(tabs), Rect { height: 1, ..inner });
 
         let body = Rect { y: inner.y + 2, height: inner.height - 4, ..inner };
@@ -525,7 +530,7 @@ impl App {
         } else {
             keycaps(&[("←→", t!("hint-section")), ("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-change")), ("Esc", t!("hint-close"))])
         };
-        frame.render_widget(keys, Rect { y: inner.bottom() - 1, height: 1, ..inner });
+        frame.render_widget(fit_keys(keys, inner.width as usize), Rect { y: inner.bottom() - 1, height: 1, ..inner });
     }
 
     /// The items as lines `width` wide, and the lines of the selected row.

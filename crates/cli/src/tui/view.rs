@@ -33,6 +33,14 @@ fn name_style(name: &str) -> Style {
     BOLD.fg(Color::Rgb(byte(1), byte(3), byte(5)))
 }
 
+/// A line of keys cut to `width` by dropping whole keys from the end.
+pub(super) fn fit_keys(mut line: Line<'static>, width: usize) -> Line<'static> {
+    while line.width() > width && line.spans.len() > 2 {
+        line.spans.truncate(line.spans.len() - 2);
+    }
+    line
+}
+
 /// Keys drawn as keys, each followed by what it does.
 pub(super) fn keycaps(pairs: &[(impl AsRef<str>, String)]) -> Line<'static> {
     let mut spans = Vec::new();
@@ -405,12 +413,11 @@ impl App {
     }
 
     fn draw_overlay(&self, frame: &mut Frame, area: Rect) {
-        let close = || keycaps(&[("Esc", t!("hint-close"))]);
         match &self.overlay {
             None => {}
             Some(Overlay::Help(scroll)) => {
                 let keys = keycaps(&[("↑ ↓", t!("help-scroll")), ("Esc", t!("hint-close"))]);
-                popup_at(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(keys), *scroll)
+                popup_at(frame, &t!("tui-shortcuts"), self.help(frame.area().width), Some(keys), *scroll);
             }
             Some(Overlay::Search { query, selected }) => {
                 let hits = self.hits(query);
@@ -458,9 +465,13 @@ impl App {
                 let keys = keycaps(&[("↑↓", t!("hint-choose")), (t!("key-enter").as_str(), t!("hint-open")), ("Esc", t!("hint-close"))]);
                 popup(frame, &t!("tui-conversations"), lines, Some(keys));
             }
-            Some(Overlay::Text { title, body }) => popup(frame, title, body.iter().map(|l| Line::from(l.clone())).collect(), Some(close())),
+            Some(Overlay::Text { title, body }) => {
+                let keys = keycaps(&[("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                self.overlay_scroll.set(popup_at(frame, title, body.iter().map(|l| Line::from(l.clone())).collect(), Some(keys), self.overlay_scroll.get()));
+            }
             Some(Overlay::Recovery { body, .. }) => {
-                popup(frame, &t!("recovery-title"), body.iter().map(|l| Line::from(l.clone())).collect(), Some(keycaps(&[("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close"))])))
+                let keys = keycaps(&[("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                self.overlay_scroll.set(popup_at(frame, &t!("recovery-title"), body.iter().map(|l| Line::from(l.clone())).collect(), Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Invite { name, link, qr }) => {
                 let qr_width = qr.first().map_or(0, |l| l.chars().count());
@@ -472,7 +483,8 @@ impl App {
                     vec![Line::styled(t!("tui-qr-too-small", width = qr_width + 8, height = qr.len() + 12), DIM)]
                 };
                 lines.extend([Line::default(), Line::styled(link.clone(), Style::new().fg(ACCENT)), Line::default(), Line::styled(t!("tui-invite-help", name = name), DIM)]);
-                popup(frame, &t!("invite-title", name = name), lines, Some(keycaps(&[("c", t!("hint-copy")), ("Esc", t!("hint-close"))])));
+                let keys = keycaps(&[("c", t!("hint-copy")), ("Esc", t!("hint-close")), ("↑ ↓", t!("help-scroll"))]);
+                self.overlay_scroll.set(popup_at(frame, &t!("invite-title", name = name), lines, Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Confirm { name, number, selected }) => {
                 let mut lines = vec![Line::from(t!("confirm-help")), Line::default()];
@@ -622,12 +634,12 @@ fn pad(r: Rect) -> Rect {
 /// A framed window in the middle, as small as its content and never wider
 /// than the screen (long lines wrap), keys at the bottom.
 pub(super) fn popup(frame: &mut Frame, title: &str, lines: Vec<Line>, keys: Option<Line<'static>>) {
-    popup_at(frame, title, lines, keys, 0)
+    popup_at(frame, title, lines, keys, 0);
 }
 
 /// The same, with the content scrolled by `scroll` lines when it is taller
 /// than the screen: the keys stay where they are.
-pub(super) fn popup_at(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>, scroll: usize) {
+pub(super) fn popup_at(frame: &mut Frame, title: &str, mut lines: Vec<Line>, keys: Option<Line<'static>>, scroll: usize) -> usize {
     let area = frame.area();
     lines.insert(0, Line::default());
     // Text wraps at a width that reads well (a QR code still fits); lines
@@ -653,7 +665,7 @@ pub(super) fn popup_at(frame: &mut Frame, title: &str, mut lines: Vec<Line>, key
     let top = (scroll.min(hidden as usize)) as u16;
     frame.render_widget(paragraph.scroll((top, 0)), body);
     if let Some(keys) = keys {
-        frame.render_widget(keys, Rect { y: inner.y + inner.height.saturating_sub(2), height: 1, ..inner });
+        frame.render_widget(fit_keys(keys, inner.width as usize), Rect { y: inner.y + inner.height.saturating_sub(2), height: 1, ..inner });
     }
     // More above or below: an arrow at the edge.
     let mark = |up: bool| Span::styled(if up { "▲" } else { "▼" }, DIM);
@@ -663,6 +675,7 @@ pub(super) fn popup_at(frame: &mut Frame, title: &str, mut lines: Vec<Line>, key
     if top < hidden {
         frame.render_widget(mark(false), Rect { x: rect.x + rect.width - 2, y: body.y + body.height.saturating_sub(1), width: 1, height: 1 });
     }
+    top as usize
 }
 
 /// Logical lines cut to `width` columns, by character: what the input box
@@ -795,6 +808,7 @@ pub fn groups(number: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn messages_break_between_words_and_long_words_by_character() {
@@ -819,5 +833,35 @@ mod tests {
         // Whatever the hash gives, it is one of the window's middle rings.
         let Some(Color::Rgb(r, g, b)) = name_style("srv").fg else { panic!() };
         assert_eq!(format!("#{r:02X}{g:02X}{b:02X}"), nightpost_core::rings("srv")[1]);
+    }
+
+    /// What a screen of this size shows, row by row.
+    fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect()
+    }
+
+    #[test]
+    fn small_terminals_keep_the_name_and_whole_hints() {
+        let mut app = App::new(Path::new("/nonexistent"), true);
+        for name in ["Note", "carol-with-a-long-name"] {
+            app.conversations.push(Conversation { name: name.into(), note: name == "Note", timer: 0, person: Default::default(), unread: 0, messages: Vec::new() });
+        }
+        app.selected = 1;
+        for (width, height) in [(60, 20), (80, 24), (100, 30)] {
+            let rows = render(&mut app, width, height);
+            let screen = rows.join("\n");
+            assert!(screen.contains("carol-with-a-long-name"), "{width}x{height}: the name is cut\n{screen}");
+            // The last row is hints, each of them whole: it ends on a full label.
+            let bar = rows.last().unwrap().trim_end().to_string();
+            let whole = ["send", "new line", "commands", "list", "pane", "conversations"];
+            assert!(whole.iter().any(|w| bar.ends_with(w)), "{width}x{height}: the bar is cut: {bar:?}");
+        }
+        // Alone in the list on a narrow screen: the list, with how to add someone.
+        app.focus = Focus::List;
+        let rows = render(&mut app, 60, 20);
+        assert!(rows.join("\n").contains("Conversations"));
     }
 }
