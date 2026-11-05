@@ -18,7 +18,7 @@ jobs:
       - name: Fetch lyrebird (signed by the Tor Browser developers)
         run: |
           f=tor-expert-bundle-linux-x86_64-$TOR_BUNDLE.tar.gz
-          u=https://dist.torproject.org/torbrowser/$TOR_BUNDLE/$f
+          u=https://archive.torproject.org/tor-package-archive/torbrowser/$TOR_BUNDLE/$f
           curl -fsSLO "$u" -O "$u.asc"
           export GNUPGHOME=$(mktemp -d)
           gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
@@ -56,7 +56,7 @@ jobs:
       - name: Fetch lyrebird (signed by the Tor Browser developers)
         run: |
           f=tor-expert-bundle-windows-x86_64-$TOR_BUNDLE.tar.gz
-          u=https://dist.torproject.org/torbrowser/$TOR_BUNDLE/$f
+          u=https://archive.torproject.org/tor-package-archive/torbrowser/$TOR_BUNDLE/$f
           curl -fsSLO "$u" -O "$u.asc"
           export GNUPGHOME=$(mktemp -d)
           gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
