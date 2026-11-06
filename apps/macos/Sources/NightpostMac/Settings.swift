@@ -545,6 +545,9 @@ private struct SecurityPane: View {
 }
 
 private struct AboutPane: View {
+    @State private var command = ShellCommand.installed
+    @State private var failed = false
+
     var body: some View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         // The logo and the name, then the version on their line, as in the GUI.
@@ -559,6 +562,19 @@ private struct AboutPane: View {
             row(t("folder"), Daemon.dir.path)
             Button(t("mac-show-in-finder")) { NSWorkspace.shared.activateFileViewerSelecting([Daemon.dir]) }
                 .buttonStyle(SecondaryButton())
+        }
+        Block(title: t("mac-command-section")) {
+            Help(command ? t("mac-command-installed") : t("mac-command-missing"))
+            Button(command ? t("mac-command-uninstall") : t("mac-command-install")) {
+                Task {
+                    let was = command
+                    let done = was ? await ShellCommand.uninstall() : await ShellCommand.install()
+                    command = ShellCommand.installed
+                    failed = !done && command == was
+                }
+            }
+            .buttonStyle(SecondaryButton())
+            if failed { Warning(t("mac-command-failed")) }
         }
         Block(title: t("licences")) {
             row("Nightpost", "AGPL-3.0")

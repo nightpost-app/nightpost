@@ -11,7 +11,7 @@ struct NightpostApp: App {
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 480)
                 .task { await model.run() }
-                .task { await ShellCommand.ensure() }
+                .task { await ShellCommand.offer() }
                 .task { await Snapshot.run() }
         }
         .defaultSize(width: 1040, height: 700)
