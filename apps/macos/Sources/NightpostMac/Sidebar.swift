@@ -7,7 +7,8 @@ struct Sidebar: View {
 
     var body: some View {
         let people = model.sortedContacts
-        let reachable = people.filter { Route.reached(model.network, model.links[$0.name]) }.count
+        let others = people.filter { !$0.note }
+        let reachable = others.filter { Route.reached(model.network, model.links[$0.name]) }.count
         VStack(spacing: 0) {
             HStack {
                 Wordmark(size: 24)
@@ -29,7 +30,7 @@ struct Sidebar: View {
                 .padding(.horizontal, 10)
             }
             .scrollIndicators(.never)
-            footer(people.isEmpty ? nil : t("reachable-count", ["reachable": reachable, "total": people.count]))
+            footer(others.isEmpty ? nil : t("reachable-count", ["reachable": reachable, "total": others.count]))
         }
         .background(Palette.side)
         .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
@@ -81,11 +82,11 @@ struct ContactRow: View {
             HStack(spacing: 12) {
                 Avatar(name: contact.name, photo: contact.person.photo, size: 44)
                     .overlay(alignment: .bottomTrailing) {
-                        Circle()
+                        if !contact.note { Circle()
                             .strokeBorder(on ? Palette.side : Palette.muted, lineWidth: 2)
                             .background(Circle().fill(on ? Palette.main : Palette.side))
                             .frame(width: 12, height: 12)
-                            .offset(x: 1, y: 1)
+                            .offset(x: 1, y: 1) }
                     }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {

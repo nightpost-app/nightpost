@@ -16,11 +16,13 @@ struct ConversationView: View {
         let link = model.links[name]
         VStack(spacing: 0) {
             header(link)
-            RouteView(name: name)
-                .padding(.top, 14)
-                .padding(.horizontal, 32)
-                .frame(maxWidth: Self.column + 64)
-                .zIndex(1)
+            if !isNote {
+                RouteView(name: name)
+                    .padding(.top, 14)
+                    .padding(.horizontal, 32)
+                    .frame(maxWidth: Self.column + 64)
+                    .zIndex(1)
+            }
             MessageList(name: name, waiting: [.unreachable, .older, .newer].contains(link) ? t("waiting-reachable", ["name": name]) : t("sending"))
             if link == .older || link == .newer { UpdateNotice(name: name, theirs: link == .older) }
             composer
@@ -35,11 +37,13 @@ struct ConversationView: View {
         .onAppear { writing = true }
     }
 
+    private var isNote: Bool { model.contacts.first { $0.name == name }?.note ?? false }
+
     private func header(_ link: LinkState?) -> some View {
         let person = model.contacts.first { $0.name == name }?.person ?? Person()
-        let (stage, reach) = Route.line(name, model.network, link)
+        let (stage, reach) = isNote ? (Route.Stage.wait, t("note-here")) : Route.line(name, model.network, link)
         return HStack(spacing: 14) {
-            Button { model.panel.toggle() } label: { who(person, stage, reach) }
+            Button { if !isNote { model.panel.toggle() } } label: { who(person, stage, reach) }
                 .buttonStyle(WhoButton(open: model.panel))
                 .help(t("about-name", ["name": name]))
             Spacer(minLength: 0)

@@ -225,10 +225,12 @@ struct ContactInfo: Decodable, Sendable, Identifiable, Equatable {
     var name: String
     let safetyNumber: String
     var person: Person
+    /// The note to ourselves: it never leaves this computer, no Tor, no route.
+    var note: Bool
     var id: String { name }
 
     private enum Key: String, CodingKey {
-        case name, person
+        case name, person, note
         case safetyNumber = "safety_number"
     }
 
@@ -237,6 +239,7 @@ struct ContactInfo: Decodable, Sendable, Identifiable, Equatable {
         name = try c.decode(String.self, forKey: .name)
         safetyNumber = try c.decode(String.self, forKey: .safetyNumber)
         person = try c.decodeIfPresent(Person.self, forKey: .person) ?? Person()
+        note = try c.decodeIfPresent(Bool.self, forKey: .note) ?? false
     }
 }
 
