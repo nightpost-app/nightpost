@@ -45,13 +45,14 @@ jobs:
         with: { name: linux, path: out/* }
 
   windows:
-    runs-on: windows-latest
-    defaults: { run: { shell: bash } }
+    # Cross-built from Linux (mingw-w64): OpenSSL is compiled from source and
+    # the perl of the Windows runners lacks modules its Configure needs.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: x86_64-pc-windows-gnu }
-      - run: choco install protoc nsis -y
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler gcc-mingw-w64-x86-64 nsis zip gnupg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch lyrebird (signed by the Tor Browser developers)
         run: |
@@ -73,7 +74,7 @@ jobs:
           cp "$(find $t -name WebView2Loader.dll | head -1)" $d/
           cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/bridges.md $d/BRIDGES.md
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          powershell -Command "Compress-Archive -Path dist/* -DestinationPath out/nightpost-windows-x86_64.zip"
+          (cd dist && zip -qr ../out/nightpost-windows-x86_64.zip .)
           # NSIS wants a numeric version
           makensis -DVERSION="${v%%-*}" -DDIST="$PWD/dist" -DOUT="$PWD/out/nightpost-setup-x86_64.exe" packaging/windows/nightpost.nsi
       - uses: actions/upload-artifact@v4
