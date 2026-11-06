@@ -489,6 +489,7 @@ mac-show-in-finder = Mostrar en el Finder
 mac-photo-not-picture = no es una imagen
 mac-photo-resize = no se pudo redimensionar
 mac-photo-reencode = no se pudo volver a codificar
+mac-command-prompt = Nightpost quiere añadir el comando nightpost a la Terminal.
 err-no-daemon = Nightpost no está en marcha. Inícialo primero: nightpost daemon (o simplemente abre nightpost).
 copy-phrase = Copiar la frase
 tui-phrase-copied = Frase copiada (si el terminal lo permite). Pégala en tu gestor de contraseñas, no en un mensaje.
