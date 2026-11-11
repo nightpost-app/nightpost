@@ -61,8 +61,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Not from a key: it writes to the borrowed computer's registry.
     #[cfg(windows)]
-    nightpost_core::register_app_id(&dir);
+    if !nightpost_core::portable() {
+        nightpost_core::register_app_id(&dir);
+    }
     DIR.set(dir).expect("set once");
     if std::env::args().nth(1).as_deref() == Some("--tray") {
         tray::run();
@@ -98,7 +101,11 @@ fn main() {
         use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS as _;
         window.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true)
     };
-    let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
+    let mut config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
+    // From a key, what the web view keeps stays on the key too.
+    if nightpost_core::portable() {
+        config = config.with_data_directory(crate::dir().join("webview"));
+    }
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
 }
 
@@ -463,7 +470,8 @@ fn App() -> Element {
     dioxus::desktop::use_wry_event_handler(move |event, _| {
         use dioxus::desktop::tao::event::{Event, WindowEvent};
         match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } if state.prefs.peek().lock_on_close => shut_down(),
+            // From a key, closing stops it all: the key is about to leave.
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } if state.prefs.peek().lock_on_close || nightpost_core::portable() => shut_down(),
             Event::WindowEvent { event: WindowEvent::Focused(true), .. } => state.mark_read(),
             Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
                 let maximized = desktop.is_maximized();

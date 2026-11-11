@@ -78,7 +78,7 @@ pub fn Chrome() -> Element {
                 onclick: move |_| {
                     // Closing from here is not the system's close request,
                     // which the app listens to: the choice is honoured here.
-                    if state.prefs.peek().lock_on_close {
+                    if state.prefs.peek().lock_on_close || nightpost_core::portable() {
                         crate::shut_down();
                     }
                     window().close();

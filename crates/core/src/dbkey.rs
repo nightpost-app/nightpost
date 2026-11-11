@@ -83,10 +83,7 @@ pub fn keychain_label(dir: &Path) -> String {
 /// An error means there is no usable keychain (no Secret Service on a headless
 /// Linux, for one): the caller then needs a passphrase.
 pub fn keychain_secret(label: &str, create: bool) -> keyring::Result<Option<Secret>> {
-    // The real reason, rather than the "no default store" it turns into.
-    if let Err(e) = keyring::Entry::store_status() {
-        return Err(keyring::Error::Invalid("keychain".into(), e.to_string()));
-    }
+    keychain()?;
     let entry = keyring::Entry::new("nightpost", label)?;
     match entry.get_secret() {
         Ok(bytes) => {
@@ -107,9 +104,24 @@ pub fn keychain_secret(label: &str, create: bool) -> keyring::Result<Option<Secr
     }
 }
 
+/// Whether this computer's keychain may be used. Not from a portable key:
+/// the computer is borrowed, its keychain is not ours to read or fill, and
+/// the passphrase alone opens the database.
+fn keychain() -> keyring::Result<()> {
+    if crate::portable() {
+        return Err(keyring::Error::Invalid("keychain".into(), "not used from a portable key".into()));
+    }
+    // The real reason, rather than the "no default store" it turns into.
+    if let Err(e) = keyring::Entry::store_status() {
+        return Err(keyring::Error::Invalid("keychain".into(), e.to_string()));
+    }
+    Ok(())
+}
+
 /// Puts `secret` in this keychain, in place of what is there: after it was
 /// recovered from its words, so that the next start finds it.
 pub fn store_keychain_secret(label: &str, secret: &Secret) -> keyring::Result<()> {
+    keychain()?;
     keyring::Entry::new("nightpost", label)?.set_secret(&secret[..])
 }
 
@@ -135,7 +147,7 @@ pub fn secret_from_phrase(phrase: &str) -> anyhow::Result<Secret> {
 pub const MARKER: &str = "uses-passphrase";
 
 pub fn uses_passphrase(dir: &Path) -> bool {
-    dir.join(MARKER).exists()
+    crate::portable() || dir.join(MARKER).exists()
 }
 
 /// Where an unattended daemon reads its passphrase: a systemd credential

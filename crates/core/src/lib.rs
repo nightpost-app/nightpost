@@ -15,6 +15,27 @@ pub mod terminal;
 pub mod text;
 pub mod transport;
 
+/// Run from a removable key (`NIGHTPOST_PORTABLE=1`, set by its launchers):
+/// the computer is only borrowed.
+pub fn portable() -> bool {
+    std::env::var_os("NIGHTPOST_PORTABLE").is_some_and(|v| v == "1")
+}
+
+/// What a portable daemon keeps off the key, whose file system (exFAT)
+/// holds no socket and no private permissions: in this user's private
+/// runtime folder, one name per data directory.
+#[cfg(unix)]
+pub fn runtime_path(dir: &std::path::Path, what: &str) -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::Context as _;
+    use sha2::{Digest as _, Sha256};
+    #[cfg(target_os = "macos")]
+    let runtime = std::env::temp_dir();
+    #[cfg(not(target_os = "macos"))]
+    let runtime = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("no XDG_RUNTIME_DIR")?);
+    let hash = Sha256::digest(dir.to_string_lossy().as_bytes());
+    Ok(runtime.join(format!("nightpost-{}.{what}", hash[..8].iter().map(|b| format!("{b:02x}")).collect::<String>())))
+}
+
 /// Nightpost's version, the same for the daemon and every interface.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

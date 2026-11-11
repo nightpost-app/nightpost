@@ -636,7 +636,8 @@ fn socket(dir: &Path) -> Result<Name<'static>> {
     #[cfg(unix)]
     {
         use interprocess::local_socket::GenericFilePath;
-        Ok(dir.join("api.sock").to_fs_name::<GenericFilePath>()?.into_owned())
+        let path = if crate::portable() { crate::runtime_path(dir, "sock")? } else { dir.join("api.sock") };
+        Ok(path.to_fs_name::<GenericFilePath>()?.into_owned())
     }
     #[cfg(windows)]
     {

@@ -4,7 +4,7 @@
 mod tui;
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context as _, Result, bail};
@@ -54,6 +54,11 @@ async fn main() {
     if let Err(e) = run(std::env::args().skip(1).collect()).await {
         eprintln!("nightpost: {e:#}");
         std::process::exit(1);
+    }
+    // A portable daemon removed Tor's folder on its way out: leaving now
+    // skips arti saving into it as the runtime winds down.
+    if nightpost_core::portable() {
+        std::process::exit(0);
     }
 }
 
@@ -272,6 +277,15 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
     let (tor, lines) = tokio::sync::watch::channel(store.bridges()?);
     let bridges = BridgeLines { store: store.clone(), tor };
 
+    // On a key, arti would refuse its state (exFAT has no private
+    // permissions): a private folder off the key instead, gone once the
+    // daemon and Tor stopped (declared before them, dropped after). New
+    // guards each time, as on Tails.
+    #[cfg(unix)]
+    let tor = if nightpost_core::portable() { nightpost_core::runtime_path(dir, "tor")? } else { dir.join("tor") };
+    #[cfg(not(unix))]
+    let tor = dir.join("tor");
+    let _gone = nightpost_core::portable().then(|| RemoveOnDrop(tor.clone()));
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -290,7 +304,7 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
             // The daemon only exists once Tor is up; until then the latest state waits here.
             let (status, mut status_changes) = tokio::sync::watch::channel(Network::default());
             let bridges_config = lyrebird.map(|lyrebird| Bridges { lyrebird, lines });
-            let net = TorTransport::bootstrap(&dir.join("tor").join("state"), &dir.join("tor").join("cache"), bridges_config, move |network| {
+            let net = TorTransport::bootstrap(&tor.join("state"), &tor.join("cache"), bridges_config, move |network| {
                 // Until Tor is up, arti counts again from the start when it goes on to
                 // the bridge: a number that goes back reads as a second start.
                 top = top.max(network.percent);
@@ -315,8 +329,11 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
                 }
             });
             daemon.start().await?;
+            // Not from a key: it writes to the borrowed computer's registry.
             #[cfg(windows)]
-            nightpost_core::register_app_id(dir);
+            if !nightpost_core::portable() {
+                nightpost_core::register_app_id(dir);
+            }
             #[cfg(not(target_os = "macos"))]
             tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf()));
             // The daemon answers; Tor may still be connecting, and messages wait for it.
@@ -493,6 +510,10 @@ fn unlock(dir: &Path, recover: bool) -> Result<Unlock> {
         None if dbkey::uses_passphrase(dir) => Some(Zeroizing::new(line("Passphrase: ")?.into_bytes())),
         None => None,
     };
+    // Typed nothing, or nothing came: it would make (or try) a key from "".
+    if passphrase.as_ref().is_some_and(|p| p.is_empty()) {
+        bail!(nightpost_core::t!("err-passphrase-empty"));
+    }
     let secret = if recover {
         Some(dbkey::secret_from_phrase(&line(&format!("{} ", nightpost_core::t!("recovery-prompt")))?)?)
     } else {
@@ -513,3 +534,12 @@ fn unlock(dir: &Path, recover: bool) -> Result<Unlock> {
     Unlock::new(secret, passphrase).context("nothing to derive the database key from")
 }
 
+
+/// Removes a folder when dropped: whatever way the daemon stops.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
