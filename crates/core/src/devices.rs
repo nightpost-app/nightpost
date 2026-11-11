@@ -82,7 +82,7 @@ pub enum Step {
 pub struct Account {
     /// The identity key pair; for a mailbox, the public key alone.
     pub identity: Vec<u8>,
-    /// The account's discovery key (secret).
+    /// The account's discovery key (secret); for a mailbox, its public half.
     pub discovery: [u8; 32],
     /// The id the new device has in `devices`.
     pub device: u8,

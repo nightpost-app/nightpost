@@ -46,6 +46,8 @@ package_nightpost-cli() {
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 docs/lyrebird.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE-lyrebird"
   install -Dm644 docs/bridges.md "$pkgdir/usr/share/doc/$pkgname/BRIDGES.md"
+  install -Dm644 docs/mailbox.md "$pkgdir/usr/share/doc/$pkgname/MAILBOX.md"
+  install -Dm644 packaging/linux/nightpost-mailbox.service -t "$pkgdir/usr/lib/systemd/system/"
 }
 
 package_nightpost() {

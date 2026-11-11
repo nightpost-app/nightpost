@@ -149,6 +149,27 @@ pub enum Frame {
     Bundle(WireBundle),
     /// Our device list changed while the link was open.
     Devices(SignedDeviceList),
+    // To and from a mailbox (mailbox.rs). Contacts and our own devices:
+    /// A one-time bundle of that device of the mailbox's account. Answered
+    /// with `Bundle`, or `Refused` when none is left.
+    BundleOf(u8),
+    /// Keep this for that device of the mailbox's account, encrypted for
+    /// it. Answered with `Deposited`, or `Refused` when the mailbox is full.
+    Deposit { device: u8, id: [u8; 16], kind: u8, body: Vec<u8> },
+    Deposited { device: u8, id: [u8; 16] },
+    // Our own devices only:
+    /// What is kept for me: answered with `Stored` frames, each one
+    /// acknowledged (`Ack`), then `Fetched`.
+    Fetch,
+    /// Left by that device of that account.
+    Stored { account: Vec<u8>, device: u8, id: [u8; 16], kind: u8, body: Vec<u8> },
+    /// Nothing more kept, and how many of my bundles are left to hand out.
+    Fetched { bundles: u8 },
+    /// Bundles of mine to hand out, one each.
+    Bundles(Vec<WireBundle>),
+    /// The account's contacts, names left out: the mailbox lets them in,
+    /// and nobody else.
+    Contacts(Vec<Vec<u8>>),
 }
 
 /// What a libsignal message holds.

@@ -33,6 +33,7 @@ use crate::dbkey::Secret;
 use crate::devices::{self, Account, PAIRING_LIFETIME, Pairing, PairingError, Step};
 use crate::identity::{Device, DeviceList, MAX_DEVICES, Role, SignedDeviceList, safety_number};
 use crate::invite::{self, Code, CodeError, Invite, InviteError};
+use crate::mailbox;
 use crate::proto::{self, Body, Caller, Challenge, Envelope, Frame, Hello, MAX_READ, MAX_TEXT, Me, Mine, Peer, Proof, Service, TIMERS};
 use crate::session::{self, WireBundle};
 use crate::store::{NOTE_ACCOUNT, Store};
@@ -42,9 +43,9 @@ use crate::transport::{DiscoveryKey, Onion, Service as _, Transport, discovery_k
 /// The id of an account's first device; the others are given theirs when added.
 const DEVICE: u8 = 1;
 /// A handshake step that takes longer than this is abandoned.
-const STEP: Duration = Duration::from_secs(60);
+pub(crate) const STEP: Duration = Duration::from_secs(60);
 /// A link with nothing to say for this long is closed.
-const IDLE: Duration = Duration::from_secs(60);
+pub(crate) const IDLE: Duration = Duration::from_secs(60);
 /// How long accepting an invitation keeps trying: a new descriptor can take
 /// minutes to reach the directories.
 const ACCEPT_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(300) };
@@ -53,6 +54,8 @@ const MAX_NAME: usize = 32;
 const CODE_LIFETIME: Duration = Duration::from_secs(600);
 /// First wait after a failed dial; it doubles up to 10 minutes.
 const RETRY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(10) };
+/// How often we look in our mailbox, besides at start and when Tor is back.
+const FETCH: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(600) };
 
 pub struct Daemon<T: Transport> {
     store: Rc<Store>,
@@ -87,6 +90,10 @@ pub struct Daemon<T: Transport> {
     /// Devices to open a link to even with nothing queued: a link carries
     /// our device list, which changed.
     announce: RefCell<HashSet<Target>>,
+    /// Accounts whose mailbox we are at now.
+    visiting: RefCell<HashSet<Vec<u8>>>,
+    /// To look in our mailbox now rather than at the next round.
+    fetch_now: Notify,
 }
 
 /// What this device presents in a handshake, at one moment.
@@ -122,11 +129,11 @@ struct Own {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Contact {
-    name: String,
-    identity: Vec<u8>,
-    devices: SignedDeviceList,
-    discovery: DiscoveryKey,
+pub(crate) struct Contact {
+    pub(crate) name: String,
+    pub(crate) identity: Vec<u8>,
+    pub(crate) devices: SignedDeviceList,
+    pub(crate) discovery: DiscoveryKey,
 }
 
 /// An invitation not used yet.
@@ -186,6 +193,8 @@ impl<T: Transport + 'static> Daemon<T> {
             link_states: RefCell::default(),
             device_links: RefCell::default(),
             announce: RefCell::default(),
+            visiting: RefCell::default(),
+            fetch_now: Notify::new(),
         }))
     }
 
@@ -198,6 +207,7 @@ impl<T: Transport + 'static> Daemon<T> {
         }
         self.refresh_service().await?;
         spawn_local(self.clone().deliver());
+        spawn_local(self.clone().fetcher());
         spawn_local(self.clone().sweeper());
         Ok(())
     }
@@ -301,6 +311,7 @@ impl<T: Transport + 'static> Daemon<T> {
             if (before.blocked() && !network.blocked()) || (before.percent < 100 && network.percent == 100) {
                 self.backoff.borrow_mut().clear();
                 self.wake.notify_one();
+                self.fetch_now.notify_one();
             }
             let _ = self.events.send(Event::Network { network });
         }
@@ -903,8 +914,12 @@ impl<T: Transport + 'static> Daemon<T> {
         // A mailbox gets what it needs to let our contacts in, not the identity.
         let identity = if mailbox { self.account() } else { self.identity.borrow().serialize().into_vec() };
         let mut kv = Vec::new();
-        for kind in if mailbox { &["contact"][..] } else { &["contact", "person", "timer", "device_name"][..] } {
-            kv.extend(self.store.list(kind)?.into_iter().map(|(key, value)| (kind.to_string(), key, value)));
+        if mailbox {
+            kv = self.mailbox_contacts()?.into_iter().map(|bytes| ("contact".to_string(), String::new(), bytes)).collect();
+        } else {
+            for kind in ["contact", "person", "timer", "device_name"] {
+                kv.extend(self.store.list(kind)?.into_iter().map(|(key, value)| (kind.to_string(), key, value)));
+            }
         }
         if !mailbox {
             for key in ["note_name", "read_receipts", "typing_indicators"] {
@@ -915,7 +930,7 @@ impl<T: Transport + 'static> Daemon<T> {
         }
         let names = [(self.device.get(), self.devices()?.into_iter().find(|d| d.this).map(|d| d.name).unwrap_or_default()), (id, name.clone())];
         kv.extend(names.iter().map(|(id, name)| ("device_name".to_string(), id.to_string(), name.clone().into_bytes())));
-        let discovery = self.own.borrow().discovery;
+        let discovery = if mailbox { discovery_key(&self.discovery()) } else { self.own.borrow().discovery };
         proto::send(&mut stream, &Step::Account(Account { identity, discovery, device: id, devices: signed.clone(), kv })).await?;
         if !mailbox {
             // Parts well under a frame: a message is at most 64 KiB.
@@ -1127,6 +1142,7 @@ impl<T: Transport + 'static> Daemon<T> {
         self.nudge_mine();
         self.present_to(contact)?;
         self.refresh_service().await?;
+        self.fetch_now.notify_one();
         let _ = self.events.send(Event::ContactAdded { name: contact.name.clone() });
         Ok(())
     }
@@ -1190,11 +1206,164 @@ impl<T: Transport + 'static> Daemon<T> {
     }
 
     /// Waits longer before the next try, up to 10 minutes.
-    fn failed(&self, target: Target) {
-        let mut backoff = self.backoff.borrow_mut();
-        let failures = backoff.get(&target).map_or(0, |(n, _)| *n) + 1;
-        let wait = (RETRY * (1 << failures.min(6))).min(Duration::from_secs(600));
-        backoff.insert(target, (failures, Instant::now() + wait));
+    /// From the second failure, what waits for that device goes to its
+    /// account's mailbox, if it has one.
+    fn failed(self: &Rc<Self>, target: Target) {
+        let failures = {
+            let mut backoff = self.backoff.borrow_mut();
+            let failures = backoff.get(&target).map_or(0, |(n, _)| *n) + 1;
+            let wait = (RETRY * (1 << failures.min(6))).min(Duration::from_secs(600));
+            backoff.insert(target.clone(), (failures, Instant::now() + wait));
+            failures
+        };
+        if failures >= 2 {
+            self.visit_soon(target.0);
+        }
+    }
+
+    // --- mailboxes ---------------------------------------------------------
+
+    /// Looks in our mailbox at start, every 10 minutes, and when told to.
+    async fn fetcher(self: Rc<Self>) {
+        loop {
+            self.visit_soon(self.account());
+            tokio::select! {
+                _ = self.fetch_now.notified() => {}
+                _ = sleep(FETCH) => {}
+                _ = self.stopped() => return,
+            }
+        }
+    }
+
+    /// One visit at a time to each account's mailbox.
+    fn visit_soon(self: &Rc<Self>, account: Vec<u8>) {
+        if self.removed.get() || !self.visiting.borrow_mut().insert(account.clone()) {
+            return;
+        }
+        let daemon = self.clone();
+        spawn_local(async move {
+            if let Err(e) = daemon.visit(&account).await {
+                tracing::info!("no visit to a mailbox: {e:#}");
+            }
+            daemon.visiting.borrow_mut().remove(&account);
+        });
+    }
+
+    /// Leaves at `account`'s mailbox what waits for its devices that did not
+    /// answer twice. At ours, also fetches what waits for this device.
+    async fn visit(self: &Rc<Self>, account: &[u8]) -> Result<()> {
+        let Some(contact) = self.contact(account)? else { return Ok(()) };
+        let list = self.devices_of(&contact)?;
+        let Some(mailbox) = list.devices.iter().find(|d| d.role == Role::Mailbox) else { return Ok(()) };
+        let (mut stream, contact) = self.try_dial(&(account.to_vec(), mailbox.id)).await?;
+        let result = async {
+            for device in list.devices.iter().filter(|d| d.role == Role::Normal) {
+                let target = (account.to_vec(), device.id);
+                let asleep = self.backoff.borrow().get(&target).is_some_and(|(failures, _)| *failures >= 2);
+                if !asleep || self.links.borrow().contains_key(&target) {
+                    continue;
+                }
+                // Not dialed while it is being left here.
+                self.links.borrow_mut().insert(target.clone(), None);
+                let left = self.deposit(&mut stream, &contact, device.id).await;
+                self.links.borrow_mut().remove(&target);
+                left?;
+            }
+            if self.is_own(&contact) {
+                self.fetch(&mut stream).await?;
+            }
+            Ok(())
+        }
+        .await;
+        let _ = stream.shutdown().await;
+        result
+    }
+
+    /// Leaves what waits for `device`, encrypted for it, at its mailbox.
+    async fn deposit(&self, stream: &mut T::Stream, contact: &Contact, device: u8) -> Result<()> {
+        let queued = self.store.queued(&contact.identity, device)?;
+        if queued.is_empty() {
+            return Ok(());
+        }
+        let (me, them) = (self.address(), address(&contact.identity, device)?);
+        if !self.has_session(&them)? {
+            proto::send(stream, &Frame::BundleOf(device)).await?;
+            match timeout(STEP, proto::receive(stream)).await?? {
+                Frame::Bundle(bundle) => {
+                    let bundle = bundle.bundle()?;
+                    // The mailbox hands it on; the device made and signed it.
+                    ensure!(bundle.identity_key()?.serialize()[..] == contact.identity[..], "the bundle is not from that account");
+                    ensure!(u8::from(bundle.device_id()?) == device, "the bundle is for another device");
+                    session::start(&self.store, &me, &them, &bundle).await?;
+                }
+                // None left: it waits for the device itself.
+                Frame::Refused => return Ok(()),
+                frame => bail!("unexpected from a mailbox: {frame:?}"),
+            }
+        }
+        for (id, envelope) in queued {
+            let message = session::encrypt(&self.store, &me, &them, &envelope).await?;
+            proto::send(stream, &Frame::Deposit { device, id, kind: message.message_type() as u8, body: message.serialize().to_vec() }).await?;
+            match timeout(STEP, proto::receive(stream)).await?? {
+                Frame::Deposited { device: d, id: i } if d == device && i == id => {
+                    if self.store.acked(&contact.identity, device, &id)? {
+                        let _ = self.events.send(Event::Delivered { to: contact.name.clone(), id: hex(&id) });
+                    }
+                }
+                // Full: it waits here.
+                Frame::Refused => return Ok(()),
+                frame => bail!("unexpected from a mailbox: {frame:?}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// At our mailbox: tells it our contacts, takes what waits for this
+    /// device, and leaves bundles for contacts who never met it.
+    async fn fetch(self: &Rc<Self>, stream: &mut T::Stream) -> Result<()> {
+        proto::send(stream, &Frame::Contacts(self.mailbox_contacts()?)).await?;
+        proto::send(stream, &Frame::Fetch).await?;
+        loop {
+            match timeout(STEP, proto::receive(stream)).await?? {
+                Frame::Stored { account, device, id, kind, body } => {
+                    match self.contact(&account)? {
+                        Some(from) if self.devices_of(&from)?.device(device).is_some() => {
+                            match self.receive(&from, &address(&account, device)?, id, kind, &body).await {
+                                Ok(Some(event)) => {
+                                    let _ = self.events.send(event);
+                                }
+                                Ok(None) => {}
+                                Err(e) => tracing::warn!("dropped a message kept for us: {e:#}"),
+                            }
+                        }
+                        _ => tracing::info!("dropped a message kept for us: not from a contact's device"),
+                    }
+                    proto::send(stream, &Frame::Ack { id }).await?;
+                }
+                Frame::Fetched { bundles } => {
+                    let mut fresh = Vec::new();
+                    for _ in bundles..mailbox::BUNDLES {
+                        fresh.push(WireBundle::new(&session::bundle(&self.store, device_id(self.device.get())?).await?)?);
+                    }
+                    if !fresh.is_empty() {
+                        proto::send(stream, &Frame::Bundles(fresh)).await?;
+                    }
+                    return Ok(());
+                }
+                frame => bail!("unexpected from a mailbox: {frame:?}"),
+            }
+        }
+    }
+
+    /// Our contacts as our mailbox gets them: without the names we gave them.
+    fn mailbox_contacts(&self) -> Result<Vec<Vec<u8>>> {
+        self.contacts_raw()?
+            .into_iter()
+            .map(|mut contact| {
+                contact.name.clear();
+                Ok(postcard::to_stdvec(&contact)?)
+            })
+            .collect()
     }
 
     async fn try_dial(self: &Rc<Self>, (account, device): &Target) -> Result<(T::Stream, Contact)> {
@@ -1333,7 +1502,7 @@ impl<T: Transport + 'static> Daemon<T> {
                                 return Ok(());
                             }
                         }
-                        Some(Frame::Card { .. } | Frame::Welcome | Frame::Refused) => bail!("an invitation frame on a contact link"),
+                        Some(frame) => bail!("not a frame for a link between devices: {frame:?}"),
                     },
                     Some(poke) = woken.recv() => match poke {
                         Poke::Queued => {}
@@ -1602,6 +1771,8 @@ impl<T: Transport + 'static> Daemon<T> {
                 let _ = self.events.send(Event::Removed);
             }
             let _ = self.events.send(Event::DevicesChanged);
+            // Our mailbox learns the list from the handshake.
+            self.fetch_now.notify_one();
             let daemon = self.clone();
             spawn_local(async move {
                 if let Err(e) = daemon.refresh_service().await {
@@ -1647,7 +1818,7 @@ fn device_id(id: u8) -> Result<DeviceId> {
 /// The other side runs another protocol version, which the handshake
 /// starts with: whichever is older must update before they can talk.
 #[derive(Debug)]
-struct OtherVersion(u16);
+pub(crate) struct OtherVersion(pub(crate) u16);
 
 impl std::fmt::Display for OtherVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1664,7 +1835,7 @@ async fn challenge(stream: &mut (impl AsyncRead + Unpin)) -> Result<Challenge> {
 
 /// The caller's hello. One running another version is told ours, so that
 /// it can say which side must update, and turned away.
-async fn hello(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<Hello> {
+pub(crate) async fn hello(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<Hello> {
     match timeout(STEP, proto::receive_handshake(stream)).await?? {
         Ok(hello) => Ok(hello),
         Err(theirs) => {
@@ -1675,15 +1846,15 @@ async fn hello(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<Hel
 }
 
 /// The next step of a pairing, within a handshake step's time.
-async fn step(stream: &mut (impl AsyncRead + Unpin)) -> Result<Step> {
+pub(crate) async fn step(stream: &mut (impl AsyncRead + Unpin)) -> Result<Step> {
     Ok(timeout(STEP, proto::receive(stream)).await??)
 }
 
-fn handshake(e: proto::HandshakeError) -> anyhow::Error {
+pub(crate) fn handshake(e: proto::HandshakeError) -> anyhow::Error {
     anyhow::anyhow!("handshake: {e:?}")
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).expect("clock after 1970").as_secs()
 }
 
@@ -1698,6 +1869,7 @@ mod tests {
     use crate::transport::memory::{MemoryTransport, Network};
     use std::path::Path;
     use tokio::task::LocalSet;
+    use crate::mailbox::Mailbox;
 
     /// The contacts, without the note to ourselves that is always first.
     fn others(daemon: &Daemon<MemoryTransport>) -> Vec<ContactInfo> {
@@ -1757,6 +1929,32 @@ mod tests {
         wait_for(&mut a2_events, |e| *e == Event::Paired).await;
         knows_devices(&bob, "alice", 2).await;
         [a1, a2, bob]
+    }
+
+    /// A mailbox for `a1`'s account, kept in `store`, serving.
+    async fn mailbox_for(a1: &Rc<Daemon<MemoryTransport>>, store: Rc<Store>, net: &Network) -> Rc<Mailbox<MemoryTransport>> {
+        let (shown, link) = oneshot::channel();
+        let opening = spawn_local(Mailbox::open(store, net.node(), move |link| {
+            let _ = shown.send(link.to_string());
+        }));
+        a1.add_device(&link.await.unwrap()).await.unwrap();
+        let mailbox = opening.await.unwrap().unwrap();
+        spawn_local(mailbox.clone().run());
+        mailbox
+    }
+
+    fn mailbox_store(dir: &Path) -> Rc<Store> {
+        Rc::new(Store::open(&dir.join("mailbox"), &Unlock::new(Some(Secret::new([9; 32])), None).unwrap()).unwrap())
+    }
+
+    async fn until(what: impl Fn() -> bool, why: &str) {
+        for _ in 0..200 {
+            if what() {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        panic!("{why}");
     }
 
     fn sent(to: &str, id: [u8; 16], text: &str) -> impl Fn(&Event) -> bool {
@@ -2334,6 +2532,73 @@ mod tests {
                 let mut a2_events = a2.subscribe();
                 a2.start().await.unwrap();
                 wait_for(&mut a2_events, message("bob", id, "pour les deux")).await;
+            })
+            .await;
+    }
+
+    /// Bob writes while Alice's second device is off, then goes away too:
+    /// it gets the message from the mailbox when it comes back, and the
+    /// mailbox keeps nothing after.
+    #[tokio::test]
+    async fn the_mailbox_keeps_messages_for_an_offline_device() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let [a1, a2, bob] = alice_twice(dir.path(), &net).await;
+                let store = mailbox_store(dir.path());
+                let _mailbox = mailbox_for(&a1, store.clone(), &net).await;
+                assert!(a1.devices().unwrap().iter().any(|d| d.id == 3 && d.mailbox));
+                knows_devices(&bob, "alice", 3).await;
+                // a2 learns of it from a1, and leaves bundles there for Bob,
+                // who never met it.
+                until(|| store.bundle_count(2).unwrap() == i64::from(mailbox::BUNDLES), "no bundles from a2").await;
+                a2.stop().await;
+                drop(a2);
+
+                let mut a1_events = a1.subscribe();
+                let id = bob.send("alice", "pour a2 aussi").unwrap();
+                wait_for(&mut a1_events, message("bob", id, "pour a2 aussi")).await;
+                let alice = a1.account();
+                until(|| bob.store.queued(&alice, 2).unwrap().is_empty(), "never left at the mailbox").await;
+                assert_eq!(store.deposits(2).unwrap().len(), 1);
+                assert_eq!(store.bundle_count(2).unwrap(), i64::from(mailbox::BUNDLES) - 1);
+                bob.stop().await;
+                drop(bob);
+
+                let a2 = open(dir.path(), "alice-2", &net);
+                let mut a2_events = a2.subscribe();
+                a2.start().await.unwrap();
+                wait_for(&mut a2_events, message("bob", id, "pour a2 aussi")).await;
+                until(|| store.deposits(2).unwrap().is_empty(), "still kept after the fetch").await;
+                until(|| store.bundle_count(2).unwrap() == i64::from(mailbox::BUNDLES), "bundles not topped up").await;
+            })
+            .await;
+    }
+
+    /// The mailbox gets the account's public key, never the key pair.
+    #[tokio::test]
+    async fn the_mailbox_never_holds_the_identity() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let (a1, bob) = (open(dir.path(), "alice", &net), open(dir.path(), "bob-device", &net));
+                a1.start().await.unwrap();
+                bob.start().await.unwrap();
+                let link = a1.invite("bob").await.unwrap();
+                bob.accept(&link, "alice").await.unwrap();
+                let store = mailbox_store(dir.path());
+                let _mailbox = mailbox_for(&a1, store.clone(), &net).await;
+
+                let private = a1.identity.borrow().private_key().serialize();
+                let discovery = a1.own.borrow().discovery;
+                for value in store.all_values() {
+                    assert!(!value.windows(private.len()).any(|w| w == &private[..]), "the identity's private key");
+                    assert!(!value.windows(32).any(|w| w == discovery), "the account's discovery key");
+                    assert!(!value.windows(3).any(|w| w == b"bob"), "a contact's name");
+                }
+                assert_ne!(store.identity().unwrap().identity_key(), a1.identity.borrow().identity_key());
             })
             .await;
     }

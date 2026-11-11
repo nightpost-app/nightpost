@@ -8,6 +8,7 @@ pub mod devices;
 pub mod i18n;
 pub mod identity;
 pub mod invite;
+pub mod mailbox;
 pub mod prefs;
 pub mod proto;
 pub mod session;

@@ -203,8 +203,9 @@ mod tests {
         .unwrap()
     }
 
-    fn address(name: &str) -> ProtocolAddress {
-        ProtocolAddress::new(name.into(), DeviceId::new(1).unwrap())
+    /// Named after the store's identity, as every address is.
+    fn address(store: &Store) -> ProtocolAddress {
+        ProtocolAddress::new(crate::api::hex(&store.identity().unwrap().identity_key().serialize()), DeviceId::new(1).unwrap())
     }
 
     /// Alice starts from Bob's bundle, they talk both ways, Bob reopens his
@@ -215,10 +216,10 @@ mod tests {
     fn two_identities_talk_and_survive_a_restart() {
         block_on(async {
             let dir = tempfile::tempdir().unwrap();
-            let (a, b) = (address("alice"), address("bob"));
             let alice = Store::open(&dir.path().join("alice.db"), &unlock(1, None)).unwrap();
             let bob_path = dir.path().join("bob.db");
             let bob = Store::open(&bob_path, &unlock(2, Some("bob pass"))).unwrap();
+            let (a, b) = (address(&alice), address(&bob));
 
             // Through its wire form, as it travels.
             let wire = WireBundle::new(&bundle(&bob, DeviceId::new(1).unwrap()).await.unwrap()).unwrap();

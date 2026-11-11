@@ -57,6 +57,13 @@ pub struct Store {
     key: RefCell<Secret>,
 }
 
+/// What a mailbox keeps, at most: for 30 days, per sender account 2,000
+/// messages and 20 MiB, and 1 GiB in all.
+const KEEP: i64 = 30 * 24 * 3600;
+const PER_SENDER_COUNT: i64 = 2000;
+const PER_SENDER_BYTES: i64 = 20 << 20;
+const TOTAL_BYTES: i64 = 1 << 30;
+
 /// Where the notes to ourselves are kept in `messages`.
 pub(crate) const NOTE_ACCOUNT: &[u8] = b"nightpost-note-to-self";
 
@@ -116,6 +123,22 @@ impl Store {
                 id BLOB NOT NULL,
                 envelope BLOB NOT NULL,
                 UNIQUE (account, device, id)
+            );
+            -- A mailbox's: kept for one of the account's devices, from that
+            -- device of that account.
+            CREATE TABLE IF NOT EXISTS deposits (
+                device INTEGER NOT NULL,
+                account BLOB NOT NULL,
+                sender INTEGER NOT NULL,
+                id BLOB NOT NULL,
+                kind INTEGER NOT NULL,
+                body BLOB NOT NULL,
+                time INTEGER NOT NULL,
+                UNIQUE (device, id)
+            );
+            CREATE TABLE IF NOT EXISTS bundles (
+                device INTEGER NOT NULL,
+                bundle BLOB NOT NULL
             );
             PRAGMA user_version = 1;",
         )?;
@@ -379,6 +402,80 @@ impl Store {
         Ok(())
     }
 
+    // --- a mailbox's ------------------------------------------------------
+
+    /// Keeps what `account`'s device `sender` left for our device `device`,
+    /// unless that sender is over its share or the mailbox is full. What
+    /// waited longer than [`KEEP`] goes first.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn deposit(&self, device: u8, account: &[u8], sender: u8, id: &[u8; 16], kind: u8, body: &[u8], now: u64) -> rusqlite::Result<bool> {
+        let now = now as i64;
+        self.db.execute("DELETE FROM deposits WHERE time < ?1", params![now - KEEP])?;
+        let (count, bytes): (i64, i64) = self.db.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(body)), 0) FROM deposits WHERE account = ?1",
+            params![account],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let total: i64 = self.db.query_row("SELECT COALESCE(SUM(LENGTH(body)), 0) FROM deposits", [], |row| row.get(0))?;
+        let size = body.len() as i64;
+        if count >= PER_SENDER_COUNT || bytes + size > PER_SENDER_BYTES || total + size > TOTAL_BYTES {
+            return Ok(false);
+        }
+        self.db.execute(
+            "INSERT OR IGNORE INTO deposits (device, account, sender, id, kind, body, time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![device, account, sender, id, kind, body, now],
+        )?;
+        Ok(true)
+    }
+
+    /// What waits for `device`, oldest first: (account, sender, id, kind, body).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn deposits(&self, device: u8) -> rusqlite::Result<Vec<(Vec<u8>, u8, [u8; 16], u8, Vec<u8>)>> {
+        let mut stmt = self.db.prepare("SELECT account, sender, id, kind, body FROM deposits WHERE device = ?1 ORDER BY rowid")?;
+        stmt.query_map(params![device], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))?.collect()
+    }
+
+    pub(crate) fn fetched(&self, device: u8, id: &[u8; 16]) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM deposits WHERE device = ?1 AND id = ?2", params![device, id])?;
+        Ok(())
+    }
+
+    pub(crate) fn add_bundles(&self, device: u8, bundles: &[Vec<u8>]) -> rusqlite::Result<()> {
+        for bundle in bundles {
+            self.db.execute("INSERT INTO bundles (device, bundle) VALUES (?1, ?2)", params![device, bundle])?;
+        }
+        Ok(())
+    }
+
+    /// One of `device`'s bundles, never handed out twice.
+    pub(crate) fn take_bundle(&self, device: u8) -> rusqlite::Result<Option<Vec<u8>>> {
+        let bundle: Option<(i64, Vec<u8>)> = self
+            .db
+            .query_row("SELECT rowid, bundle FROM bundles WHERE device = ?1 LIMIT 1", params![device], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        let Some((rowid, bundle)) = bundle else { return Ok(None) };
+        self.db.execute("DELETE FROM bundles WHERE rowid = ?1", params![rowid])?;
+        Ok(Some(bundle))
+    }
+
+    pub(crate) fn bundle_count(&self, device: u8) -> rusqlite::Result<i64> {
+        self.db.query_row("SELECT COUNT(*) FROM bundles WHERE device = ?1", params![device], |row| row.get(0))
+    }
+
+    /// Every value kept, to look for what must never be there.
+    #[cfg(test)]
+    pub(crate) fn all_values(&self) -> Vec<Vec<u8>> {
+        let mut stmt = self.db.prepare("SELECT value FROM kv").unwrap();
+        stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)).unwrap().map(|v| v.unwrap()).collect()
+    }
+
+    /// A device off the account's list: nothing is kept for it any more.
+    pub(crate) fn forget_mailbox_device(&self, device: u8) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM deposits WHERE device = ?1", params![device])?;
+        self.db.execute("DELETE FROM bundles WHERE device = ?1", params![device])?;
+        Ok(())
+    }
+
     /// A device joined `account`'s list: what still waits for the others
     /// waits for it too.
     pub(crate) fn copy_queue(&self, account: &[u8], device: u8) -> rusqlite::Result<()> {
@@ -488,10 +585,13 @@ impl IdentityKeyStore for Db<'_> {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
-        Ok(self
-            .get_identity(address)
-            .await?
-            .is_none_or(|known| known == *identity))
+        // An address is named after its account's identity: a first message
+        // under another identity (handed on by a mailbox, say) is not theirs.
+        Ok(address.name() == hex(&identity.serialize())
+            && self
+                .get_identity(address)
+                .await?
+                .is_none_or(|known| known == *identity))
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
@@ -589,6 +689,31 @@ impl SessionStore for Db<'_> {
 mod tests {
     use super::*;
     use crate::dbkey::{Secret, Unlock};
+
+    #[test]
+    fn a_mailbox_keeps_a_share_per_sender_for_30_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("mailbox.db"), &Unlock::new(Some(Secret::new([7; 32])), None).unwrap()).unwrap();
+        let id = |n: i64| -> [u8; 16] { (n as u128).to_be_bytes() };
+        for n in 0..PER_SENDER_COUNT {
+            assert!(store.deposit(2, b"bob", 1, &id(n), 1, b"x", 1000).unwrap());
+        }
+        assert!(!store.deposit(2, b"bob", 1, &id(9999), 1, b"x", 1000).unwrap(), "over bob's share");
+        assert!(store.deposit(2, b"carol", 1, &id(9999), 1, b"x", 1000).unwrap(), "carol has hers");
+        assert!(!store.deposit(2, b"carol", 1, &[0; 16], 1, &vec![0; PER_SENDER_BYTES as usize], 1000).unwrap(), "over 20 MiB");
+        // 30 days on, the old ones are gone: room again.
+        assert!(store.deposit(3, b"bob", 1, &id(1), 1, b"y", 1000 + KEEP as u64 + 1).unwrap());
+        assert_eq!(store.deposits(2).unwrap().len(), 0);
+        assert_eq!(store.deposits(3).unwrap()[0].4, b"y");
+        store.fetched(3, &id(1)).unwrap();
+        assert!(store.deposits(3).unwrap().is_empty());
+
+        store.add_bundles(2, &[vec![1], vec![2]]).unwrap();
+        assert_eq!(store.bundle_count(2).unwrap(), 2);
+        let (a, b) = (store.take_bundle(2).unwrap().unwrap(), store.take_bundle(2).unwrap().unwrap());
+        assert_ne!(a, b);
+        assert_eq!(store.take_bundle(2).unwrap(), None);
+    }
 
     /// A database from before read receipts gets the column, its messages
     /// unread, and opening it again changes nothing.

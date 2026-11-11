@@ -52,6 +52,8 @@ assets = [
     ["target/release/nightpost", "usr/bin/", "755"],
     ["target/release/lyrebird", "usr/libexec/nightpost/", "755"],
     ["../../docs/lyrebird.txt", "usr/share/doc/nightpost-cli/LICENSE-lyrebird", "644"],
+    ["../../packaging/linux/nightpost-mailbox.service", "lib/systemd/system/", "644"],
+    ["../../docs/mailbox.md", "usr/share/doc/nightpost-cli/MAILBOX.md", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -63,6 +65,8 @@ assets = [
     { source = "target/release/lyrebird", dest = "/usr/libexec/nightpost/lyrebird", mode = "755" },
     { source = "../../LICENSE", dest = "/usr/share/licenses/nightpost-cli/LICENSE", mode = "644", doc = true },
     { source = "../../docs/lyrebird.txt", dest = "/usr/share/licenses/nightpost-cli/LICENSE-lyrebird", mode = "644", doc = true },
+    { source = "../../packaging/linux/nightpost-mailbox.service", dest = "/usr/lib/systemd/system/nightpost-mailbox.service", mode = "644" },
+    { source = "../../docs/mailbox.md", dest = "/usr/share/doc/nightpost-cli/MAILBOX.md", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.requires]

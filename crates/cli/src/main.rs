@@ -10,6 +10,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, bail};
 use nightpost_core::api::{self, BridgeLines, Client, Event, Network, Reply, Request};
 use nightpost_core::daemon::Daemon;
+use nightpost_core::mailbox::Mailbox;
 use nightpost_core::dbkey::{self, Unlock};
 use nightpost_core::store::Store;
 use nightpost_core::transport::tor::{Bridges, TorTransport};
@@ -21,6 +22,9 @@ usage:
                                    in the background if none runs)
   nightpost daemon                 run the daemon (Tor) in the foreground
   nightpost daemon --recovery      the same, opened with the recovery phrase
+  nightpost daemon --mailbox       run as a mailbox for your account (on a
+                                   server): keeps messages for your devices
+                                   that are off, never your keys
                                    (another keychain answers: new desktop)
   nightpost recovery               the 24 words that open the database when
                                    the keychain does not have its secret
@@ -72,7 +76,7 @@ async fn run(args: Vec<String>) -> Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let dir = nightpost_core::api::data_dir()?;
     // A daemon from another version would not understand all we ask.
-    if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"] | ["daemon", "--recovery"])
+    if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"] | ["daemon", "--recovery" | "--mailbox"])
         && Client::connect(&dir).await.is_ok()
         && let running = api::running_version(&dir)
         && running.as_deref() != Some(nightpost_core::VERSION)
@@ -84,8 +88,9 @@ async fn run(args: Vec<String>) -> Result<()> {
             start_daemon(&dir).await?;
             return tui::run(&dir).await;
         }
-        ["daemon"] => return daemon(&dir, false).await,
-        ["daemon", "--recovery"] => return daemon(&dir, true).await,
+        ["daemon"] => return daemon(&dir, false, false).await,
+        ["daemon", "--recovery"] => return daemon(&dir, true, false).await,
+        ["daemon", "--mailbox"] => return daemon(&dir, false, true).await,
         ["recovery"] => Request::RecoveryPhrase,
         ["--version" | "version"] => {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
@@ -283,7 +288,7 @@ fn tray() {
     }
 }
 
-async fn daemon(dir: &Path, recover: bool) -> Result<()> {
+async fn daemon(dir: &Path, recover: bool, mailbox: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         // Plain text when stderr is a file (the graphical interface's daemon.log).
@@ -331,9 +336,15 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
         .run_until(async {
             // Open before Tor is up: the bridges are set while it is blocked.
             let (ready, starting) = tokio::sync::oneshot::channel();
-            let listener = tokio::task::spawn_local(api::serve_starting(api::bind(dir).await?, bridges.clone(), starting));
+            // A mailbox has no interface to answer.
+            let listener = match mailbox {
+                true => None,
+                false => Some(tokio::task::spawn_local(api::serve_starting(api::bind(dir).await?, bridges.clone(), starting))),
+            };
 
-            tray();
+            if !mailbox {
+                tray();
+            }
             eprintln!("Tor: starting (minutes the first time)");
             let lyrebird = lyrebird();
             if lyrebird.is_none() {
@@ -357,7 +368,21 @@ async fn daemon(dir: &Path, recover: bool) -> Result<()> {
             })
             .await?;
             let _ = ready.send(());
-            let listener = listener.await?;
+            if mailbox {
+                let mailbox = Mailbox::open(store, net, |link| {
+                    for line in tui::qr(link) {
+                        println!("{line}");
+                    }
+                    println!("\n{link}\n\n{}", nightpost_core::t!("pair-cli"));
+                })
+                .await?;
+                eprintln!("mailbox ready");
+                return tokio::select! {
+                    result = mailbox.run() => result,
+                    _ = tokio::signal::ctrl_c() => Ok(()),
+                };
+            }
+            let listener = listener.expect("not a mailbox").await?;
 
             let daemon = Daemon::open(store, net)?;
             daemon.set_network(status_changes.borrow_and_update().clone());

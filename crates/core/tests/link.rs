@@ -54,8 +54,9 @@ fn random() -> Secret {
     s
 }
 
-fn address(name: &str) -> ProtocolAddress {
-    ProtocolAddress::new(name.into(), DeviceId::new(1).unwrap())
+/// Named after the account's identity, as the daemon names them.
+fn address(identity: &libsignal_protocol::IdentityKey) -> ProtocolAddress {
+    ProtocolAddress::new(identity.serialize().iter().map(|b| format!("{b:02x}")).collect(), DeviceId::new(1).unwrap())
 }
 
 fn parse(kind: u8, bytes: &[u8]) -> CiphertextMessage {
@@ -101,7 +102,7 @@ async fn invite_link_then_a_message_each_way() {
         proto::send(&mut to_alice, &proof).await.unwrap();
         assert_eq!(peer.account, invite.identity);
 
-        let (b, a) = (address("bob"), address("alice"));
+        let (b, a) = (address(bob_me.account), address(&peer.account));
         session::start(&bob.store, &b, &a, &alice_bundle).await.unwrap();
         let first = session::encrypt(&bob.store, &b, &a, b"bonjour alice").await.unwrap();
         proto::send(&mut to_alice, &(first.message_type() as u8, first.serialize().to_vec())).await.unwrap();
@@ -119,7 +120,7 @@ async fn invite_link_then_a_message_each_way() {
         let peer = pending.on_proof(&proof, None).unwrap();
         assert_eq!(peer.account, *bob_identity.identity_key());
 
-        let (a, b) = (address("alice"), address("bob"));
+        let (a, b) = (address(alice_me.account), address(&peer.account));
         let (kind, bytes): (u8, Vec<u8>) = proto::receive(&mut from_bob).await.unwrap();
         let text = session::decrypt(&alice.store, &a, &b, &parse(kind, &bytes)).await.unwrap();
         let reply = session::encrypt(&alice.store, &a, &b, b"salut bob").await.unwrap();

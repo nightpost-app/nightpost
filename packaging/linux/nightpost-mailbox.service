@@ -1,0 +1,32 @@
+# Nightpost as a mailbox for one account (docs/mailbox.md). Its database key
+# comes from the passphrase in /etc/nightpost/mailbox-passphrase, handed over
+# as a systemd credential; the first start shows the pairing link in the
+# journal: journalctl -u nightpost-mailbox
+[Unit]
+Description=Nightpost mailbox: keeps messages for an account's devices that are off
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/nightpost daemon --mailbox
+Environment=NIGHTPOST_DIR=%S/nightpost-mailbox
+StateDirectory=nightpost-mailbox
+LoadCredential=nightpost-passphrase:/etc/nightpost/mailbox-passphrase
+DynamicUser=yes
+# An unused pairing link expires after 10 minutes: a new one each start.
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
