@@ -246,7 +246,17 @@ impl App {
             lines.extend(wrap_words(&text, width).into_iter().map(|row| Line::styled(row, DIM)));
         }
         let sending = self.sending(c);
+        // Who set the timer, among the messages at its time.
+        let mut timer_set = c.timer_set.as_ref();
+        let timer_line = |lines: &mut Vec<Line<'static>>, text: &str| {
+            lines.push(Line::default());
+            lines.extend(wrap_words(&format!("⏱ {text}"), width).into_iter().map(|row| Line::styled(row, DIM)));
+        };
         for (i, m) in c.messages.iter().enumerate() {
+            if let Some((_, text)) = timer_set.filter(|(at, _)| *at <= m.time) {
+                timer_line(&mut lines, text);
+                timer_set = None;
+            }
             let day = date(m.time);
             let previous = i.checked_sub(1).map(|j| &c.messages[j]);
             if previous.is_none_or(|p| date(p.time) != day) {
@@ -281,6 +291,9 @@ impl App {
                 }
             }
             lines.extend(rows);
+        }
+        if let Some((_, text)) = timer_set {
+            timer_line(&mut lines, text);
         }
         if self.typing.as_ref().is_some_and(|t| t.0 == c.name) {
             lines.push(Line::default());
@@ -812,6 +825,29 @@ pub(super) fn number_lines(number: &str) -> Vec<String> {
     groups.chunks(4).map(|row| format!("    {}", row.join("  "))).collect()
 }
 
+/// Digits three rows high, to read aloud from across the room: groups of
+/// digits (`482-109-…`) three columns apart. Other characters are dropped.
+pub(super) fn big_digits(code: &str) -> [String; 3] {
+    const FONT: [[&str; 3]; 10] = [
+        ["█▀█", "█ █", "▀▀▀"],
+        [" ▀█", "  █", "  ▀"],
+        ["▀▀█", "█▀▀", "▀▀▀"],
+        ["▀▀█", " ▀█", "▀▀▀"],
+        ["█ █", "▀▀█", "  ▀"],
+        ["█▀▀", "▀▀█", "▀▀▀"],
+        ["█▀▀", "█▀█", "▀▀▀"],
+        ["▀▀█", "  █", "  ▀"],
+        ["█▀█", "█▀█", "▀▀▀"],
+        ["█▀█", "▀▀█", "▀▀▀"],
+    ];
+    std::array::from_fn(|row| {
+        code.split('-')
+            .map(|group| group.chars().filter_map(|c| c.to_digit(10)).map(|d| FONT[d as usize][row]).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("   ")
+    })
+}
+
 pub fn groups(number: &str) -> String {
     number.as_bytes().chunks(5).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
 }
@@ -820,6 +856,16 @@ pub fn groups(number: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn big_digits_keep_the_groups_apart() {
+        let rows = big_digits("482-10");
+        assert_eq!(rows[0], "█ █ █▀█ ▀▀█    ▀█ █▀█");
+        assert_eq!(rows[2], "  ▀ ▀▀▀ ▀▀▀     ▀ ▀▀▀");
+        assert!(rows.iter().all(|r| r.chars().count() == rows[0].chars().count()));
+        // A whole code: 4 groups of 3, 53 columns.
+        assert_eq!(big_digits("482-109-375-512")[1].chars().count(), 53);
+    }
 
     #[test]
     fn messages_break_between_words_and_long_words_by_character() {
@@ -858,7 +904,7 @@ mod tests {
     fn small_terminals_keep_the_name_and_whole_hints() {
         let mut app = App::new(Path::new("/nonexistent"), true);
         for name in ["Note", "carol-with-a-long-name"] {
-            app.conversations.push(Conversation { name: name.into(), note: name == "Note", timer: 0, person: Default::default(), unread: 0, messages: Vec::new() });
+            app.conversations.push(Conversation { name: name.into(), note: name == "Note", timer: 0, person: Default::default(), unread: 0, messages: Vec::new(), timer_set: None });
         }
         app.selected = 1;
         for (width, height) in [(60, 20), (80, 24), (100, 30)] {

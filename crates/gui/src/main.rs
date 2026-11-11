@@ -404,7 +404,7 @@ impl State {
                     self.panel.set(false);
                 }
             }
-            Event::TimerChanged { name, seconds } => {
+            Event::TimerChanged { name, seconds, .. } => {
                 self.timers.write().insert(name, seconds);
             }
             Event::Expired { name } => {

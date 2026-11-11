@@ -215,7 +215,7 @@ impl<T: Transport + 'static> Daemon<T> {
             self.keep_timer(&contact, seconds).map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
             self.queue(&contact, &devices, &id, &envelope)
         })?;
-        let _ = self.events.send(Event::TimerChanged { name: name.into(), seconds });
+        let _ = self.events.send(Event::TimerChanged { name: name.into(), seconds, by_me: true });
         self.nudge(&contact, &devices);
         Ok(())
     }
@@ -975,7 +975,7 @@ impl<T: Transport + 'static> Daemon<T> {
             Body::Typing => return Ok(self.typing_indicators()?.then(|| Event::Typing { from: contact.name.clone() })),
             Body::Timer(seconds) => {
                 self.keep_timer(contact, seconds)?;
-                return Ok(Some(Event::TimerChanged { name: contact.name.clone(), seconds }));
+                return Ok(Some(Event::TimerChanged { name: contact.name.clone(), seconds, by_me: false }));
             }
         };
         ensure!(text.len() <= MAX_TEXT, "message too long");
@@ -1491,8 +1491,8 @@ mod tests {
 
                 assert!(alice.set_timer("bob", 5).is_err());
                 alice.set_timer("bob", 3_600).unwrap();
-                assert_eq!(next(&mut alice_events).await, Event::TimerChanged { name: "bob".into(), seconds: 3_600 });
-                assert_eq!(next(&mut bob_events).await, Event::TimerChanged { name: "alice".into(), seconds: 3_600 });
+                assert_eq!(next(&mut alice_events).await, Event::TimerChanged { name: "bob".into(), seconds: 3_600, by_me: true });
+                assert_eq!(next(&mut bob_events).await, Event::TimerChanged { name: "alice".into(), seconds: 3_600, by_me: false });
                 assert_eq!(others(&bob)[0].timer, 3_600);
 
                 let id = alice.send("bob", "secret").unwrap();

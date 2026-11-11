@@ -5,7 +5,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nightpost_core::api::{Client, Reply, Request, Route};
 use nightpost_core::prefs::Prefs;
-use nightpost_core::{dbkey, i18n, t};
+use nightpost_core::{dbkey, i18n, t, terminal};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -63,6 +63,11 @@ pub(super) struct Settings {
     editing: bool,
     /// What saving them said, and whether it went wrong.
     said: Option<(String, bool)>,
+    /// The tray's terminal: its command line, typed in when none of the
+    /// installed ones (`other`), and being typed.
+    terminal: String,
+    other: bool,
+    typing_terminal: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -95,6 +100,9 @@ enum Do {
 #[derive(Clone, Copy)]
 enum Act {
     Language(Option<&'static str>),
+    /// A terminal's command line; `None`: the system's.
+    Terminal(Option<&'static str>),
+    OtherTerminal,
     Toggle(fn(&mut Prefs) -> &mut bool),
     Shows(bool, bool),
     Bridges(bool),
@@ -121,6 +129,8 @@ enum Item {
     Row { label: String, mark: Mark, help: Option<String>, act: Act },
     /// The bridge lines, under the row that edits them.
     Lines,
+    /// The terminal's own command line, under « Other… ».
+    TerminalLine,
 }
 
 const HOUR: u64 = 3_600_000;
@@ -132,13 +142,29 @@ impl App {
             Ok(Reply::Bridges { lines }) => (!lines.is_empty(), lines.join("\n")),
             _ => (false, String::new()),
         };
-        self.overlay = Some(Overlay::Settings(Settings { tab, row: 0, own, lines, editing: false, said: None }));
+        let terminal = terminal::load(&self.dir);
+        let other = !terminal.is_empty() && !terminal::installed().iter().any(|&(_, l)| l == terminal);
+        self.overlay = Some(Overlay::Settings(Settings { tab, row: 0, own, lines, editing: false, said: None, terminal, other, typing_terminal: false }));
     }
 
     /// Keys for the windows of this file; false: not one of them.
     pub(super) async fn on_panel_key(&mut self, key: KeyEvent, requests: &mut Client) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match self.overlay.take() {
+            Some(Overlay::Settings(mut s)) if s.typing_terminal => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        s.typing_terminal = false;
+                        self.save_terminal(&s.terminal);
+                    }
+                    KeyCode::Backspace => {
+                        s.terminal.pop();
+                    }
+                    KeyCode::Char(c) if !ctrl => s.terminal.push(c),
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Settings(s));
+            }
             Some(Overlay::Settings(mut s)) if s.editing => {
                 match key.code {
                     KeyCode::Esc => s.editing = false,
@@ -220,10 +246,17 @@ impl App {
     pub(super) fn on_panel_paste(&mut self, text: &str) -> bool {
         match &mut self.overlay {
             Some(Overlay::Settings(s)) if s.editing => s.lines.push_str(text),
+            Some(Overlay::Settings(s)) if s.typing_terminal => s.terminal.push_str(text.lines().next().unwrap_or_default()),
             Some(Overlay::Passphrase(p)) => p.fields[p.at].push_str(text.trim_end_matches(['\r', '\n'])),
             _ => return false,
         }
         true
+    }
+
+    fn save_terminal(&mut self, line: &str) {
+        if let Err(e) = terminal::save(&self.dir, line) {
+            self.status = format!("{e:#}");
+        }
     }
 
     async fn act(&mut self, s: &mut Settings, act: Act, requests: &mut Client) {
@@ -235,6 +268,11 @@ impl App {
                 }
                 Err(e) => self.status = format!("{e:#}"),
             },
+            Act::Terminal(line) => {
+                (s.terminal, s.other) = (line.unwrap_or_default().to_string(), false);
+                self.save_terminal(&s.terminal);
+            }
+            Act::OtherTerminal => (s.other, s.typing_terminal) = (true, true),
             Act::Toggle(field) => {
                 let mut prefs = Prefs::load(&self.dir);
                 let on = field(&mut prefs);
@@ -374,6 +412,21 @@ impl App {
                     items.push(row(name.to_string(), Mark::Radio(chosen.as_deref() == Some(code)), None, Act::Language(Some(code))));
                 }
                 items.extend([Item::Text(t!("language-help"), DIM), Item::Gap, Item::Title(t!("theme")), Item::Text(t!("tui-theme-help"), DIM)]);
+                // For the tray icon's menu: the Mac app has its own setting,
+                // and a Flatpak's tray opens no terminal.
+                if !cfg!(target_os = "macos") && std::env::var_os("FLATPAK_ID").is_none() {
+                    items.extend([Item::Gap, Item::Title(t!("terminal"))]);
+                    let (line, other) = (s.terminal.as_str(), s.other);
+                    items.push(row(t!("theme-system"), Mark::Radio(line.is_empty() && !other), None, Act::Terminal(None)));
+                    for (name, command) in terminal::installed() {
+                        items.push(row(name.to_string(), Mark::Radio(!other && line == command), None, Act::Terminal(Some(command))));
+                    }
+                    items.push(row(t!("terminal-other"), Mark::Radio(other), other.then(|| t!("terminal-other-help")), Act::OtherTerminal));
+                    if other {
+                        items.push(Item::TerminalLine);
+                    }
+                    items.push(Item::Text(t!("terminal-help"), DIM));
+                }
             }
             NETWORK => {
                 let (title, detail) = self.network.summary();
@@ -525,7 +578,9 @@ impl App {
         let top = if end >= shown { (end + 1 - shown).min(start) } else { 0 };
         frame.render_widget(Paragraph::new(lines).scroll((top as u16, 0)), body);
 
-        let keys = if s.editing {
+        let keys = if s.typing_terminal {
+            keycaps(&[(t!("key-enter").as_str(), t!("hint-done"))])
+        } else if s.editing {
             keycaps(&[(t!("key-enter").as_str(), t!("hint-newline")), ("Esc", t!("hint-done"))])
         } else {
             // About has nothing to choose or change.
@@ -582,6 +637,22 @@ impl App {
                     if selected {
                         end = lines.len() - 1;
                     }
+                }
+                Item::TerminalLine => {
+                    let bar = Style::new().fg(if s.typing_terminal { ACCENT } else { Color::DarkGray });
+                    let mut spans = vec![Span::styled("  │ ", bar)];
+                    if s.terminal.is_empty() && !s.typing_terminal {
+                        spans.push(Span::styled("alacritty -e", DIM));
+                    } else {
+                        // Its end, where the typing is.
+                        let room = width.saturating_sub(7).max(1);
+                        let skip = s.terminal.chars().count().saturating_sub(room);
+                        spans.push(Span::raw(if skip > 0 { format!("…{}", s.terminal.chars().skip(skip + 1).collect::<String>()) } else { s.terminal.clone() }));
+                    }
+                    if s.typing_terminal {
+                        spans.push(Span::styled("▏", Style::new().fg(ACCENT)));
+                    }
+                    lines.push(Line::from(spans));
                 }
                 Item::Lines => {
                     let bar = Style::new().fg(if s.editing { ACCENT } else { Color::DarkGray });

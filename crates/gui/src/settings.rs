@@ -91,8 +91,8 @@ fn Appearance() -> Element {
     let theme = *state.theme.read();
     // A signal: choosing the language already spoken redraws nothing else.
     let mut chosen = use_signal(i18n::chosen);
-    let mut terminal = use_signal(|| std::fs::read_to_string(dir().join(crate::tray::TERMINAL_FILE)).unwrap_or_default().trim().to_string());
-    let installed = crate::tray::installed();
+    let mut terminal = use_signal(|| nightpost_core::terminal::load(dir()));
+    let installed = nightpost_core::terminal::installed();
     // A command line of one's own: none of the buttons.
     let mut other = use_signal(|| {
         let line = terminal.peek().clone();
@@ -644,6 +644,5 @@ fn open_folder(path: &std::path::Path) {
 
 /// The terminal's command line for the tray; empty: the system's.
 fn save_terminal(line: &str) -> bool {
-    let file = dir().join(crate::tray::TERMINAL_FILE);
-    if line.is_empty() { std::fs::remove_file(file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) } else { std::fs::write(file, line) }.is_ok()
+    nightpost_core::terminal::save(dir(), line).is_ok()
 }

@@ -11,6 +11,7 @@ pub mod prefs;
 pub mod proto;
 pub mod session;
 pub mod store;
+pub mod terminal;
 pub mod text;
 pub mod transport;
 

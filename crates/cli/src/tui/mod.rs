@@ -47,6 +47,10 @@ struct Conversation {
     person: Person,
     unread: usize,
     messages: Vec<HistoryItem>,
+    /// Who last set the timer, and when, shown in the thread at that time.
+    /// ponytail: kept in memory only, gone when the TUI restarts; store it
+    /// with the messages if it should last.
+    timer_set: Option<(u64, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -632,6 +636,11 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp if menu > 0 => self.menu = self.menu.saturating_sub(1),
             MouseEventKind::ScrollDown if menu > 0 => self.menu = (self.menu + 1).min(menu - 1),
+            // Over the list (the whole screen when narrow), the wheel goes from one person to the next.
+            MouseEventKind::ScrollUp if list.contains(at) => self.select(self.selected.saturating_sub(1), requests).await,
+            MouseEventKind::ScrollDown if list.contains(at) => {
+                self.select((self.selected + 1).min(self.conversations.len().saturating_sub(1)), requests).await;
+            }
             MouseEventKind::ScrollUp => self.scroll += 3,
             MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
             MouseEventKind::Down(MouseButton::Left) if self.overlay.is_none() => {
@@ -908,7 +917,17 @@ impl App {
                 self.codes.push(name.clone());
                 self.overlay = Some(Overlay::Text {
                     title: t!("code-title", name = name),
-                    body: vec![t!("code-help"), String::new(), format!("    {}", code.replace('-', "  ")), String::new(), t!("code-after", name = name)],
+                    body: {
+                        let plain = format!("    {}", code.replace('-', "  "));
+                        let mut body = vec![t!("code-help"), String::new()];
+                        // Big when it fits (the window keeps a margin around it).
+                        if crossterm::terminal::size().is_ok_and(|(width, _)| width >= 66) {
+                            body.extend(view::big_digits(&code).map(|row| format!("    {row}")));
+                            body.push(String::new());
+                        }
+                        body.extend([plain, String::new(), t!("code-after", name = name)]);
+                        body
+                    },
                 });
             }
             Update::DaemonGone => {
@@ -991,10 +1010,17 @@ impl App {
                 self.selected = self.selected.min(self.conversations.len().saturating_sub(1));
                 self.status = t!("removed", name = name);
             }
-            Update::Event(Event::TimerChanged { name, seconds }) => {
+            Update::Event(Event::TimerChanged { name, seconds, by_me }) => {
+                let open = self.current().is_some_and(|c| c.name == name);
                 if let Some(c) = self.conversations.iter_mut().find(|c| c.name == name) {
                     c.timer = seconds;
-                    self.status = t!("tui-timer-set", name = name, timer = nightpost_core::api::timer_label(seconds).to_lowercase());
+                    let timer = nightpost_core::api::timer_label(seconds).to_lowercase();
+                    let line = if by_me { t!("timer-set-by-me", timer = timer.clone()) } else { t!("timer-set-by-them", name = name.clone(), timer = timer.clone()) };
+                    c.timer_set = Some((now_millis(), line));
+                    // In the thread when it is open; else on the status line.
+                    if !open {
+                        self.status = t!("tui-timer-set", name = name, timer = timer);
+                    }
                 }
             }
             Update::Event(Event::Expired { name }) => {
@@ -1054,7 +1080,7 @@ impl App {
                     Reply::Error { message } => bail!("{message}"),
                     other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
-                self.conversations.push(Conversation { name: c.name, note: c.note, timer: c.timer, person: c.person, unread: 0, messages });
+                self.conversations.push(Conversation { name: c.name, note: c.note, timer: c.timer, person: c.person, unread: 0, messages, timer_set: None });
             }
         }
         Ok(())

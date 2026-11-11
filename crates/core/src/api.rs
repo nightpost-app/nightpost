@@ -133,7 +133,13 @@ pub enum Event {
     ContactRemoved { name: String },
     PersonChanged { name: String, person: Person },
     /// Messages with them now disappear after this many seconds (0: never).
-    TimerChanged { name: String, seconds: u32 },
+    /// `by_me`: set here, not by them.
+    TimerChanged {
+        name: String,
+        seconds: u32,
+        #[serde(default)]
+        by_me: bool,
+    },
     /// Messages of this conversation disappeared: show its history again.
     Expired { name: String },
     Show,

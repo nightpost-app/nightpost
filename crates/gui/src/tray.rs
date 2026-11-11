@@ -12,7 +12,7 @@ use dioxus::desktop::tao::event_loop::{ControlFlow, EventLoopBuilder};
 use dioxus::desktop::trayicon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use dioxus::desktop::trayicon::{Icon, TrayIconBuilder};
 use nightpost_core::api::{Interface, Reply, Request};
-use nightpost_core::t;
+use nightpost_core::{t, terminal};
 
 enum Wake {
     Menu(MenuEvent),
@@ -144,40 +144,6 @@ fn ask(request: Request) {
     });
 }
 
-/// The terminals offered in Settings: name, and the command line the
-/// program is added to. Any other command line can be typed in.
-#[cfg(not(windows))]
-pub const TERMINALS: [(&str, &str); 11] = [
-    ("Ghostty", "ghostty -e"),
-    ("Konsole", "konsole -e"),
-    ("Ptyxis", "ptyxis --"),
-    ("GNOME Terminal", "gnome-terminal --"),
-    ("Console", "kgx -e"),
-    ("Xfce Terminal", "xfce4-terminal -x"),
-    ("Alacritty", "alacritty -e"),
-    ("kitty", "kitty"),
-    ("foot", "foot"),
-    ("WezTerm", "wezterm start --"),
-    ("XTerm", "xterm -e"),
-];
-#[cfg(windows)]
-pub const TERMINALS: [(&str, &str); 3] = [("Windows Terminal", "wt"), ("Alacritty", "alacritty -e"), ("WezTerm", "wezterm start --")];
-
-/// The command line picked in Settings; none: the system's.
-pub const TERMINAL_FILE: &str = "terminal";
-
-/// Those of [`TERMINALS`] on the PATH.
-pub fn installed() -> Vec<(&'static str, &'static str)> {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let found = |line: &str| {
-        let command = line.split(' ').next().unwrap_or_default();
-        // Not is_file: Windows Terminal's `wt.exe` is an app alias, which
-        // only has metadata of its own.
-        std::env::split_paths(&path).any(|dir| std::fs::symlink_metadata(dir.join(format!("{command}{}", std::env::consts::EXE_SUFFIX))).is_ok())
-    };
-    TERMINALS.into_iter().filter(|(_, line)| found(line)).collect()
-}
-
 /// A command line in words, as a shell splits it: quotes hold spaces
 /// together (`"C:\Program Files\…"`); backslashes are left alone, for
 /// Windows paths.
@@ -212,7 +178,7 @@ fn run_in(line: &str, program: &Path) -> bool {
 
 /// Runs `program` in a terminal window: false if none could be found.
 fn open_terminal(program: &Path) -> bool {
-    let picked = std::fs::read_to_string(crate::dir().join(TERMINAL_FILE)).unwrap_or_default();
+    let picked = terminal::load(crate::dir());
     if run_in(&picked, program) {
         return true;
     }
@@ -229,7 +195,7 @@ fn open_terminal(program: &Path) -> bool {
         // The user's TERMINAL, then the standard launcher, then the
         // terminals desktops come with.
         let chosen = std::env::var_os("TERMINAL").map(|t| reap(Command::new(t).arg("-e").arg(program).stdin(Stdio::null()).spawn()));
-        chosen == Some(true) || std::iter::once("xdg-terminal-exec").chain(TERMINALS.map(|(_, line)| line)).any(|line| run_in(line, program))
+        chosen == Some(true) || std::iter::once("xdg-terminal-exec").chain(terminal::TERMINALS.map(|(_, line)| line)).any(|line| run_in(line, program))
     }
 }
 
