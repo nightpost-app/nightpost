@@ -9,7 +9,12 @@ env:
   TOR_BUNDLE: "15.0.24"
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -18,7 +23,19 @@ jobs:
         timeout-minutes: 10
       - uses: Swatinem/rust-cache@v2
       - name: Fetch lyrebird (signed by the Tor Browser developers)
+        if: matrix.arch == 'x86_64'
         run: packaging/fetch-lyrebird.sh linux-x86_64
+      # Tor ships no lyrebird for Linux on ARM: the version in its x86_64
+      # bundle (same dependencies), built from that commit.
+      - uses: actions/setup-go@v5
+        if: matrix.arch == 'aarch64'
+        with: { go-version: "1.25", cache: false }
+      - name: Build lyrebird 0.8.1
+        if: matrix.arch == 'aarch64'
+        run: |
+          git clone -q https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git lb
+          git -C lb checkout -q 0b10edbb61e0ca6fb70c7d57aeaabf315f1fade1
+          (cd lb && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o ../lyrebird ./cmd/lyrebird)
       - name: libxdo, linked in
         # Distributions ship libxdo.so.3 (Ubuntu, Debian, Fedora) or .so.4
         # (Arch, openSUSE): built in, the window needs neither.
@@ -28,7 +45,7 @@ jobs:
           echo "96f0facfde6d78eacad35b91b0f46fecd0b35e474c03e00e30da3fdd345f9ada  $x.tar.gz" | sha256sum -c
           tar xzf $x.tar.gz && make -C $x libxdo.a
           mkdir -p .cargo && cat >> .cargo/config.toml <<EOF
-          [target.x86_64-unknown-linux-gnu.xdo]
+          [target.${{ matrix.arch }}-unknown-linux-gnu.xdo]
           rustc-link-search = ["$PWD/$x"]
           rustc-link-lib = ["static=xdo", "X11", "Xtst", "Xinerama", "xkbcommon", "Xi"]
           EOF
@@ -40,7 +57,7 @@ jobs:
           d=nightpost; mkdir $d
           cp target/release/nightpost target/release/nightpost-gui lyrebird $d/
           cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/xdotool.txt $d/LICENSE-xdotool.txt; cp docs/bridges.md $d/BRIDGES.md
-          mkdir out; tar czf out/nightpost-linux-x86_64.tar.gz $d
+          mkdir out; tar czf out/nightpost-linux-${{ matrix.arch }}.tar.gz $d
       - name: Packages
         run: |
           cp lyrebird target/release/lyrebird
@@ -56,10 +73,11 @@ jobs:
           cargo generate-rpm -p crates/cli -s "version = \"$rv\"" -s 'release = "1"' -s 'requires = { liblzma5 = "*" }' -o out/opensuse/
           cargo generate-rpm -p crates/gui -s "version = \"$rv\"" -s 'release = "1"' -o out/opensuse/ \
             -s "requires = { nightpost-cli = \"= $rv-1\", libwebkit2gtk-4_1-0 = \"*\", libXtst6 = \"*\", liblzma5 = \"*\", libayatana-appindicator3-1 = \"*\" }"
-          for f in out/opensuse/*.rpm; do mv "$f" "out/$(basename "$f" .x86_64.rpm).opensuse.x86_64.rpm"; done
+          a=${{ matrix.arch }}
+          for f in out/opensuse/*.rpm; do mv "$f" "out/$(basename "$f" .$a.rpm).opensuse.$a.rpm"; done
           rmdir out/opensuse
       - uses: actions/upload-artifact@v4
-        with: { name: linux, path: out/* }
+        with: { name: "linux-${{ matrix.arch }}", path: out/* }
 
   flatpak:
     # Built offline from vendored crates, as Flathub does; WebKit comes from the GNOME runtime.
