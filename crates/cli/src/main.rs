@@ -22,10 +22,10 @@ usage:
                                    in the background if none runs)
   nightpost daemon                 run the daemon (Tor) in the foreground
   nightpost daemon --recovery      the same, opened with the recovery phrase
+                                   (another keychain answers: new desktop)
   nightpost daemon --mailbox       run as a mailbox for your account (on a
                                    server): keeps messages for your devices
                                    that are off, never your keys
-                                   (another keychain answers: new desktop)
   nightpost recovery               the 24 words that open the database when
                                    the keychain does not have its secret
   nightpost invite <name>          print a one-time link for <name>

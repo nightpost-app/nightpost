@@ -19,7 +19,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::PROTOCOL_VERSION;
 use crate::api::hex;
-use crate::daemon::{Contact, IDLE, OtherVersion, STEP, handshake, hello, now_secs, step};
+use crate::daemon::{Contact, IDLE, OtherVersion, STEP, hang_up, handshake, hello, now_secs, step};
 use crate::dbkey::Secret;
 use crate::devices::{self, PAIRING_LIFETIME, Pairing, Step};
 use crate::identity::{Role, SignedDeviceList};
@@ -293,5 +293,6 @@ where
         store.put("mailbox", "joined", &bytes)
     })?;
     proto::send(stream, &Step::Ok).await?;
+    hang_up(stream).await;
     Ok(joined)
 }

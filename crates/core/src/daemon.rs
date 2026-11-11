@@ -22,7 +22,7 @@ use libsignal_protocol::{
 };
 use rand::{Rng as _, TryRngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::sync::{Mutex, Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::spawn_local;
 use tokio::time::{sleep, timeout};
@@ -875,6 +875,7 @@ impl<T: Transport + 'static> Daemon<T> {
         }
         self.refresh_service().await?;
         let _ = self.events.send(Event::Paired);
+        hang_up(&mut stream).await;
         Ok(())
     }
 
@@ -1223,30 +1224,38 @@ impl<T: Transport + 'static> Daemon<T> {
 
     // --- mailboxes ---------------------------------------------------------
 
-    /// Looks in our mailbox at start, every 10 minutes, and when told to.
+    /// Looks in our mailbox at start, every 10 minutes, and when told to;
+    /// after a failure, again sooner.
     async fn fetcher(self: Rc<Self>) {
+        let mut wait = RETRY;
         loop {
-            self.visit_soon(self.account());
+            wait = match self.visit_once(self.account()).await {
+                true => FETCH,
+                false => (wait * 2).min(FETCH),
+            };
             tokio::select! {
                 _ = self.fetch_now.notified() => {}
-                _ = sleep(FETCH) => {}
+                _ = sleep(wait) => {}
                 _ = self.stopped() => return,
             }
         }
     }
 
-    /// One visit at a time to each account's mailbox.
     fn visit_soon(self: &Rc<Self>, account: Vec<u8>) {
-        if self.removed.get() || !self.visiting.borrow_mut().insert(account.clone()) {
-            return;
-        }
         let daemon = self.clone();
         spawn_local(async move {
-            if let Err(e) = daemon.visit(&account).await {
-                tracing::info!("no visit to a mailbox: {e:#}");
-            }
-            daemon.visiting.borrow_mut().remove(&account);
+            daemon.visit_once(account).await;
         });
+    }
+
+    /// One visit at a time to each account's mailbox. False if it failed.
+    async fn visit_once(self: &Rc<Self>, account: Vec<u8>) -> bool {
+        if self.removed.get() || !self.visiting.borrow_mut().insert(account.clone()) {
+            return true;
+        }
+        let result = self.visit(&account).await;
+        self.visiting.borrow_mut().remove(&account);
+        result.inspect_err(|e| tracing::info!("no visit to a mailbox: {e:#}")).is_ok()
     }
 
     /// Leaves at `account`'s mailbox what waits for its devices that did not
@@ -1843,6 +1852,12 @@ pub(crate) async fn hello(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) ->
             Err(OtherVersion(theirs).into())
         }
     }
+}
+
+/// Waits for the other side to close: the temporary service that carried
+/// the last words must outlive them, or Tor drops them on the way.
+pub(crate) async fn hang_up(stream: &mut (impl AsyncRead + Unpin)) {
+    let _ = timeout(STEP, stream.read(&mut [0; 1])).await;
 }
 
 /// The next step of a pairing, within a handshake step's time.
