@@ -255,6 +255,10 @@ pub async fn run(dir: &Path) -> Result<()> {
     }
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange, DisableBracketedPaste, Print("\x1b[23;0t"));
     ratatui::restore();
+    // From a key, leaving stops the daemon too: the key is about to go.
+    if nightpost_core::portable() {
+        let _ = requests.call(&Request::Shutdown).await;
+    }
     result
 }
 

@@ -1,0 +1,34 @@
+Nightpost sur une clé USB
+=========================
+
+Lancer
+  Double-clic sur le lanceur de l'ordinateur :
+    Nightpost Linux.sh · Nightpost Mac.command · Nightpost Windows.bat
+  Tes messages restent dans le dossier data/, sur la clé.
+
+Premier lancement
+  Choisis une phrase de passe. C'est la seule clé de tes messages : le
+  trousseau de l'ordinateur n'est jamais utilisé. Oubliée, elle ne se
+  retrouve pas, et il n'y a pas de phrase de récupération.
+
+Fermer
+  Fermer la fenêtre arrête Nightpost. Attends qu'elle soit fermée, puis
+  éjecte la clé avant de la retirer.
+
+Ce que la clé ne fait pas
+  - Elle ne protège pas d'un ordinateur piégé : un logiciel espion voit ce
+    que tu tapes et ce que tu lis. Sur une machine douteuse, ne l'utilise pas.
+  - Nightpost n'écrit rien hors de la clé, sauf des fichiers temporaires
+    effacés à la fermeture. Le système peut quand même noter qu'une clé a
+    été branchée et qu'un programme a été lancé.
+  - Sous Linux et macOS, Tor choisit de nouveaux nœuds d'entrée à chaque
+    lancement, comme Tails.
+
+Selon le système
+  - Linux : la fenêtre demande WebKitGTK 4.1 sur la machine
+    (paquet libwebkit2gtk-4.1). Sans lui, l'interface dans le terminal :
+      NIGHTPOST_PORTABLE=1 NIGHTPOST_DIR=<clé>/data <clé>/linux/nightpost
+  - macOS : au premier lancement, Gatekeeper peut bloquer l'app. Clic droit
+    sur mac/Nightpost.app, puis Ouvrir. Mac Apple (M1 et suivants) seulement.
+  - Windows : SmartScreen avertit. « Informations complémentaires », puis
+    « Exécuter quand même ».
