@@ -1368,7 +1368,8 @@ async fn attach(mut phase: Signal<Phase>, passphrase: Option<String>, recovery: 
             // A wrong key, or a keychain that does not have it (another
             // desktop): the words are the way out, offered on that screen.
             if (asked && text.contains("wrong key")) || text.contains(&t!("err-keychain-lost")) {
-                phase.set(Phase::Locked(t!("wrong-passphrase")));
+                let lost = t!("err-keychain-lost");
+                phase.set(Phase::Locked(if text.contains(&lost) { lost } else { t!("wrong-passphrase") }));
                 return Ok(None);
             }
             bail!("the daemon stopped ({status}): {}", text.lines().last().unwrap_or_default());

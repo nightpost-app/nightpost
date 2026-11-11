@@ -577,7 +577,7 @@ fn Recovery() -> Element {
             p { class: "help", {t!("recovery-help")} }
             if let Some(words) = phrase.read().as_ref() {
                 ol { class: "recovery",
-                    for (i, word) in words.split(' ').enumerate() {
+                    for (i, word) in words.split_whitespace().enumerate() {
                         li { key: "{i}", "{word}" }
                     }
                 }
