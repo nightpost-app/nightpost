@@ -20,7 +20,7 @@ enum ShellCommand {
 
     /// Asks once, at the first launch. A development run (NIGHTPOST_BIN) stays out of it.
     @MainActor static func offer() async {
-        guard ProcessInfo.processInfo.environment["NIGHTPOST_BIN"] == nil, target != nil,
+        guard ProcessInfo.processInfo.environment["NIGHTPOST_BIN"] == nil, !Daemon.portable, target != nil,
               !UserDefaults.standard.bool(forKey: asked), !installed else { return }
         UserDefaults.standard.set(true, forKey: asked)
         try? await Task.sleep(for: .seconds(1))

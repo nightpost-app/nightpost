@@ -5,6 +5,17 @@ import UniformTypeIdentifiers
 struct NightpostApp: App {
     @State private var model = AppModel()
 
+    init() {
+        // From a key, quitting stops the daemon and forgets this app's
+        // settings on the borrowed Mac.
+        if Daemon.portable {
+            NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+                Daemon.stopNow()
+                if let id = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: id) }
+            }
+        }
+    }
+
     var body: some Scene {
         Window("Nightpost", id: "main") {
             RootView()
@@ -187,7 +198,7 @@ struct RootView: View {
         .ignoresSafeArea()
         .onChange(of: theme, initial: true) { theme.apply() }
         // Closing the window: the daemon stops too, if asked.
-        .onDisappear { if lockOnClose { model.quit() } }
+        .onDisappear { if lockOnClose || Daemon.portable { model.quit() } }
     }
 }
 
@@ -213,45 +224,67 @@ struct Splash: View {
     }
 }
 
-/// The database needs the passphrase before the daemon can start.
+/// The database needs the passphrase, or the keychain lacks its key (a new
+/// Mac): the recovery words, offered after a refusal.
 struct LockView: View {
     @Environment(AppModel.self) private var model
     let why: String
     @State private var passphrase = ""
+    @State private var words = ""
+    @State private var recover = false
     @FocusState private var typing: Bool
+    private let has = Daemon.usesPassphrase
 
     var body: some View {
         VStack(spacing: 14) {
             Wordmark(size: 46)
-            Text(t("mac-locked")).font(.ui(15)).foregroundStyle(Palette.muted)
-            SecureField(t("mac-passphrase"), text: $passphrase)
-                .textFieldStyle(.plain)
-                .font(.ui(15.5))
-                .padding(.horizontal, 16)
-                .frame(width: 320, height: 46)
-                .background(Palette.input, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
-                .focused($typing)
-                .clickToFocus($typing)
-                .onSubmit(unlock)
+            if has {
+                Text(t("mac-locked")).font(.ui(15)).foregroundStyle(Palette.muted)
+                field(SecureField(t("mac-passphrase"), text: $passphrase))
+            }
+            if recover {
+                Text(t("recovery-prompt")).font(.ui(15)).foregroundStyle(Palette.muted)
+                field(TextField(t("recovery-title"), text: $words, axis: .vertical).lineLimit(3...4).autocorrectionDisabled())
+            }
             if !why.isEmpty {
-                Text(why).font(.ui(14, .medium)).foregroundStyle(Palette.fail)
+                Text(why).font(.ui(14, .medium)).foregroundStyle(Palette.fail).multilineTextAlignment(.center).frame(maxWidth: 420)
             }
             Button(t("unlock"), action: unlock)
                 .buttonStyle(PrimaryButton())
                 .keyboardShortcut(.defaultAction)
-                .disabled(passphrase.isEmpty)
+                .disabled(!ready)
+            if !why.isEmpty && !recover {
+                Button(t("recovery-use")) { recover = true }.buttonStyle(SecondaryButton())
+            }
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { typing = true }
     }
 
+    private func field(_ field: some View) -> some View {
+        field
+            .textFieldStyle(.plain)
+            .font(.ui(15.5))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .frame(width: 320)
+            .background(Palette.input, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
+            .focused($typing)
+            .clickToFocus($typing)
+            .onSubmit(unlock)
+    }
+
+    private var phrase: String { words.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+    private var ready: Bool { (!has || !passphrase.isEmpty) && (!recover || !phrase.isEmpty) }
+
     private func unlock() {
-        guard !passphrase.isEmpty else { return }
-        let given = passphrase
+        guard ready else { return }
+        let (given, recovery) = (has ? passphrase : nil, recover ? phrase : nil)
         passphrase = ""
-        Task { await model.run(passphrase: given) }
+        words = ""
+        Task { await model.run(passphrase: given, recovery: recovery) }
     }
 }
 

@@ -72,6 +72,12 @@ struct ConversationView: View {
                             .frame(width: 23, height: 23)
                             .help(t("mac-verified-help", ["name": name]))
                     }
+                    if let seconds = model.contacts.first(where: { $0.name == name })?.timer, seconds > 0 {
+                        Icon(parts: [.circle(12, 13, 8), .path("M12 9v4l2.5 2M9.5 3h5")], weight: 2)
+                            .foregroundStyle(Palette.muted)
+                            .frame(width: 19, height: 19)
+                            .help(t("timer-mark-help", ["timer": timerLabel(seconds)]))
+                    }
                     if model.isMuted(name) {
                         Icon(parts: Icon.muted, weight: 2)
                             .foregroundStyle(Palette.muted)

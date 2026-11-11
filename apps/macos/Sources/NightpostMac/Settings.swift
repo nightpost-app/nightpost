@@ -413,6 +413,8 @@ private struct SecurityPane: View {
     @State private var error = ""
     @State private var busy = false
     @State private var done = ""
+    /// The recovery words while shown.
+    @State private var words: [String]?
 
     var body: some View {
         Block(title: t("how-locked")) {
@@ -439,6 +441,22 @@ private struct SecurityPane: View {
             }
         }
         if let change { form(change) }
+        Block(title: t("recovery-title")) {
+            Help(t("recovery-help"))
+            if let words {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3), alignment: .leading, spacing: 6) {
+                    ForEach(Array(words.enumerated()), id: \.offset) { i, word in
+                        Text(verbatim: "\(i + 1). \(word)").font(.ui(14)).foregroundStyle(Palette.strong)
+                    }
+                }
+                .textSelection(.enabled)
+            }
+            Button(words == nil ? t("recovery-show") : t("recovery-hide")) {
+                if words != nil { words = nil; return }
+                Task { words = await model.recoveryPhrase()?.split(whereSeparator: \.isWhitespace).map(String.init) }
+            }
+            .buttonStyle(SecondaryButton())
+        }
         Block(title: t("read-receipts")) {
             ToggleRow(
                 title: t("read-receipts-send"),

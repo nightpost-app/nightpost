@@ -29,10 +29,14 @@ enum Request: Encodable, Sendable {
     case bridges(lines: [String]?)
     /// The language was chosen again: the daemon speaks it from now on.
     case language
+    /// Messages with them disappear after this many seconds (0: never).
+    case timer(name: String, seconds: UInt32)
+    /// The 24 words that open the database without the keychain.
+    case recoveryPhrase
     case shutdown
 
     private enum Key: String, CodingKey {
-        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines, interface
+        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines, interface, seconds
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -61,6 +65,8 @@ enum Request: Encodable, Sendable {
         case let .close(interface): try cmd("close"); try c.encode(interface, forKey: .interface)
         case let .bridges(lines): try cmd("bridges"); try c.encode(lines, forKey: .lines)
         case .language: try cmd("language")
+        case let .timer(name, seconds): try cmd("timer"); try c.encode(name, forKey: .name); try c.encode(seconds, forKey: .seconds)
+        case .recoveryPhrase: try cmd("recovery_phrase")
         case .shutdown: try cmd("shutdown")
         }
     }
@@ -80,12 +86,13 @@ enum Reply: Decodable, Sendable {
     case readReceipts(on: Bool)
     case typingIndicators(on: Bool)
     case bridges([String])
+    case recoveryPhrase(String)
     case error(String)
     /// From a newer daemon.
     case unknown(String)
 
     private enum Key: String, CodingKey {
-        case reply, id, link, code, name, contacts, messages, number, network, links, on, lines, message
+        case reply, id, link, code, name, contacts, messages, number, network, links, on, lines, message, phrase
     }
 
     init(from decoder: any Decoder) throws {
@@ -105,6 +112,7 @@ enum Reply: Decodable, Sendable {
         case "read_receipts": self = .readReceipts(on: try c.decode(Bool.self, forKey: .on))
         case "typing_indicators": self = .typingIndicators(on: try c.decode(Bool.self, forKey: .on))
         case "bridges": self = .bridges(try c.decode([String].self, forKey: .lines))
+        case "recovery_phrase": self = .recoveryPhrase(try c.decode(String.self, forKey: .phrase))
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         default: self = .unknown(tag)
         }
@@ -127,14 +135,20 @@ enum Event: Decodable, Sendable {
     case contactRenamed(name: String, to: String)
     case contactRemoved(name: String)
     case personChanged(name: String, person: Person)
+    /// Messages with them now disappear after `seconds` (0: never); `byMe`:
+    /// set here, not by them.
+    case timerChanged(name: String, seconds: UInt32, byMe: Bool)
+    /// Messages with them disappeared: take their history again.
+    case expired(name: String)
     /// Nightpost is stopping ("window"), or a terminal is told to go.
     case close(interface: String)
     /// From a newer daemon.
     case unknown(String)
 
     private enum Key: String, CodingKey {
-        case event, from, to, id, ids, time, text, on, name, network, state, person, interface
+        case event, from, to, id, ids, time, text, on, name, network, state, person, interface, seconds
         case safetyNumber = "safety_number"
+        case byMe = "by_me"
     }
 
     init(from decoder: any Decoder) throws {
@@ -156,6 +170,8 @@ enum Event: Decodable, Sendable {
         case "contact_renamed": self = .contactRenamed(name: try s(.name), to: try s(.to))
         case "contact_removed": self = .contactRemoved(name: try s(.name))
         case "person_changed": self = .personChanged(name: try s(.name), person: try c.decode(Person.self, forKey: .person))
+        case "timer_changed": self = .timerChanged(name: try s(.name), seconds: try c.decode(UInt32.self, forKey: .seconds), byMe: try c.decodeIfPresent(Bool.self, forKey: .byMe) ?? false)
+        case "expired": self = .expired(name: try s(.name))
         case "close": self = .close(interface: try s(.interface))
         default: self = .unknown(tag)
         }
@@ -172,6 +188,8 @@ struct Network: Codable, Sendable, Equatable {
     /// got built; nil until a probe ran.
     var entry: Bool?
     var circuit: Bool?
+    /// No route to the Internet at all (Wi-Fi off): not Tor's doing.
+    var offline = false
     /// The last line for people.
     var line = ""
 }
@@ -227,10 +245,12 @@ struct ContactInfo: Decodable, Sendable, Identifiable, Equatable {
     var person: Person
     /// The note to ourselves: it never leaves this computer, no Tor, no route.
     var note: Bool
+    /// Seconds before messages with them disappear; 0: never.
+    var timer: UInt32
     var id: String { name }
 
     private enum Key: String, CodingKey {
-        case name, person, note
+        case name, person, note, timer
         case safetyNumber = "safety_number"
     }
 
@@ -240,6 +260,7 @@ struct ContactInfo: Decodable, Sendable, Identifiable, Equatable {
         safetyNumber = try c.decode(String.self, forKey: .safetyNumber)
         person = try c.decodeIfPresent(Person.self, forKey: .person) ?? Person()
         note = try c.decodeIfPresent(Bool.self, forKey: .note) ?? false
+        timer = try c.decodeIfPresent(UInt32.self, forKey: .timer) ?? 0
     }
 }
 

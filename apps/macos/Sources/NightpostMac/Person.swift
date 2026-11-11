@@ -26,6 +26,7 @@ struct PersonPanel: View {
                 renaming
                 safety(person)
                 notifications(person)
+                timer
                 removal
             }
             .padding(.horizontal, 22)
@@ -141,6 +142,20 @@ struct PersonPanel: View {
             .background(Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
             Help(help)
+        }
+    }
+
+    private var timer: some View {
+        let seconds = model.contacts.first { $0.name == name }?.timer ?? 0
+        return VStack(alignment: .leading, spacing: 12) {
+            PanelTitle(t("timer-title"))
+            Picker(t("timer-title"), selection: Binding(get: { seconds }, set: { model.setTimer(name, $0) })) {
+                ForEach(timerChoices, id: \.self) { Text(timerLabel($0)).tag($0) }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            Help(t("timer-help", ["name": name]))
         }
     }
 

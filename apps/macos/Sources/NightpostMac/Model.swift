@@ -61,10 +61,10 @@ final class AppModel {
 
     /// Attaches to the daemon (starting it if none answers), then follows
     /// its events until it stops.
-    func run(passphrase: String? = nil) async {
+    func run(passphrase: String? = nil, recovery: String? = nil) async {
         let events: AsyncThrowingStream<Event, any Error>
         do {
-            guard let attached = try await attach(passphrase: passphrase) else { return }
+            guard let attached = try await attach(passphrase: passphrase, recovery: recovery) else { return }
             events = attached
         } catch {
             phase = .failed(error.localizedDescription)
@@ -97,7 +97,7 @@ final class AppModel {
 
     /// The event stream, starting the daemon first if none answers. nil:
     /// it needs the passphrase (again) and the phase now asks for it.
-    private func attach(passphrase: String?) async throws -> AsyncThrowingStream<Event, any Error>? {
+    private func attach(passphrase: String?, recovery: String?) async throws -> AsyncThrowingStream<Event, any Error>? {
         // A daemon left running from before an update would not know what
         // this app asks: stop it, the one beside this app takes over.
         if Daemon.runningVersion != Daemon.bundledVersion && Daemon.answers {
@@ -110,13 +110,13 @@ final class AppModel {
         }
         // It answers, but not this yet: a daemon is starting Tor.
         let starting = Daemon.answers
-        let asked = passphrase != nil
+        let asked = passphrase != nil || recovery != nil
         if !starting && !asked && Daemon.usesPassphrase {
             phase = .locked("")
             return nil
         }
         phase = .connecting(t("starting"))
-        let daemon = starting ? nil : try Daemon.start(passphrase: passphrase)
+        let daemon = starting ? nil : try Daemon.start(passphrase: passphrase, recovery: recovery)
         while true {
             try await Task.sleep(for: .seconds(1))
             if let events = try? await Daemon.listen() {
@@ -125,8 +125,10 @@ final class AppModel {
             let text = (try? String(contentsOf: Daemon.log, encoding: .utf8)) ?? ""
             let lines = text.split(separator: "\n").map(String.init)
             if let daemon, !daemon.isRunning {
-                if asked && text.contains("wrong key") {
-                    phase = .locked(t("wrong-passphrase"))
+                // A wrong key, or a keychain without it (a new Mac): the
+                // recovery words are the way out, offered on that screen.
+                if (asked && text.contains("wrong key")) || text.contains(t("err-keychain-lost")) {
+                    phase = .locked(text.contains(t("err-keychain-lost")) ? t("err-keychain-lost") : t("wrong-passphrase"))
                     return nil
                 }
                 throw ClientError.daemon("the daemon stopped (\(daemon.terminationStatus)): \(lines.last ?? "")")
@@ -181,6 +183,20 @@ final class AppModel {
         var person = contacts.first { $0.name == name }?.person ?? Person()
         change(&person)
         Task { await ask(.setPerson(name: name, person: person)) }
+    }
+
+    func setTimer(_ name: String, _ seconds: UInt32) {
+        Task { await ask(.timer(name: name, seconds: seconds)) }
+    }
+
+    /// The recovery words, or nil (the reason is in `status`).
+    func recoveryPhrase() async -> String? {
+        switch try? await Daemon.call(.recoveryPhrase) {
+        case let .recoveryPhrase(words): return words
+        case let .error(message): status = message
+        default: break
+        }
+        return nil
     }
 
     func rename(_ name: String, to: String) {
@@ -374,6 +390,14 @@ final class AppModel {
             if selected == name { selected = nil }
         case let .personChanged(name, person):
             if let i = contacts.firstIndex(where: { $0.name == name }) { contacts[i].person = person }
+        case let .timerChanged(name, seconds, _):
+            if let i = contacts.firstIndex(where: { $0.name == name }) { contacts[i].timer = seconds }
+        case let .expired(name):
+            Task {
+                if case let .history(items) = try? await Daemon.call(.history(name: name, limit: Self.history)) {
+                    messages[name] = items
+                }
+            }
         case let .network(network): self.network = network
         case let .link(name, state): links[name] = state
         case let .fingerprint(name, number):

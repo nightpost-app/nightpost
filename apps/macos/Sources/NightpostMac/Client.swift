@@ -1,6 +1,7 @@
 // Talking to the daemon: its Unix socket in the data directory, the token
 // from api.token as the first line, then one JSON line per request.
 
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -30,9 +31,30 @@ enum Daemon {
         return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Nightpost")
     }()
 
-    /// Beside a database that also needs the passphrase.
+    /// Run from a key (`NIGHTPOST_PORTABLE=1`, set by its launcher): the
+    /// Mac is borrowed. The passphrase alone opens the database, and
+    /// closing stops everything.
+    static let portable = ProcessInfo.processInfo.environment["NIGHTPOST_PORTABLE"] == "1"
+
+    /// Beside a database that also needs the passphrase; always from a key.
     static var usesPassphrase: Bool {
-        FileManager.default.fileExists(atPath: dir.appending(path: "uses-passphrase").path)
+        portable || FileManager.default.fileExists(atPath: dir.appending(path: "uses-passphrase").path)
+    }
+
+    /// In the data directory, or from a key (exFAT holds no socket) where
+    /// the daemon puts it then: in TMPDIR, named after the real path of the
+    /// data directory (runtime_path in crates/core/src/lib.rs).
+    static var socket: URL {
+        guard portable else { return dir.appending(path: "api.sock") }
+        let real = realpath(dir.path, nil).map { p in defer { free(p) }; return String(cString: p) } ?? dir.path
+        let hash = SHA256.hash(data: Data(real.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let tmp = ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory()
+        return URL(fileURLWithPath: tmp).appending(path: "nightpost-\(hash).sock")
+    }
+
+    /// Stops the daemon before returning, as the app quits.
+    static func stopNow() {
+        _ = try? Connection(.shutdown).nextLine()
     }
 
     static var log: URL { dir.appending(path: "daemon.log") }
@@ -98,9 +120,9 @@ enum Daemon {
     static var answers: Bool { (try? Connection(nil)) != nil }
 
     /// `nightpost daemon`, from inside the app (or `NIGHTPOST_BIN`), its
-    /// output in daemon.log. The passphrase goes on its stdin, never in its
-    /// arguments or environment.
-    static func start(passphrase: String?) throws -> Process {
+    /// output in daemon.log. The passphrase, then the recovery words, go on
+    /// its stdin a line each, never in its arguments or environment.
+    static func start(passphrase: String?, recovery: String? = nil) throws -> Process {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
         let output = try FileHandle(forWritingTo: log)
@@ -109,16 +131,17 @@ enum Daemon {
         guard let binary else { throw ClientError.noDaemon("nightpost is missing from the app") }
         let process = Process()
         process.executableURL = binary
-        process.arguments = ["daemon"]
+        process.arguments = recovery == nil ? ["daemon"] : ["daemon", "--recovery"]
         process.standardOutput = output
         process.standardError = output
         let input = Pipe()
-        process.standardInput = passphrase == nil ? FileHandle.nullDevice : input
+        let lines = [passphrase, recovery].compactMap { $0 }
+        process.standardInput = lines.isEmpty ? FileHandle.nullDevice : input
         // ponytail: same process group as the app; started from a terminal, a
         // Ctrl-C there stops the daemon too. posix_spawn with SETPGROUP if it matters.
         try process.run()
-        if let passphrase {
-            try input.fileHandleForWriting.write(contentsOf: Data((passphrase + "\n").utf8))
+        if !lines.isEmpty {
+            try input.fileHandleForWriting.write(contentsOf: Data(lines.map { $0 + "\n" }.joined().utf8))
             try input.fileHandleForWriting.close()
         }
         return process
@@ -132,7 +155,7 @@ private final class Connection {
 
     /// Connects, gives the token, then sends `request` if there is one.
     init(_ request: Request?) throws {
-        let path = Array(Daemon.dir.appending(path: "api.sock").path.utf8)
+        let path = Array(Daemon.socket.path.utf8)
         var addr = sockaddr_un()
         guard path.count < MemoryLayout.size(ofValue: addr.sun_path) else {
             throw ClientError.noDaemon("socket path too long")

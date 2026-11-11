@@ -368,7 +368,7 @@ struct Route {
     /// Under the name: how things stand with them, and in which colour.
     static func line(_ name: String, _ net: Network, _ link: LinkState?) -> (Stage, String) {
         let route = Route(net, link)
-        if route.fail != nil { return (.fail, t("net-blocked")) }
+        if route.fail != nil { return (.fail, t(net.offline ? "net-offline" : "net-blocked")) }
         if route.live == 0 { return (.live, t("connecting-percent", ["percent": net.percent])) }
         switch link {
         case .open: return (.done, t("link-open"))
@@ -400,7 +400,7 @@ extension Route.Stage {
 
 /// What the bottom of the list says about Tor.
 func networkSummary(_ net: Network) -> (Route.Stage, String) {
-    if net.entry == false || net.circuit == false { return (.fail, t("net-blocked")) }
+    if net.entry == false || net.circuit == false { return (.fail, t(net.offline ? "net-offline" : "net-blocked")) }
     if net.percent < 100 { return (.live, t("net-connecting")) }
     return (.done, net.bridged ? t("net-bridged") : t("net-connected"))
 }
@@ -419,5 +419,20 @@ struct Wordmark: View {
                 .padding(-size * 0.15)
             Text(verbatim: "Nightpost").font(.ui(size, .bold)).foregroundStyle(Palette.strong)
         }
+    }
+}
+
+/// The timers on offer, in seconds; 0: off.
+let timerChoices: [UInt32] = [0, 3_600, 28_800, 86_400, 604_800, 2_419_200]
+
+/// What a timer is called: "1 day", "off".
+func timerLabel(_ seconds: UInt32) -> String {
+    switch seconds {
+    case 3_600: t("timer-hour")
+    case 28_800: t("timer-8-hours")
+    case 86_400: t("timer-day")
+    case 604_800: t("timer-week")
+    case 2_419_200: t("timer-4-weeks")
+    default: t("timer-off")
     }
 }
