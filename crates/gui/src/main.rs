@@ -362,6 +362,7 @@ impl State {
             }
             Event::Paired => {
                 self.status.set(t!("paired"));
+                self.view.set(View::Chat);
                 spawn(async move { self.reload_contacts().await });
             }
             Event::Removed => self.status.set(t!("err-device-removed")),
@@ -909,6 +910,9 @@ fn Conversation() -> Element {
                 h2 { {t!("empty-title")} }
                 p { {t!("empty-help")} }
                 button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} }
+                if state.contacts.read().len() <= 1 {
+                    button { class: "ghost", onclick: move |_| state.view.set(View::Settings(Section::Devices)), {t!("pair-have-account")} }
+                }
             }
             p { class: "status", "{state.status}" } }
         };
@@ -1497,7 +1501,7 @@ fn CopyButton(text: String, label: String) -> Element {
 }
 
 /// The link as an SVG QR code, ink on paper: not every phone reads it inverted.
-fn qr(link: &str) -> String {
+pub(crate) fn qr(link: &str) -> String {
     use qrcode::render::svg;
     let Ok(code) = qrcode::QrCode::new(link.to_ascii_uppercase().as_bytes()) else { return String::new() };
     let image = code.render::<svg::Color>().min_dimensions(260, 260).dark_color(svg::Color("#10141d")).light_color(svg::Color("#ffffff")).build();

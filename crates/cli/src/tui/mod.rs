@@ -20,7 +20,7 @@ use crossterm::event::{
 use crossterm::style::Print;
 use crossterm::terminal::SetTitle;
 use futures::StreamExt as _;
-use nightpost_core::api::{Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request};
+use nightpost_core::api::{Client, DeviceInfo, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request};
 use nightpost_core::prefs::Prefs;
 use nightpost_core::t;
 use ratatui::DefaultTerminal;
@@ -70,8 +70,12 @@ enum Overlay {
     Text { title: String, body: Vec<String> },
     /// The recovery phrase: `c` copies it.
     Recovery { body: Vec<String>, phrase: String },
-    /// Shown with its QR code when the terminal is big enough for all of it.
-    Invite { name: String, link: String, qr: Vec<String> },
+    /// An invitation, or a pairing link: shown with its QR code when the
+    /// terminal is big enough for all of it.
+    Invite { title: String, help: String, link: String, qr: Vec<String> },
+    /// Our devices; the answers remove one of the others, or add one.
+    Devices { devices: Vec<DeviceInfo>, selected: usize },
+    RemoveDevice { id: u8, name: String, selected: usize },
     /// Someone used our code: keep them only if the numbers match.
     Confirm { name: String, number: String, selected: usize },
     /// Their safety number, to mark compared.
@@ -133,6 +137,9 @@ fn commands() -> Vec<Command> {
         c("/log", String::new(), t!("help-log")),
         c("/settings", String::new(), t!("help-settings")),
         c("/network", String::new(), t!("help-network")),
+        c("/devices", String::new(), t!("help-devices")),
+        c("/adddevice", arg(t!("arg-link")), t!("help-adddevice")),
+        c("/link", String::new(), t!("help-link")),
         c("/lock", String::new(), t!("help-lock")),
         c("/quit", String::new(), t!("help-quit")),
     ]
@@ -541,6 +548,30 @@ impl App {
                 self.focus = Focus::Input;
                 self.status = hint;
             }
+            Some(Overlay::Devices { devices, selected }) => {
+                let others: Vec<(u8, String)> = devices.iter().filter(|d| !d.this).map(|d| (d.id, d.name.clone())).collect();
+                let Some(answer) = panel::pick(key.code, selected, others.len() + 2) else { return };
+                self.overlay = None;
+                if let Some((id, name)) = others.get(answer) {
+                    self.overlay = Some(Overlay::RemoveDevice { id: *id, name: name.clone(), selected: 1 });
+                } else if answer == others.len() {
+                    self.input = "/adddevice ".into();
+                    self.cursor = self.input.len();
+                    self.focus = Focus::Input;
+                    self.status = t!("device-add-hint");
+                }
+            }
+            Some(Overlay::RemoveDevice { id, selected, .. }) => {
+                let Some(answer) = panel::pick(key.code, selected, 2) else { return };
+                let id = *id;
+                self.overlay = None;
+                if answer == 0 {
+                    match expect_done(requests.call(&Request::RemoveDevice { id }).await) {
+                        Ok(()) => self.status = t!("device-removed"),
+                        Err(e) => self.status = format!("{e:#}"),
+                    }
+                }
+            }
             Some(Overlay::Remove { name, selected }) => {
                 let Some(answer) = panel::pick(key.code, selected, 3) else { return };
                 let name = name.clone();
@@ -758,7 +789,41 @@ impl App {
                     other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
                 };
                 let qr = qr(&link.to_ascii_uppercase());
-                self.overlay = Some(Overlay::Invite { name: name.to_string(), link, qr });
+                self.overlay = Some(Overlay::Invite { title: t!("invite-title", name = name), help: t!("tui-invite-help", name = name), link, qr });
+            }
+            ["link"] => {
+                let link = match requests.call(&Request::PairingLink).await? {
+                    Reply::Invite { link } => link,
+                    Reply::Error { message } => bail!("{message}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
+                };
+                let qr = qr(&link.to_ascii_uppercase());
+                self.overlay = Some(Overlay::Invite { title: t!("pair-title"), help: t!("tui-pair-help"), link, qr });
+            }
+            ["devices"] => {
+                let devices = match requests.call(&Request::Devices).await? {
+                    Reply::Devices { devices } => devices,
+                    Reply::Error { message } => bail!("{message}"),
+                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
+                };
+                self.overlay = Some(Overlay::Devices { devices, selected: 0 });
+            }
+            ["adddevice", link] => {
+                // Over Tor, a minute or more: the screen keeps going.
+                self.status = t!("device-adding");
+                let (dir, link, updates) = (self.dir.clone(), link.to_string(), updates.clone());
+                tokio::spawn(async move {
+                    let status = match Client::connect(&dir).await {
+                        Ok(mut client) => match client.call(&Request::AddDevice { link }).await {
+                            Ok(Reply::Added { name }) => t!("device-added", name = name),
+                            Ok(Reply::Error { message }) => message,
+                            Ok(other) => t!("err-unexpected", reply = format!("{other:?}")),
+                            Err(e) => format!("{e:#}"),
+                        },
+                        Err(e) => format!("{e:#}"),
+                    };
+                    let _ = updates.send(Update::Done(status));
+                });
             }
             ["code", name] => {
                 // The daemon spends about a second on it: the screen keeps going.

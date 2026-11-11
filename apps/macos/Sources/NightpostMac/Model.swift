@@ -46,6 +46,10 @@ final class AppModel {
     var looking: String?
     /// Why the last thing tried in the Add sheet failed.
     var addError = ""
+    /// The settings tab shown: "devices" to join an account from the start.
+    var settingsTab = "appearance"
+    /// Moves on when our device list changed, for the settings to read it again.
+    var devicesVersion = 0
     /// Those we made a code for: their safety number is ours to confirm.
     private var codes: Set<String> = []
     /// What went wrong last, for the window to show.
@@ -405,6 +409,12 @@ final class AppModel {
             dialog = codes.contains(name) ? .confirm(name: name, number: number) : .waiting(name: name, number: number)
         // Nobody else asks the app to close: Nightpost is stopping.
         case let .close(interface): if interface == "window" { NSApp.terminate(nil) }
+        case .paired:
+            status = t("paired")
+            settingsTab = "appearance"
+            Task { try? await reloadContacts() }
+        case .removed: status = t("err-device-removed")
+        case .devicesChanged: devicesVersion += 1
         case .unknown: break
         }
     }

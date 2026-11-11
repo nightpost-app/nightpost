@@ -290,6 +290,7 @@ struct LockView: View {
 
 struct MainView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
     /// The list is folded away (kept between launches).
     @AppStorage("sideHidden") private var sideHidden = false
 
@@ -350,6 +351,13 @@ struct MainView: View {
                 .lineSpacing(4)
                 .foregroundStyle(Palette.soft)
             Button(t("add-someone")) { model.dialog = .add }.buttonStyle(PrimaryButton())
+            if model.contacts.count <= 1 {
+                Button(t("pair-have-account")) {
+                    model.settingsTab = "devices"
+                    openSettings()
+                }
+                .buttonStyle(SecondaryButton())
+            }
         }
         .frame(maxWidth: 480, alignment: .leading)
         .padding(32)

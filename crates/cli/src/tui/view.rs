@@ -497,7 +497,7 @@ impl App {
                 let keys = keycaps(&[("↑↓", t!("help-scroll")), ("c", t!("hint-copy-phrase")), ("Esc", t!("hint-close"))]);
                 self.overlay_scroll.set(popup_at(frame, &t!("recovery-title"), body.iter().map(|l| Line::from(l.clone())).collect(), Some(keys), self.overlay_scroll.get()));
             }
-            Some(Overlay::Invite { name, link, qr }) => {
+            Some(Overlay::Invite { title, help, link, qr }) => {
                 let qr_width = qr.first().map_or(0, |l| l.chars().count());
                 // Dark on light whatever the theme: not every phone reads
                 // a code the other way round.
@@ -506,9 +506,9 @@ impl App {
                 } else {
                     vec![Line::styled(t!("tui-qr-too-small", width = qr_width + 8, height = qr.len() + 12), DIM)]
                 };
-                lines.extend([Line::default(), Line::styled(link.clone(), Style::new().fg(ACCENT)), Line::default(), Line::styled(t!("tui-invite-help", name = name), DIM)]);
+                lines.extend([Line::default(), Line::styled(link.clone(), Style::new().fg(ACCENT)), Line::default(), Line::styled(help.clone(), DIM)]);
                 let keys = keycaps(&[("↑↓", t!("help-scroll")), ("c", t!("hint-copy")), ("Esc", t!("hint-close"))]);
-                self.overlay_scroll.set(popup_at(frame, &t!("invite-title", name = name), lines, Some(keys), self.overlay_scroll.get()));
+                self.overlay_scroll.set(popup_at(frame, title, lines, Some(keys), self.overlay_scroll.get()));
             }
             Some(Overlay::Confirm { name, number, selected }) => {
                 let mut lines = vec![Line::from(t!("confirm-help")), Line::default()];
@@ -533,6 +533,24 @@ impl App {
             Some(Overlay::Add { selected }) => {
                 let lines = answers(&add_answers(), *selected);
                 popup(frame, &t!("add-title"), lines, Some(answer_keys()));
+            }
+            Some(Overlay::Devices { devices, selected }) => {
+                let mut lines: Vec<Line> = devices
+                    .iter()
+                    .map(|d| {
+                        let what = [d.this.then(|| t!("device-this")), d.mailbox.then(|| t!("device-mailbox"))].into_iter().flatten().collect::<Vec<_>>().join(", ");
+                        Line::from(vec![Span::styled(d.name.clone(), if d.this { BOLD } else { Style::new() }), Span::styled(if what.is_empty() { String::new() } else { format!("  {what}") }, DIM)])
+                    })
+                    .collect();
+                let mut choices: Vec<(String, Style)> = devices.iter().filter(|d| !d.this).map(|d| (t!("device-remove", name = d.name.clone()), Style::new())).collect();
+                choices.extend([(t!("device-add"), Style::new()), (t!("close"), Style::new())]);
+                lines.extend(answers(&choices, *selected));
+                popup(frame, &t!("devices-title"), lines, Some(answer_keys()));
+            }
+            Some(Overlay::RemoveDevice { name, selected, .. }) => {
+                let mut lines = vec![Line::from(t!("device-remove-help", name = name.clone()))];
+                lines.extend(answers(&[(t!("device-remove", name = name.clone()), Style::new().fg(Color::Red)), (t!("cancel"), Style::new())], *selected));
+                popup(frame, &t!("device-remove-title", name = name.clone()), lines, Some(answer_keys()));
             }
             Some(Overlay::Remove { name, selected }) => {
                 let mut lines = vec![Line::from(t!("remove-help", name = name))];

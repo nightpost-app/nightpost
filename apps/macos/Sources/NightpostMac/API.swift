@@ -33,10 +33,16 @@ enum Request: Encodable, Sendable {
     case timer(name: String, seconds: UInt32)
     /// The 24 words that open the database without the keychain.
     case recoveryPhrase
+    /// This account's devices, this one included.
+    case devices
+    /// On a new device: the link for one of the account's devices to use.
+    case pairingLink
+    case addDevice(link: String)
+    case removeDevice(id: UInt8)
     case shutdown
 
     private enum Key: String, CodingKey {
-        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines, interface, seconds
+        case cmd, to, text, name, link, code, keep, limit, wipe, person, current, new, on, lines, interface, seconds, id
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -67,6 +73,10 @@ enum Request: Encodable, Sendable {
         case .language: try cmd("language")
         case let .timer(name, seconds): try cmd("timer"); try c.encode(name, forKey: .name); try c.encode(seconds, forKey: .seconds)
         case .recoveryPhrase: try cmd("recovery_phrase")
+        case .devices: try cmd("devices")
+        case .pairingLink: try cmd("pairing_link")
+        case let .addDevice(link): try cmd("add_device"); try c.encode(link, forKey: .link)
+        case let .removeDevice(id): try cmd("remove_device"); try c.encode(id, forKey: .id)
         case .shutdown: try cmd("shutdown")
         }
     }
@@ -87,12 +97,13 @@ enum Reply: Decodable, Sendable {
     case typingIndicators(on: Bool)
     case bridges([String])
     case recoveryPhrase(String)
+    case devices([DeviceInfo])
     case error(String)
     /// From a newer daemon.
     case unknown(String)
 
     private enum Key: String, CodingKey {
-        case reply, id, link, code, name, contacts, messages, number, network, links, on, lines, message, phrase
+        case reply, id, link, code, name, contacts, messages, number, network, links, on, lines, message, phrase, devices
     }
 
     init(from decoder: any Decoder) throws {
@@ -113,6 +124,7 @@ enum Reply: Decodable, Sendable {
         case "typing_indicators": self = .typingIndicators(on: try c.decode(Bool.self, forKey: .on))
         case "bridges": self = .bridges(try c.decode([String].self, forKey: .lines))
         case "recovery_phrase": self = .recoveryPhrase(try c.decode(String.self, forKey: .phrase))
+        case "devices": self = .devices(try c.decode([DeviceInfo].self, forKey: .devices))
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         default: self = .unknown(tag)
         }
@@ -142,6 +154,12 @@ enum Event: Decodable, Sendable {
     case expired(name: String)
     /// Nightpost is stopping ("window"), or a terminal is told to go.
     case close(interface: String)
+    /// Our device list changed.
+    case devicesChanged
+    /// This device joined an account: contacts and history are here now.
+    case paired
+    /// Another of our devices took this one off the account.
+    case removed
     /// From a newer daemon.
     case unknown(String)
 
@@ -173,9 +191,22 @@ enum Event: Decodable, Sendable {
         case "timer_changed": self = .timerChanged(name: try s(.name), seconds: try c.decode(UInt32.self, forKey: .seconds), byMe: try c.decodeIfPresent(Bool.self, forKey: .byMe) ?? false)
         case "expired": self = .expired(name: try s(.name))
         case "close": self = .close(interface: try s(.interface))
+        case "devices_changed": self = .devicesChanged
+        case "paired": self = .paired
+        case "removed": self = .removed
         default: self = .unknown(tag)
         }
     }
+}
+
+/// One of this account's devices.
+struct DeviceInfo: Decodable, Sendable, Identifiable, Equatable {
+    let id: UInt8
+    let name: String
+    /// Keeps messages for the others while they are off.
+    let mailbox: Bool
+    /// The one this app runs on.
+    let this: Bool
 }
 
 /// How far Tor got.

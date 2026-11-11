@@ -21,12 +21,14 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        TabView {
-            Tab(t("appearance"), systemImage: "circle.lefthalf.filled") { Pane { AppearancePane() } }
-            Tab(t("network"), systemImage: "chart.bar") { Pane { NetworkPane() } }
-            Tab(t("notifications"), systemImage: "bell") { Pane { NotificationsPane() } }
-            Tab(t("security"), systemImage: "lock") { Pane { SecurityPane() } }
-            Tab(t("about"), systemImage: "info.circle") { Pane { AboutPane() } }
+        @Bindable var model = model
+        TabView(selection: $model.settingsTab) {
+            Tab(t("appearance"), systemImage: "circle.lefthalf.filled", value: "appearance") { Pane { AppearancePane() } }
+            Tab(t("network"), systemImage: "chart.bar", value: "network") { Pane { NetworkPane() } }
+            Tab(t("devices-title"), systemImage: "laptopcomputer.and.iphone", value: "devices") { Pane { DevicesPane() } }
+            Tab(t("notifications"), systemImage: "bell", value: "notifications") { Pane { NotificationsPane() } }
+            Tab(t("security"), systemImage: "lock", value: "security") { Pane { SecurityPane() } }
+            Tab(t("about"), systemImage: "info.circle", value: "about") { Pane { AboutPane() } }
         }
         .id(model.language)
         .frame(width: 640)
@@ -396,6 +398,123 @@ private struct NotificationsPane: View {
             .padding(.vertical, 7)
             .background(Palette.tip, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.line))
+        }
+    }
+}
+
+/// This account's devices: list, add, remove; and, on a new device, the
+/// link for one of them to use.
+private struct DevicesPane: View {
+    @Environment(AppModel.self) private var model
+    @State private var devices: [DeviceInfo] = []
+    @State private var link = ""
+    @State private var pairing: String?
+    @State private var removing: DeviceInfo?
+    @State private var busy = false
+    @State private var error = ""
+
+    var body: some View {
+        Block(title: t("devices-title")) {
+            ForEach(devices) { d in
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: d.name).font(.ui(15, .semibold)).foregroundStyle(Palette.strong)
+                        let what = [d.this ? t("device-this") : nil, d.mailbox ? t("device-mailbox") : nil].compactMap { $0 }
+                        if !what.isEmpty { Help(what.joined(separator: ", ")) }
+                    }
+                    Spacer(minLength: 0)
+                    if !d.this {
+                        Button(t("remove-it")) { removing = d }.buttonStyle(SecondaryButton())
+                    }
+                }
+                .padding(16)
+                .background(Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
+            }
+            if let d = removing {
+                Text(verbatim: t("device-remove-help", ["name": d.name])).font(.ui(14)).foregroundStyle(Palette.fail)
+                HStack(spacing: 8) {
+                    Button(t("device-remove", ["name": d.name])) {
+                        removing = nil
+                        Task {
+                            switch try? await Daemon.call(.removeDevice(id: d.id)) {
+                            case .done: model.status = t("device-removed"); await load()
+                            case let .error(message): error = message
+                            default: break
+                            }
+                        }
+                    }
+                    .buttonStyle(DangerButton())
+                    Button(t("cancel")) { removing = nil }.buttonStyle(SecondaryButton())
+                }
+            }
+        }
+        Block(title: t("device-add")) {
+            Help(t("device-add-help"))
+            TextField("", text: $link, prompt: Text(verbatim: "nightpost:device:…").foregroundStyle(Palette.muted))
+                .textFieldStyle(.plain)
+                .font(.ui(15))
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(Palette.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Palette.line2))
+                .onSubmit(add)
+            if !error.isEmpty { Text(verbatim: error).font(.ui(14, .semibold)).foregroundStyle(Palette.fail) }
+            Button(busy ? t("device-adding") : t("device-add"), action: add)
+                .buttonStyle(PrimaryButton(height: 40, radius: 8))
+                .disabled(busy)
+        }
+        // Nothing here yet (the note alone): this one may join another account.
+        if model.contacts.count <= 1 {
+            Block(title: t("pair-title")) {
+                Help(t("pair-gui-help"))
+                if let pairing {
+                    if let qr = QR.image(pairing) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 232, height: 232)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .accessibilityLabel(t("invite-qr"))
+                    }
+                    Text(verbatim: pairing).font(.ui(12.5)).textSelection(.enabled)
+                    CopyButton(text: pairing, label: t("copy-link"))
+                } else {
+                    Button(t("pair-show")) {
+                        Task {
+                            switch try? await Daemon.call(.pairingLink) {
+                            case let .invite(link): pairing = link
+                            case let .error(message): error = message
+                            default: break
+                            }
+                        }
+                    }
+                    .buttonStyle(SecondaryButton())
+                }
+            }
+        }
+        EmptyView()
+            .task(id: model.devicesVersion) { await load() }
+    }
+
+    private func load() async {
+        if case let .devices(list) = try? await Daemon.call(.devices) { devices = list }
+    }
+
+    private func add() {
+        let text = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !busy else { return }
+        (busy, error) = (true, "")
+        Task {
+            switch try? await Daemon.call(.addDevice(link: text)) {
+            case let .added(name):
+                link = ""
+                model.status = t("device-added", ["name": name])
+                await load()
+            case let .error(message): error = message
+            default: error = t("err-unexpected", ["reply": "?"])
+            }
+            busy = false
         }
     }
 }

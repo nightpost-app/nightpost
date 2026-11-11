@@ -2,24 +2,26 @@
 //! messages locked, and what it is.
 
 use dioxus::prelude::*;
-use nightpost_core::api::{Reply, Request};
+use nightpost_core::api::{DeviceInfo, Reply, Request};
 use nightpost_core::{dbkey, i18n, t};
 
-use crate::{CopyButton, State, Theme, View, as_launched, call, dir};
+use crate::{CopyButton, State, Theme, View, as_launched, call, dir, qr};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Section {
     Appearance,
     Network,
+    Devices,
     Notifications,
     Security,
     About,
 }
 
-fn sections() -> [(Section, String); 5] {
+fn sections() -> [(Section, String); 6] {
     [
         (Section::Appearance, t!("appearance")),
         (Section::Network, t!("network")),
+        (Section::Devices, t!("devices-title")),
         (Section::Notifications, t!("notifications")),
         (Section::Security, t!("security")),
         (Section::About, t!("about")),
@@ -33,6 +35,7 @@ fn icon(section: Section) -> Element {
             match section {
                 Section::Appearance => rsx! { circle { cx: "12", cy: "12", r: "8.5" } path { d: "M12 3.5a8.5 8.5 0 0 1 0 17z", fill: "currentColor" } },
                 Section::Network => rsx! { path { d: "M4 20v-3M9 20v-7M14 20v-11M19 20V5" } },
+                Section::Devices => rsx! { rect { x: "3", y: "5", width: "13", height: "10", rx: "1.5" } path { d: "M2 19h15" } rect { x: "17.5", y: "9", width: "4.5", height: "10", rx: "1" } },
                 Section::Notifications => rsx! { path { d: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" } path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" } },
                 Section::Security => rsx! { rect { x: "4.5", y: "11", width: "15", height: "10", rx: "2" } path { d: "M8 11V7.5a4 4 0 0 1 8 0V11" } },
                 Section::About => rsx! { path { d: "M12 11v6M12 7.5v.01" } },
@@ -74,6 +77,7 @@ pub fn SettingsPage(section: Section) -> Element {
                         match s {
                             Section::Appearance => rsx! { Appearance {} },
                             Section::Network => rsx! { NetworkSection {} },
+                            Section::Devices => rsx! { Devices {} },
                             Section::Notifications => rsx! { Notifications {} },
                             Section::Security => rsx! { Security {} },
                             Section::About => rsx! { About {} },
@@ -362,6 +366,125 @@ enum Change {
     Add,
     Replace,
     Remove,
+}
+
+/// This account's devices: list, add, remove; and, on a new device, the
+/// link for one of them to use.
+#[component]
+fn Devices() -> Element {
+    let mut state = use_context::<State>();
+    let mut devices = use_signal(Vec::<DeviceInfo>::new);
+    let mut link = use_signal(String::new);
+    let mut pairing = use_signal(|| None::<String>);
+    let mut removing = use_signal(|| None::<(u8, String)>);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(String::new);
+    let reload = move || {
+        spawn(async move {
+            match call(Request::Devices).await {
+                Ok(Reply::Devices { devices: list }) => devices.set(list),
+                other => state.fail(other),
+            }
+        });
+    };
+    use_hook(reload);
+    // Nothing here yet (the note alone): this one may join another account.
+    let fresh = state.contacts.read().len() <= 1;
+
+    let add = move |e: FormEvent| {
+        e.prevent_default();
+        let text = link.read().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        busy.set(true);
+        error.set(String::new());
+        spawn(async move {
+            match call(Request::AddDevice { link: text }).await {
+                Ok(Reply::Added { name }) => {
+                    link.set(String::new());
+                    state.status.set(t!("device-added", name = name));
+                    reload();
+                }
+                Ok(Reply::Error { message }) => error.set(message),
+                other => state.fail(other),
+            }
+            busy.set(false);
+        });
+    };
+    let show_link = move |_| {
+        spawn(async move {
+            match call(Request::PairingLink).await {
+                Ok(Reply::Invite { link }) => pairing.set(Some(link)),
+                Ok(Reply::Error { message }) => error.set(message),
+                other => state.fail(other),
+            }
+        });
+    };
+    rsx! {
+        section { class: "block",
+            h2 { {t!("devices-title")} }
+            for d in devices.read().clone() {
+                div { key: "{d.id}", class: "card",
+                    span { class: "card-text",
+                        span { class: "card-title", "{d.name}" }
+                        if d.this || d.mailbox {
+                            span { class: "help", {[d.this.then(|| t!("device-this")), d.mailbox.then(|| t!("device-mailbox"))].into_iter().flatten().collect::<Vec<_>>().join(", ")} }
+                        }
+                    }
+                    if !d.this {
+                        button { class: "danger-ghost", onclick: move |_| removing.set(Some((d.id, d.name.clone()))), {t!("remove-it")} }
+                    }
+                }
+            }
+            if let Some((id, name)) = removing.read().clone() {
+                div { class: "danger-zone",
+                    p { class: "danger-text", {t!("device-remove-help", name = name.clone())} }
+                    div { class: "row",
+                        button {
+                            class: "danger",
+                            onclick: move |_| {
+                                removing.set(None);
+                                spawn(async move {
+                                    match call(Request::RemoveDevice { id }).await {
+                                        Ok(Reply::Done) => {
+                                            state.status.set(t!("device-removed"));
+                                            reload();
+                                        }
+                                        other => state.fail(other),
+                                    }
+                                });
+                            },
+                            {t!("device-remove", name = name.clone())}
+                        }
+                        button { class: "ghost", onclick: move |_| removing.set(None), {t!("cancel")} }
+                    }
+                }
+            }
+        }
+        form { class: "block", onsubmit: add,
+            h2 { {t!("device-add")} }
+            p { class: "help", {t!("device-add-help")} }
+            input { class: "name-field", placeholder: "nightpost:device:…", "aria-label": t!("device-add"), value: "{link}", oninput: move |e| link.set(e.value()) }
+            if !error.read().is_empty() { p { class: "warning", "{error}" } }
+            div { class: "row",
+                button { class: "primary", r#type: "submit", disabled: *busy.read(), {if *busy.read() { t!("device-adding") } else { t!("device-add") }} }
+            }
+        }
+        if fresh {
+            section { class: "block",
+                h2 { {t!("pair-title")} }
+                p { class: "help", {t!("pair-gui-help")} }
+                if let Some(link) = pairing.read().clone() {
+                    img { class: "qr", src: "{qr(&link)}", alt: t!("invite-qr") }
+                    textarea { class: "link", readonly: true, rows: "4", "aria-label": t!("invite-link"), value: "{link}" }
+                    div { class: "row", CopyButton { text: link.clone(), label: t!("copy-link") } }
+                } else {
+                    div { class: "row", button { class: "ghost", onclick: show_link, {t!("pair-show")} } }
+                }
+            }
+        }
+    }
 }
 
 #[component]
