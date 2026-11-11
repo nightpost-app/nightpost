@@ -44,6 +44,38 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: linux, path: out/* }
 
+  flatpak:
+    # Built offline from vendored crates, as Flathub does; WebKit comes from the GNOME runtime.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder gnupg protobuf-compiler
+      - name: Fetch lyrebird (signed by the Tor Browser developers)
+        run: |
+          f=tor-expert-bundle-linux-x86_64-$TOR_BUNDLE.tar.gz
+          u=https://archive.torproject.org/tor-package-archive/torbrowser/$TOR_BUNDLE/$f
+          curl -fsSLO "$u" -O "$u.asc"
+          export GNUPGHOME=$(mktemp -d)
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --fingerprint EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+          gpg --verify "$f.asc" "$f"
+          mkdir tb && tar xzf "$f" -C tb
+          cp "$(find tb -name lyrebird -type f)" lyrebird
+      - name: Sources
+        run: |
+          mkdir fp && cp lyrebird packaging/linux/flatpak/*.yml fp/
+          git clone --depth 1 https://github.com/flathub/shared-modules.git fp/shared-modules
+          rsync -a --exclude .git --exclude target ./ fp/src/
+          (cd fp/src && mkdir .cargo && cargo vendor --locked vendor > .cargo/config.toml)
+      - name: Build
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          cd fp && flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=repo build io.github.nightpost_app.Nightpost.yml
+          mkdir ../out && flatpak build-bundle repo ../out/nightpost-x86_64.flatpak io.github.nightpost_app.Nightpost
+      - uses: actions/upload-artifact@v4
+        with: { name: flatpak, path: out/* }
+
   windows:
     # Cross-built from Linux (mingw-w64): OpenSSL is compiled from source and
     # the perl of the Windows runners lacks modules its Configure needs.
@@ -81,7 +113,7 @@ jobs:
         with: { name: windows, path: out/* }
 
   publish:
-    needs: [linux, windows]
+    needs: [linux, flatpak, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

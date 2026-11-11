@@ -1,0 +1,64 @@
+app-id: io.github.nightpost_app.Nightpost
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions: [org.freedesktop.Sdk.Extension.rust-stable]
+command: nightpost-gui
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # The keychain holding the database key, the tray icon and notifications.
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.kde.*
+modules:
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
+  # The window toolkit links libxdo.
+  - name: xdotool
+    buildsystem: simple
+    build-commands:
+      - make libxdo.so.3 PREFIX=/app
+      - install -Dm755 libxdo.so.3 /app/lib/libxdo.so.3
+      - ln -sf libxdo.so.3 /app/lib/libxdo.so
+      - install -Dm644 xdo.h -t /app/include
+    sources:
+      - type: archive
+        url: https://github.com/jordansissel/xdotool/releases/download/v3.20211022.1/xdotool-3.20211022.1.tar.gz
+        sha256: 96f0facfde6d78eacad35b91b0f46fecd0b35e474c03e00e30da3fdd345f9ada
+  - name: protoc
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 bin/protoc /app/bin/protoc
+      - cp -r include /app/
+    cleanup: ['*']
+    sources:
+      - type: archive
+        url: https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-x86_64.zip
+        sha256: f853e691868d0557425ea290bf7ba6384eef2fa9b04c323afab49a770ba9da80
+        strip-components: 0
+  - name: nightpost
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      prepend-path: /app/bin
+      env:
+        CARGO_HOME: /run/build/nightpost/cargo
+        LIBRARY_PATH: /app/lib
+    build-commands:
+      - cargo build --release --offline --locked -p nightpost -p nightpost-gui
+      - install -Dm755 target/release/nightpost target/release/nightpost-gui lyrebird -t /app/bin
+      - install -Dm644 LICENSE /app/share/doc/nightpost/LICENSE.txt
+      - install -Dm644 docs/lyrebird.txt /app/share/doc/nightpost/LICENSE-lyrebird.txt
+      - install -Dm644 icons/nightpost.png /app/share/icons/hicolor/256x256/apps/io.github.nightpost_app.Nightpost.png
+      - sed 's/^Icon=.*/Icon=io.github.nightpost_app.Nightpost/' packaging/linux/io.github.nightpost-app.Nightpost.desktop > n.desktop
+      - install -Dm644 n.desktop /app/share/applications/io.github.nightpost_app.Nightpost.desktop
+      - install -Dm644 packaging/linux/flatpak/io.github.nightpost_app.Nightpost.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: src
+      - type: file
+        path: lyrebird

@@ -65,25 +65,28 @@ pub fn run() -> ! {
     let close_terminal = MenuItem::new(t!("tray-close-terminal"), true, None);
     let stop = MenuItem::new(t!("tray-stop"), true, None);
     let menu = Menu::new();
-    menu.append_items(&[
-        &status,
-        &PredefinedMenuItem::separator(),
-        &open,
-        &close,
-        &PredefinedMenuItem::separator(),
-        &terminal,
-        &close_terminal,
-        &PredefinedMenuItem::separator(),
-        &stop,
-    ])
-    .expect("a menu");
+    menu.append_items(&[&status, &PredefinedMenuItem::separator(), &open, &close, &PredefinedMenuItem::separator()]).expect("a menu");
+    // A Flatpak cannot start a terminal on the host: there, `flatpak run --command=nightpost …`.
+    if std::env::var_os("FLATPAK_ID").is_none() {
+        menu.append_items(&[&terminal, &close_terminal, &PredefinedMenuItem::separator()]).expect("a menu");
+    }
+    menu.append(&stop).expect("a menu");
+    // In a Flatpak, the icon's image goes to a folder the desktop can see: this one
+    // is shared with it, at the same path.
+    let shared = std::env::var_os("FLATPAK_ID")
+        .zip(std::env::var_os("XDG_RUNTIME_DIR"))
+        .map(|(id, runtime)| Path::new(&runtime).join("app").join(id));
     let mut tray = None;
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
             // Made once the loop runs, as macOS wants (and harmless elsewhere).
             Loop::NewEvents(StartCause::Init) => {
-                match TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_icon(icon()).with_tooltip("Nightpost").build() {
+                let mut builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_icon(icon()).with_tooltip("Nightpost");
+                if let Some(dir) = &shared {
+                    builder = builder.with_temp_dir_path(dir);
+                }
+                match builder.build() {
                     Ok(icon) => tray = Some(icon),
                     Err(e) => {
                         eprintln!("nightpost-gui: no tray icon: {e}");
