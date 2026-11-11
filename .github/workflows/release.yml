@@ -13,16 +13,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev gnupg
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libx11-dev libxtst-dev libxinerama-dev libxkbcommon-dev libxi-dev libayatana-appindicator3-dev gnupg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch lyrebird (signed by the Tor Browser developers)
         run: packaging/fetch-lyrebird.sh linux-x86_64
+      - name: libxdo, linked in
+        # Distributions ship libxdo.so.3 (Ubuntu, Debian, Fedora) or .so.4
+        # (Arch, openSUSE): built in, the window needs neither.
+        run: |
+          x=xdotool-3.20211022.1
+          curl -fsSLO https://github.com/jordansissel/xdotool/releases/download/v3.20211022.1/$x.tar.gz
+          echo "96f0facfde6d78eacad35b91b0f46fecd0b35e474c03e00e30da3fdd345f9ada  $x.tar.gz" | sha256sum -c
+          tar xzf $x.tar.gz && make -C $x libxdo.a
+          mkdir -p .cargo && cat >> .cargo/config.toml <<EOF
+          [target.x86_64-unknown-linux-gnu.xdo]
+          rustc-link-search = ["$PWD/$x"]
+          rustc-link-lib = ["static=xdo", "X11", "Xtst", "Xinerama", "xkbcommon", "Xi"]
+          EOF
       - run: cargo build --release --workspace --locked
+      - name: Check nightpost-gui needs no libxdo
+        run: "! ldd target/release/nightpost-gui | grep libxdo"
       - name: Archive
         run: |
           d=nightpost; mkdir $d
           cp target/release/nightpost target/release/nightpost-gui lyrebird $d/
-          cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/bridges.md $d/BRIDGES.md
+          cp LICENSE $d/LICENSE.txt; cp docs/lyrebird.txt $d/LICENSE-lyrebird.txt; cp docs/xdotool.txt $d/LICENSE-xdotool.txt; cp docs/bridges.md $d/BRIDGES.md
           mkdir out; tar czf out/nightpost-linux-x86_64.tar.gz $d
       - name: Packages
         run: |
@@ -34,6 +49,13 @@ jobs:
           sed -i "s/{version}/$rv-1/" crates/gui/Cargo.toml
           for p in nightpost nightpost-gui; do cargo deb -p $p --no-build -o out/; done
           for c in cli gui; do cargo generate-rpm -p crates/$c -s "version = \"$rv\"" -s 'release = "1"' -o out/; done
+          # openSUSE names the same libraries differently.
+          mkdir out/opensuse
+          cargo generate-rpm -p crates/cli -s "version = \"$rv\"" -s 'release = "1"' -s 'requires = { liblzma5 = "*" }' -o out/opensuse/
+          cargo generate-rpm -p crates/gui -s "version = \"$rv\"" -s 'release = "1"' -o out/opensuse/ \
+            -s "requires = { nightpost-cli = \"= $rv-1\", libwebkit2gtk-4_1-0 = \"*\", libXtst6 = \"*\", liblzma5 = \"*\", libayatana-appindicator3-1 = \"*\" }"
+          for f in out/opensuse/*.rpm; do mv "$f" "out/$(basename "$f" .x86_64.rpm).opensuse.x86_64.rpm"; done
+          rmdir out/opensuse
       - uses: actions/upload-artifact@v4
         with: { name: linux, path: out/* }
 
