@@ -58,6 +58,17 @@ tor-from-bridge = Tor: the bridge is not getting through; trying without it…
 
 err-starting = Tor is not up yet: try again in a moment.
 err-already-contact = Already a contact.
+err-device-removed = This device was removed from your account: it no longer sends anything.
+err-pair-not-empty = This Nightpost already has contacts or messages: a device joins an account only from a fresh start.
+err-pair-not-link = This is not a link to add a device.
+err-too-many-devices = An account has at most 127 devices.
+err-remove-this-device = To take this device off, do it from another one.
+err-no-device = No such device.
+device-unnamed = Device { $id }
+paired = This device joined your account: your contacts and messages are here.
+pair-cli = On one of your devices: nightpost devices add <this link> (or Settings, Devices). Waiting, 10 minutes…
+device-this = this device
+device-mailbox = mailbox
 err-name-taken = The name { $name } is already used. Choose another one.
 err-code-waiting = A code for { $name } is already waiting.
 err-not-confirmed = Not confirmed.

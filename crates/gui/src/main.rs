@@ -360,6 +360,12 @@ impl State {
                     }
                 });
             }
+            Event::Paired => {
+                self.status.set(t!("paired"));
+                spawn(async move { self.reload_contacts().await });
+            }
+            Event::Removed => self.status.set(t!("err-device-removed")),
+            Event::DevicesChanged => {}
             Event::ContactAdded { name } => {
                 self.status.set(t!("now-contact", name = name));
                 if matches!(&*self.dialog.read(), Some(Dialog::Waiting { name: n, .. } | Dialog::Invite { name: n, .. }) if *n == name) {

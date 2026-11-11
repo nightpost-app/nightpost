@@ -43,6 +43,12 @@ usage:
   nightpost bridges                your own Tor bridge lines
   nightpost bridges set            replace them with the lines on stdin
   nightpost bridges clear          back to the built-in ones (Snowflake)
+  nightpost link                   on a new device: a link for one of your
+                                   devices to use; this one then joins your
+                                   account, with your contacts and history
+  nightpost devices                your devices
+  nightpost devices add <link>     use the link a new device shows
+  nightpost devices remove <id>    take one of your other devices off
   nightpost shutdown               stop the daemon
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
@@ -112,6 +118,10 @@ async fn run(args: Vec<String>) -> Result<()> {
         ["bridges", "set"] => Request::Bridges { lines: Some(std::io::stdin().lines().collect::<std::io::Result<_>>()?) },
         ["bridges", "clear"] => Request::Bridges { lines: Some(Vec::new()) },
         ["shutdown"] => Request::Shutdown,
+        ["link"] => return pair(&dir).await,
+        ["devices"] => Request::Devices,
+        ["devices", "add", link] => Request::AddDevice { link: link.to_string() },
+        ["devices", "remove", id] => Request::RemoveDevice { id: id.parse().context("a device number")? },
         _ => {
             println!("{USAGE}");
             return Ok(());
@@ -143,6 +153,12 @@ async fn run(args: Vec<String>) -> Result<()> {
         Reply::TypingIndicators { on } => println!("typing indicators {}", if on { "on" } else { "off" }),
         Reply::Bridges { lines } if lines.is_empty() => eprintln!("none: the built-in ones (Snowflake), when Tor is blocked"),
         Reply::Bridges { lines } => println!("{}", lines.join("\n")),
+        Reply::Devices { devices } => {
+            for d in devices {
+                let what = [d.this.then(|| nightpost_core::t!("device-this")), d.mailbox.then(|| nightpost_core::t!("device-mailbox"))];
+                println!("{}\t{}\t{}", d.id, d.name, what.into_iter().flatten().collect::<Vec<_>>().join(", "));
+            }
+        }
         Reply::Listening => {
             while let Some(event) = client.event().await? {
                 println!("{}", serde_json::to_string(&event)?);
@@ -205,6 +221,30 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
         Reply::Error { message } => bail!("{message}"),
         other => bail!("unexpected reply {other:?}"),
     }
+    Ok(())
+}
+
+/// Shows the link for one of the account's devices, and waits until it was used.
+async fn pair(dir: &Path) -> Result<()> {
+    let mut events = listen(dir).await?;
+    let mut client = Client::connect(dir).await?;
+    let link = match client.call(&Request::PairingLink).await? {
+        Reply::Invite { link } => link,
+        Reply::Error { message } => bail!("{message}"),
+        other => bail!("unexpected reply {other:?}"),
+    };
+    for line in tui::qr(&link) {
+        println!("{line}");
+    }
+    println!("\n{link}\n\n{}", nightpost_core::t!("pair-cli"));
+    loop {
+        match events.event().await? {
+            Some(Event::Paired) => break,
+            Some(_) => {}
+            None => bail!("the daemon stopped"),
+        }
+    }
+    println!("{}", nightpost_core::t!("paired"));
     Ok(())
 }
 

@@ -4,6 +4,7 @@
 pub mod api;
 pub mod daemon;
 pub mod dbkey;
+pub mod devices;
 pub mod i18n;
 pub mod identity;
 pub mod invite;
@@ -89,5 +90,6 @@ pub fn rings(name: &str) -> [&'static str; 3] {
 }
 
 /// Version of the wire protocol. Peers must match exactly.
-/// Not bumped before the first release: nothing out there speaks another one.
-pub const PROTOCOL_VERSION: u16 = 1;
+/// 2: several devices per account (alpha.2); 1 knew one device only and
+/// would silently never reach the others.
+pub const PROTOCOL_VERSION: u16 = 2;

@@ -143,6 +143,12 @@ pub enum Frame {
     /// place of a card, so the other side can say why instead of just
     /// seeing the connection drop.
     Refused,
+    /// We have no session with your device yet: send a bundle to start one.
+    GetBundle,
+    /// A fresh one-time bundle for the device that sent it.
+    Bundle(WireBundle),
+    /// Our device list changed while the link was open.
+    Devices(SignedDeviceList),
 }
 
 /// What a libsignal message holds.
@@ -166,6 +172,27 @@ pub enum Body {
     /// Messages between us now disappear after this many seconds (0: they
     /// stay). Either side sets it; the last one to speak wins.
     Timer(u32),
+    /// Between the devices of one account only: what one did, for the
+    /// others to show the same.
+    Mine(Mine),
+}
+
+/// What one of our devices tells the others. Accounts are identity keys.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Mine {
+    /// A message it sent: the same id, so that receipts find it here too.
+    Sent { to: Vec<u8>, id: [u8; 16], time: u64, text: String, ttl: u32 },
+    /// A note to ourselves.
+    Note { id: [u8; 16], time: u64, text: String },
+    /// A contact added or renamed, as kept in the database.
+    Contact(Vec<u8>),
+    /// A contact removed; with `wipe`, the conversation too.
+    Forget { account: Vec<u8>, wipe: bool },
+    /// What this contact wrote so far was read.
+    Seen(Vec<u8>),
+    Timer { account: Vec<u8>, seconds: u32 },
+    /// The names of our devices, by id.
+    Names(Vec<(u8, String)>),
 }
 
 /// The timers a conversation can have, in seconds: off, an hour, eight

@@ -33,6 +33,20 @@ type Result<T> = std::result::Result<T, SignalProtocolError>;
 /// The database layout this build reads and writes.
 const SCHEMA: u32 = 1;
 
+/// One message as stored, handed whole to a device joining the account.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MessageRow {
+    pub account: Vec<u8>,
+    pub id: [u8; 16],
+    pub outgoing: bool,
+    pub time: u64,
+    pub text: String,
+    pub delivered: bool,
+    pub read: bool,
+    pub ttl: u32,
+    pub expires: Option<u64>,
+}
+
 pub struct Store {
     db: Connection,
     path: PathBuf,
@@ -254,11 +268,52 @@ impl Store {
 
     /// A note to ourselves: kept as sent and delivered, under a key no contact
     /// has (theirs are public keys).
-    pub(crate) fn add_note(&self, id: &[u8; 16], time: u64, text: &str) -> rusqlite::Result<()> {
-        self.db.execute(
-            "INSERT INTO messages (account, id, outgoing, time, text, delivered, read) VALUES (?1, ?2, 1, ?3, ?4, 1, 1)",
+    /// False if it is already there (a copy from another of our devices).
+    pub(crate) fn add_note(&self, id: &[u8; 16], time: u64, text: &str) -> rusqlite::Result<bool> {
+        let added = self.db.execute(
+            "INSERT OR IGNORE INTO messages (account, id, outgoing, time, text, delivered, read) VALUES (?1, ?2, 1, ?3, ?4, 1, 1)",
             params![NOTE_ACCOUNT, id, time as i64, text],
         )?;
+        Ok(added == 1)
+    }
+
+    /// Whether any message is kept: a device joining an account must have none.
+    pub(crate) fn has_messages(&self) -> rusqlite::Result<bool> {
+        self.db.query_row("SELECT EXISTS (SELECT 1 FROM messages)", [], |row| row.get(0))
+    }
+
+    /// Every message, oldest first.
+    pub(crate) fn all_messages(&self) -> rusqlite::Result<Vec<MessageRow>> {
+        let mut stmt = self.db.prepare("SELECT account, id, outgoing, time, text, delivered, read, ttl, expires FROM messages ORDER BY time")?;
+        stmt.query_map([], |row| {
+            Ok(MessageRow {
+                account: row.get(0)?,
+                id: row.get(1)?,
+                outgoing: row.get(2)?,
+                time: row.get::<_, i64>(3)? as u64,
+                text: row.get(4)?,
+                delivered: row.get(5)?,
+                read: row.get(6)?,
+                ttl: row.get(7)?,
+                expires: row.get::<_, Option<i64>>(8)?.map(|e| e as u64),
+            })
+        })?
+        .collect()
+    }
+
+    pub(crate) fn add_rows(&self, rows: &[MessageRow]) -> rusqlite::Result<()> {
+        for m in rows {
+            self.db.execute(
+                "INSERT OR IGNORE INTO messages (account, id, outgoing, time, text, delivered, read, ttl, expires) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![m.account, m.id, m.outgoing, m.time as i64, m.text, m.delivered, m.read, m.ttl, m.expires.map(|e| e as i64)],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Shown as delivered: a copy of what another of our devices sent.
+    pub(crate) fn delivered(&self, account: &[u8], id: &[u8; 16]) -> rusqlite::Result<()> {
+        self.db.execute("UPDATE messages SET delivered = 1 WHERE account = ?1 AND id = ?2", params![account, id])?;
         Ok(())
     }
 
@@ -318,6 +373,23 @@ impl Store {
         Ok(())
     }
 
+    /// A device left `account`'s list: nothing more waits for it.
+    pub(crate) fn forget_device(&self, account: &[u8], device: u8) -> rusqlite::Result<()> {
+        self.db.execute("DELETE FROM outbox WHERE account = ?1 AND device = ?2", params![account, device])?;
+        Ok(())
+    }
+
+    /// A device joined `account`'s list: what still waits for the others
+    /// waits for it too.
+    pub(crate) fn copy_queue(&self, account: &[u8], device: u8) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT OR IGNORE INTO outbox (account, device, id, envelope)
+             SELECT account, ?2, id, envelope FROM outbox WHERE account = ?1 AND device != ?2 GROUP BY id ORDER BY MIN(rowid)",
+            params![account, device],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn queue(&self, account: &[u8], device: u8, id: &[u8; 16], envelope: &[u8]) -> rusqlite::Result<()> {
         self.db.execute(
             "INSERT OR IGNORE INTO outbox (account, device, id, envelope) VALUES (?1, ?2, ?3, ?4)",
@@ -341,22 +413,17 @@ impl Store {
         stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
     }
 
-    /// `device` acknowledged `id`. True if that was the last device waiting
-    /// for one of our messages, so it is delivered (a read receipt is not a
-    /// message: nothing to show).
+    /// `device` acknowledged `id`. True if that was the first device to get
+    /// one of our messages, so it is delivered: one device asleep does not
+    /// keep it waiting (a read receipt is not a message: nothing to show).
     pub(crate) fn acked(&self, account: &[u8], device: u8, id: &[u8; 16]) -> rusqlite::Result<bool> {
         let removed = self.db.execute(
             "DELETE FROM outbox WHERE account = ?1 AND device = ?2 AND id = ?3",
             params![account, device, id],
         )?;
-        let left: u32 = self.db.query_row(
-            "SELECT COUNT(*) FROM outbox WHERE account = ?1 AND id = ?2",
-            params![account, id],
-            |row| row.get(0),
-        )?;
-        if removed == 1 && left == 0 {
+        if removed == 1 {
             let updated = self.db.execute(
-                "UPDATE messages SET delivered = 1 WHERE account = ?1 AND id = ?2",
+                "UPDATE messages SET delivered = 1 WHERE account = ?1 AND id = ?2 AND delivered = 0",
                 params![account, id],
             )?;
             return Ok(updated == 1);

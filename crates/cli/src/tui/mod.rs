@@ -1052,7 +1052,14 @@ impl App {
             Update::Event(Event::ReadReceipts { on }) => self.read_receipts = on,
             Update::Event(Event::TypingIndicators { on }) => self.typing_indicators = on,
             Update::Event(Event::Close { interface: Interface::Terminal }) => self.quit = true,
-            Update::Event(Event::Show | Event::Close { .. }) => {}
+            Update::Event(Event::Show | Event::Close { .. } | Event::DevicesChanged) => {}
+            Update::Event(Event::Paired) => {
+                self.status = t!("paired");
+                if let Err(e) = self.reload_contacts(requests).await {
+                    self.status = format!("{e:#}");
+                }
+            }
+            Update::Event(Event::Removed) => self.status = t!("err-device-removed"),
             Update::Event(Event::Typing { from }) => self.typing = Some((from, Instant::now() + TYPING_SHOWN)),
             Update::Event(Event::Fingerprint { name, safety_number }) => {
                 if Prefs::load(&self.dir).notify {
@@ -1125,7 +1132,7 @@ fn next(focus: Focus, steps: usize) -> Focus {
 }
 
 /// The link as a QR code, two modules per character cell.
-fn qr(link: &str) -> Vec<String> {
+pub(crate) fn qr(link: &str) -> Vec<String> {
     use qrcode::render::unicode::Dense1x2;
     match qrcode::QrCode::new(link.as_bytes()) {
         Ok(code) => code

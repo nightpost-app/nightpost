@@ -87,6 +87,15 @@ pub enum Request {
     /// Stops the daemon: the database closes and, with a passphrase, stays
     /// locked until the next start.
     Shutdown,
+    /// Our devices, this one included.
+    Devices,
+    /// On a new device with nothing yet: a link for one of the account's
+    /// devices to use (10 minutes); [`Event::Paired`] once it did.
+    PairingLink,
+    /// Uses the link a new device shows: it joins the account.
+    AddDevice { link: String },
+    /// Takes one of our other devices off the account.
+    RemoveDevice { id: u8 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -106,7 +115,19 @@ pub enum Reply {
     TypingIndicators { on: bool },
     Bridges { lines: Vec<String> },
     RecoveryPhrase { phrase: String },
+    Devices { devices: Vec<DeviceInfo> },
     Error { message: String },
+}
+
+/// One of our devices.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub id: u8,
+    pub name: String,
+    /// A mailbox: keeps messages for our devices that are off.
+    pub mailbox: bool,
+    /// The device this daemon runs on.
+    pub this: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -142,6 +163,13 @@ pub enum Event {
     },
     /// Messages of this conversation disappeared: show its history again.
     Expired { name: String },
+    /// Our list of devices or their names changed: ask `devices` again.
+    DevicesChanged,
+    /// This device joined an account: everything is new, start over.
+    Paired,
+    /// Another of our devices took this one off the account: it sends
+    /// nothing any more, and its data can be deleted.
+    Removed,
     Show,
     Close { interface: Interface },
 }
@@ -503,6 +531,13 @@ async fn handle<T: Transport + 'static>(daemon: &Rc<Daemon<T>>, request: Request
     Ok(match request {
         Request::Send { to, text } => Reply::Sent { id: hex(&daemon.send(&to, &text)?) },
         Request::Invite { name } => Reply::Invite { link: daemon.invite(&name).await? },
+        Request::Devices => Reply::Devices { devices: daemon.devices()? },
+        Request::PairingLink => Reply::Invite { link: daemon.pairing_link().await? },
+        Request::AddDevice { link } => Reply::Added { name: daemon.add_device(&link).await? },
+        Request::RemoveDevice { id } => {
+            daemon.remove_device(id).await?;
+            Reply::Done
+        }
         Request::Accept { link, name } => {
             daemon.accept(&link, &name).await?;
             Reply::Added { name }

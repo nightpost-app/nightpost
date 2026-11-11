@@ -55,6 +55,17 @@ tor-from-bridge = Tor: le pont ne passe pas ; essai sans lui…
 
 err-starting = Tor n’est pas encore prêt : réessaie dans un instant.
 err-already-contact = Déjà dans tes contacts.
+err-device-removed = Cet appareil a été retiré de ton compte : il n’envoie plus rien.
+err-pair-not-empty = Ce Nightpost a déjà des contacts ou des messages : un appareil ne rejoint un compte qu’au premier lancement.
+err-pair-not-link = Ce n’est pas un lien pour ajouter un appareil.
+err-too-many-devices = Un compte a au plus 127 appareils.
+err-remove-this-device = Pour retirer cet appareil, fais-le depuis un autre.
+err-no-device = Cet appareil n’existe pas.
+device-unnamed = Appareil { $id }
+paired = Cet appareil a rejoint ton compte : tes contacts et tes messages sont là.
+pair-cli = Sur un de tes appareils : nightpost devices add <ce lien> (ou Réglages, Appareils). En attente, 10 minutes…
+device-this = cet appareil
+device-mailbox = boîte aux lettres
 err-name-taken = Le nom { $name } est déjà pris. Choisis-en un autre.
 err-code-waiting = Un code pour { $name } attend déjà.
 err-not-confirmed = Pas confirmé.

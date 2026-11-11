@@ -111,8 +111,10 @@ impl SignedDeviceList {
     }
 
     /// Accepts this list from `identity`'s account. With `previous` (the list
-    /// already accepted from that account) it must be that list again or its
-    /// direct successor; without, it becomes the first one known.
+    /// already accepted from that account), returns the newer of the two: a
+    /// device that missed some changes still talks to one that saw them,
+    /// and an old list replayed never replaces a newer one. Two different
+    /// lists with the same `seq` are a conflict, refused.
     pub fn verify(
         &self,
         identity: &IdentityKey,
@@ -137,11 +139,19 @@ impl SignedDeviceList {
             }
             let previous_list: DeviceList =
                 postcard::from_bytes(&previous.body).map_err(|_| DeviceListError::Malformed)?;
-            if list.seq != previous_list.seq + 1 || list.prev != previous.hash() {
+            if list.seq == previous_list.seq {
                 return Err(DeviceListError::NotNext);
+            }
+            if list.seq < previous_list.seq {
+                return Ok(previous_list);
             }
         }
         Ok(list)
+    }
+
+    /// Its `seq`, unchecked: for lists already verified.
+    pub fn seq(&self) -> u64 {
+        postcard::from_bytes::<DeviceList>(&self.body).map_or(0, |l| l.seq)
     }
 
     /// What the next list names as `prev`. The body alone: it already holds
@@ -182,13 +192,17 @@ mod tests {
         let second = DeviceList::next(&signed1, &first, vec![device(1, Role::Normal), device(2, Role::Mailbox)]);
         let signed2 = SignedDeviceList::sign(&second, &me).unwrap();
         assert_eq!(signed2.verify(me.identity_key(), Some(&signed1)).unwrap(), second);
-        // The same list again is fine; going back is not.
+        // The same list again is fine; an older one leaves the newer in place.
         assert!(signed2.verify(me.identity_key(), Some(&signed2)).is_ok());
-        assert_eq!(signed1.verify(me.identity_key(), Some(&signed2)), Err(DeviceListError::NotNext));
+        assert_eq!(signed1.verify(me.identity_key(), Some(&signed2)).unwrap(), second);
+        // Changes missed: a list several steps ahead is taken.
+        let fourth = DeviceList { seq: 3, prev: [7; 32], devices: second.devices.clone() };
+        let signed4 = SignedDeviceList::sign(&fourth, &me).unwrap();
+        assert_eq!(signed4.verify(me.identity_key(), Some(&signed1)).unwrap(), fourth);
     }
 
     #[test]
-    fn forged_tampered_or_skipping_lists_are_refused() {
+    fn forged_tampered_or_conflicting_lists_are_refused() {
         let me = identity();
         let first = DeviceList::first(vec![device(1, Role::Normal)]);
         let signed1 = SignedDeviceList::sign(&first, &me).unwrap();
@@ -203,11 +217,8 @@ mod tests {
         tampered.body[last] ^= 1;
         assert_eq!(tampered.verify(me.identity_key(), None), Err(DeviceListError::BadSignature));
 
-        // Validly signed, but skips a link, or names the wrong predecessor.
-        let skip = DeviceList { seq: 2, prev: signed1.hash(), devices: first.devices.clone() };
-        let skip = SignedDeviceList::sign(&skip, &me).unwrap();
-        assert_eq!(skip.verify(me.identity_key(), Some(&signed1)), Err(DeviceListError::NotNext));
-        let fork = DeviceList { seq: 1, prev: [9; 32], devices: first.devices.clone() };
+        // Validly signed, but another list under the same seq.
+        let fork = DeviceList { seq: 0, prev: [9; 32], devices: first.devices.clone() };
         let fork = SignedDeviceList::sign(&fork, &me).unwrap();
         assert_eq!(fork.verify(me.identity_key(), Some(&signed1)), Err(DeviceListError::NotNext));
     }

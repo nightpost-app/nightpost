@@ -39,6 +39,8 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 # Base32 for invitation links: case-insensitive, no characters a QR code or
 # a hand copy confuses.
 data-encoding = "2"
+# What a new device is called on the account's other devices.
+gethostname = "1"
 
 # Tor, pinned with "=": 0.x crates, monthly releases, API breaks at every bump.
 # Features, as murmure settled them:
