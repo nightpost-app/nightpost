@@ -167,6 +167,7 @@ private struct UpdateNotice: View {
 /// The messages, newest at the bottom, with a line for each day.
 private struct MessageList: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
     let name: String
     let waiting: String
 
@@ -174,6 +175,23 @@ private struct MessageList: View {
         let messages = model.messages[name] ?? []
         ScrollView {
             VStack(spacing: 0) {
+                // The note is what opens first: how to find someone, or to join
+                // an account, is here too.
+                if messages.isEmpty, model.contacts.first(where: { $0.name == name })?.note == true {
+                    VStack(spacing: 14) {
+                        Text(t("note-empty-window")).font(.ui(16)).foregroundStyle(Palette.soft)
+                            .multilineTextAlignment(.center)
+                        if model.contacts.count <= 1 {
+                            Button(t("add-someone")) { model.dialog = .add }.buttonStyle(PrimaryButton())
+                            Button(t("pair-have-account")) {
+                                model.settingsTab = "devices"
+                                openSettings()
+                            }
+                            .buttonStyle(SecondaryButton())
+                        }
+                    }
+                    .padding(.top, 60)
+                }
                 ForEach(Array(messages.enumerated()), id: \.element.id) { i, m in
                     if i == 0 || !When.sameDay(messages[i - 1].time, m.time) {
                         Text(When.day(m.time))

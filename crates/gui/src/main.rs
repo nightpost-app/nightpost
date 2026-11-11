@@ -1058,7 +1058,10 @@ fn Conversation() -> Element {
                         div { class: "empty note",
                             p { {t!("note-empty-window")} }
                             // Only the note so far: how to find someone is here too.
-                            if alone { button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} } }
+                            if alone {
+                                button { class: "primary", onclick: move |_| state.dialog.set(Some(Dialog::Add)), {t!("add-someone")} }
+                                button { class: "ghost", onclick: move |_| state.view.set(View::Settings(Section::Devices)), {t!("pair-have-account")} }
+                            }
                         }
                     }
                     if typing {
