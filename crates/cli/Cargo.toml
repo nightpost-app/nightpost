@@ -32,3 +32,42 @@ zeroize = "1"
 # stays open instead).
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify-rust = "4"
+
+# The package without the window, for a server or a mailbox: no WebKit, no GTK.
+# The `nightpost` package (crates/gui) is the full one and depends on this.
+# lyrebird goes outside the PATH, where it cannot clash with a distribution's
+# own; nightpost looks there too.
+[package.metadata.deb]
+name = "nightpost-cli"
+maintainer = "Nightpost <312234885+murmure-dev@users.noreply.github.com>"
+copyright = "Nightpost contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = "The Nightpost daemon, command line and terminal interface, without the window. Nightpost is a messenger with no server in the middle: each person's Nightpost is a Tor onion service only their contacts can find, and messages are end-to-end encrypted with Signal's protocol."
+section = "net"
+depends = "$auto"
+# /usr/bin/nightpost belonged to the `nightpost` package of 0.1.0-alpha.1.
+replaces = "nightpost (<< 0.1.0~alpha.2)"
+breaks = "nightpost (<< 0.1.0~alpha.2)"
+assets = [
+    ["target/release/nightpost", "usr/bin/", "755"],
+    ["target/release/lyrebird", "usr/libexec/nightpost/", "755"],
+    ["../../docs/lyrebird.txt", "usr/share/doc/nightpost-cli/LICENSE-lyrebird", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "nightpost-cli"
+summary = "Nightpost without the window: daemon, command line and terminal interface"
+auto-req = "disabled"
+assets = [
+    { source = "target/release/nightpost", dest = "/usr/bin/nightpost", mode = "755" },
+    { source = "target/release/lyrebird", dest = "/usr/libexec/nightpost/lyrebird", mode = "755" },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/nightpost-cli/LICENSE", mode = "644", doc = true },
+    { source = "../../docs/lyrebird.txt", dest = "/usr/share/licenses/nightpost-cli/LICENSE-lyrebird", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+xz-libs = "*"
+
+# /usr/bin/nightpost belonged to the `nightpost` package of 0.1.0-alpha.1.
+[package.metadata.generate-rpm.conflicts]
+nightpost = "< 0.1.0~alpha.2"

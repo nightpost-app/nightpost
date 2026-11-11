@@ -35,10 +35,10 @@ winresource = "0.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 
-# The Linux packages, both named nightpost: `cargo deb -p nightpost-gui` and
+# The full Linux package, named nightpost: the window, on top of nightpost-cli
+# (crates/cli: daemon and lyrebird). `cargo deb -p nightpost-gui` and
 # `cargo generate-rpm -p crates/gui`, after `cargo build --release` and with
-# lyrebird copied to target/release. lyrebird goes outside the PATH, where
-# it cannot clash with a distribution's own; nightpost looks there too.
+# {version} replaced by the package version (release.yml).
 [package.metadata.deb]
 name = "nightpost"
 maintainer = "Nightpost <312234885+murmure-dev@users.noreply.github.com>"
@@ -47,14 +47,12 @@ license-file = ["../../LICENSE", "0"]
 extended-description = "A messenger with no server in the middle: each person's Nightpost is a Tor onion service only their contacts can find, and messages are end-to-end encrypted with Signal's protocol."
 section = "net"
 # The tray icon loads it at run time (tray.rs).
-depends = "$auto, libayatana-appindicator3-1"
+# The daemon (nightpost-cli) must be the same version: they talk through api.version.
+depends = "$auto, libayatana-appindicator3-1, nightpost-cli (= {version})"
 assets = [
-    ["target/release/nightpost", "usr/bin/", "755"],
     ["target/release/nightpost-gui", "usr/bin/", "755"],
-    ["target/release/lyrebird", "usr/libexec/nightpost/", "755"],
     ["../../packaging/linux/io.github.nightpost-app.Nightpost.desktop", "usr/share/applications/", "644"],
     ["../../icons/nightpost.png", "usr/share/icons/hicolor/256x256/apps/io.github.nightpost-app.Nightpost.png", "644"],
-    ["../../docs/lyrebird.txt", "usr/share/doc/nightpost/LICENSE-lyrebird", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -65,13 +63,10 @@ summary = "Messages over Tor, with no server in the middle"
 # not have: the two below bring the rest.
 auto-req = "disabled"
 assets = [
-    { source = "target/release/nightpost", dest = "/usr/bin/nightpost", mode = "755" },
     { source = "target/release/nightpost-gui", dest = "/usr/bin/nightpost-gui", mode = "755" },
-    { source = "target/release/lyrebird", dest = "/usr/libexec/nightpost/lyrebird", mode = "755" },
     { source = "../../packaging/linux/io.github.nightpost-app.Nightpost.desktop", dest = "/usr/share/applications/io.github.nightpost-app.Nightpost.desktop", mode = "644" },
     { source = "../../icons/nightpost.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.nightpost-app.Nightpost.png", mode = "644" },
     { source = "../../LICENSE", dest = "/usr/share/licenses/nightpost/LICENSE", mode = "644", doc = true },
-    { source = "../../docs/lyrebird.txt", dest = "/usr/share/licenses/nightpost/LICENSE-lyrebird", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.requires]
@@ -80,3 +75,4 @@ libxdo = "*"
 xz-libs = "*"
 # Loaded at run time by the tray icon (tray.rs).
 libayatana-appindicator-gtk3 = "*"
+"nightpost-cli" = "= {version}"
