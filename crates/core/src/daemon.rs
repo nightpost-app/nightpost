@@ -910,7 +910,10 @@ impl<T: Transport + 'static> Daemon<T> {
         ensure!(usize::from(id) <= MAX_DEVICES, t!("err-too-many-devices"));
         let mut list = old.devices.clone();
         list.push(Device { id, onion: their_onion, key, role: if mailbox { Role::Mailbox } else { Role::Normal } });
-        let signed = SignedDeviceList::sign(&DeviceList::next(&own.devices, &old, list), &self.identity.borrow()).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        // Spent even if what follows fails: the new device may keep this
+        // list, signed, though we never hear back from it.
+        self.store.put("self", "next_device", &[id + 1])?;
+        let signed = self.sign_next(&own, &old, list)?;
 
         // A mailbox gets what it needs to let our contacts in, not the identity.
         let identity = if mailbox { self.account() } else { self.identity.borrow().serialize().into_vec() };
@@ -957,7 +960,6 @@ impl<T: Transport + 'static> Daemon<T> {
 
         // It has it all: now it is one of ours.
         self.store.atomically(|| {
-            self.store.put("self", "next_device", &[id + 1])?;
             for (id, name) in &names {
                 self.store.put("device_name", &id.to_string(), name.as_bytes())?;
             }
@@ -977,11 +979,21 @@ impl<T: Transport + 'static> Daemon<T> {
         let old = self.devices_of(&own)?;
         ensure!(old.device(id).is_some(), t!("err-no-device"));
         let list = old.devices.iter().filter(|d| d.id != id).cloned().collect();
-        let signed = SignedDeviceList::sign(&DeviceList::next(&own.devices, &old, list), &self.identity.borrow()).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let signed = self.sign_next(&own, &old, list)?;
         self.store.remove("device_name", &id.to_string())?;
         self.update_devices(&mut self.own_contact(), &signed)?;
         self.announce_all()?;
         Ok(())
+    }
+
+    /// Signs our next device list, under a number never signed before: two
+    /// lists with the same number would be a fork nobody can settle.
+    fn sign_next(&self, own: &Contact, old: &DeviceList, devices: Vec<Device>) -> Result<SignedDeviceList> {
+        let signed = self.store.get("self", "signed_seq")?.and_then(|v| v.try_into().ok()).map_or(0, u64::from_le_bytes);
+        let mut list = DeviceList::next(&own.devices, old, devices);
+        list.seq = list.seq.max(signed + 1);
+        self.store.put("self", "signed_seq", &list.seq.to_le_bytes())?;
+        SignedDeviceList::sign(&list, &self.identity.borrow()).map_err(|e| anyhow::anyhow!("{e:?}"))
     }
 
     /// Opens a link to every device of every contact, and to our others:
@@ -2547,6 +2559,40 @@ mod tests {
                 let mut a2_events = a2.subscribe();
                 a2.start().await.unwrap();
                 wait_for(&mut a2_events, message("bob", id, "pour les deux")).await;
+            })
+            .await;
+    }
+
+    /// A pairing that fails after the new device got the signed list: its
+    /// id and its list number are never used again.
+    #[tokio::test]
+    async fn a_failed_pairing_spends_its_id_and_number() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let a1 = open(dir.path(), "alice", &net);
+                a1.start().await.unwrap();
+                let seq = |d: &Daemon<MemoryTransport>| d.devices_of(&d.own_contact()).unwrap().seq;
+                let before = seq(&a1);
+
+                // It shows a link, then writes a note: no longer empty, it
+                // turns the account down once it has it.
+                let a2 = open(dir.path(), "alice-2", &net);
+                a2.start().await.unwrap();
+                let link = a2.pairing_link().await.unwrap();
+                a2.send(&a2.note_name().unwrap(), "à moi").unwrap();
+                assert!(a1.add_device(&link).await.is_err());
+                assert_eq!(seq(&a1), before);
+
+                let a3 = open(dir.path(), "alice-3", &net);
+                a3.start().await.unwrap();
+                let mut a3_events = a3.subscribe();
+                let link = a3.pairing_link().await.unwrap();
+                a1.add_device(&link).await.unwrap();
+                wait_for(&mut a3_events, |e| *e == Event::Paired).await;
+                assert_eq!(a3.device.get(), 3);
+                assert_eq!(seq(&a1), before + 2);
             })
             .await;
     }

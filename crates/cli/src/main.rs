@@ -581,6 +581,8 @@ fn unlock(dir: &Path, recover: bool) -> Result<Unlock> {
     }
     let secret = if recover {
         Some(dbkey::secret_from_phrase(&line(&format!("{} ", nightpost_core::t!("recovery-prompt")))?)?)
+    } else if passphrase.is_some() && dir.join(dbkey::NO_KEYCHAIN).exists() {
+        None
     } else {
         // A database made earlier is never opened with a secret made now:
         // another keychain answering (another desktop) says so, and the
@@ -591,6 +593,9 @@ fn unlock(dir: &Path, recover: bool) -> Result<Unlock> {
             Ok(None) => bail!(nightpost_core::t!("err-keychain-lost")),
             Err(e) if passphrase.is_some() => {
                 eprintln!("no keychain ({e}): using the passphrase alone");
+                if !made {
+                    std::fs::write(dir.join(dbkey::NO_KEYCHAIN), "").context("marking the database as made without a keychain")?;
+                }
                 None
             }
             Err(e) => bail!("no keychain ({e}); set NIGHTPOST_PASSPHRASE_FILE to use a passphrase instead"),

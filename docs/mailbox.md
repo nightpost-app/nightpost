@@ -55,6 +55,15 @@ encrypted for that device. The device collects it when it comes back.
    It then appears in `nightpost devices` as a mailbox. If the link
    expires first, the mailbox restarts with a new one.
 
+   If `devices add` fails (Tor can be slow the first minutes), start over
+   from a clean mailbox: once it has joined, it shows no new link.
+
+   ```
+   sudo systemctl stop nightpost-mailbox
+   sudo rm -rf /var/lib/private/nightpost-mailbox
+   sudo systemctl start nightpost-mailbox
+   ```
+
 Without systemd, run it the same way: start `nightpost daemon --mailbox` with
 `NIGHTPOST_DIR` and `NIGHTPOST_PASSPHRASE_FILE` set.
 

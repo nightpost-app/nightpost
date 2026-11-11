@@ -1118,8 +1118,16 @@ impl App {
             Update::Event(Event::TypingIndicators { on }) => self.typing_indicators = on,
             Update::Event(Event::Close { interface: Interface::Terminal }) => self.quit = true,
             Update::Event(Event::Show | Event::Close { .. } | Event::DevicesChanged) => {}
+            // Another account's now: everything shown so far is gone.
             Update::Event(Event::Paired) => {
                 self.status = t!("paired");
+                (self.conversations, self.selected, self.scroll) = (Vec::new(), 0, 0);
+                if let Ok(Reply::ReadReceipts { on }) = requests.call(&Request::ReadReceipts { on: None }).await {
+                    self.read_receipts = on;
+                }
+                if let Ok(Reply::TypingIndicators { on }) = requests.call(&Request::TypingIndicators { on: None }).await {
+                    self.typing_indicators = on;
+                }
                 if let Err(e) = self.reload_contacts(requests).await {
                     self.status = format!("{e:#}");
                 }

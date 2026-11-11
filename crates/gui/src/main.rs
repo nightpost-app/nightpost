@@ -360,10 +360,21 @@ impl State {
                     }
                 });
             }
+            // Another account's now: everything shown so far is gone.
             Event::Paired => {
                 self.status.set(t!("paired"));
                 self.view.set(View::Chat);
-                spawn(async move { self.reload_contacts().await });
+                self.messages.write().clear();
+                self.selected.set(None);
+                spawn(async move {
+                    if let Ok(Reply::ReadReceipts { on }) = call(Request::ReadReceipts { on: None }).await {
+                        self.read_receipts.set(on);
+                    }
+                    if let Ok(Reply::TypingIndicators { on }) = call(Request::TypingIndicators { on: None }).await {
+                        self.typing_indicators.set(on);
+                    }
+                    self.reload_contacts().await
+                });
             }
             Event::Removed => self.status.set(t!("err-device-removed")),
             Event::DevicesChanged => {}

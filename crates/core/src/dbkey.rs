@@ -150,6 +150,12 @@ pub fn uses_passphrase(dir: &Path) -> bool {
     crate::portable() || dir.join(MARKER).exists()
 }
 
+/// Next to a database made without a keychain (a server): the passphrase
+/// alone opens it, whatever a keychain says later. One that answers only
+/// some of the time (Secret Service started on demand) would otherwise
+/// look like a lost secret.
+pub const NO_KEYCHAIN: &str = "no-keychain";
+
 /// Where an unattended daemon reads its passphrase: a systemd credential
 /// (`LoadCredentialEncrypted=nightpost-passphrase`), else the file named by
 /// `NIGHTPOST_PASSPHRASE_FILE`. Trailing newlines are not part of it.

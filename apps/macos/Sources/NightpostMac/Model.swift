@@ -409,10 +409,16 @@ final class AppModel {
             dialog = codes.contains(name) ? .confirm(name: name, number: number) : .waiting(name: name, number: number)
         // Nobody else asks the app to close: Nightpost is stopping.
         case let .close(interface): if interface == "window" { NSApp.terminate(nil) }
+        // Another account's now: everything shown so far is gone.
         case .paired:
             status = t("paired")
             settingsTab = "appearance"
-            Task { try? await reloadContacts() }
+            (messages, selected) = ([:], nil)
+            Task {
+                if case let .readReceipts(on) = try? await Daemon.call(.readReceipts(on: nil)) { readReceipts = on }
+                if case let .typingIndicators(on) = try? await Daemon.call(.typingIndicators(on: nil)) { typingIndicators = on }
+                try? await reloadContacts()
+            }
         case .removed: status = t("err-device-removed")
         case .devicesChanged: devicesVersion += 1
         case .unknown: break
