@@ -1,0 +1,59 @@
+# Two packages, as the deb and rpm: nightpost-cli (daemon, commands,
+# terminal interface, lyrebird; no WebKit) and nightpost (the window), which
+# needs the first. Built from source: the release's binaries want Ubuntu's
+# libxdo.so.3, and Arch has libxdo.so.4.
+# lyrebird comes from the Tor expert bundle, checked against the Tor Browser
+# developers' key, as in release.yml.
+# At each release: set pkgver (and _tor as TOR_BUNDLE in release.yml), then
+# `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO` before pushing to the AUR.
+pkgbase=nightpost
+pkgname=('nightpost-cli' 'nightpost')
+pkgver=0.1.0alpha.2
+_tag=${pkgver/alpha/-alpha}
+_tor=15.0.24
+pkgrel=1
+pkgdesc='Messages over Tor, with no server in the middle'
+arch=('x86_64')
+url='https://github.com/nightpost-app/nightpost'
+license=('AGPL-3.0-only')
+makedepends=('cargo' 'protobuf' 'clang' 'cmake' 'perl' 'webkit2gtk-4.1' 'gtk3' 'xdotool' 'libayatana-appindicator')
+options=('!lto')
+_bundle=tor-expert-bundle-linux-x86_64-$_tor.tar.gz
+source=("nightpost-$pkgver.tar.gz::$url/archive/refs/tags/v$_tag.tar.gz"
+        "https://archive.torproject.org/tor-package-archive/torbrowser/$_tor/$_bundle"{,.asc})
+noextract=("$_bundle")
+validpgpkeys=('EF6E286DDA85EA2A4BA7DE684E2C6E8793298290') # Tor Browser Developers
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  mkdir -p tor && bsdtar -xf "$_bundle" -C tor
+  cd "nightpost-$_tag"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "nightpost-$_tag"
+  CARGO_TARGET_DIR=target cargo build --frozen --release -p nightpost -p nightpost-gui
+}
+
+package_nightpost-cli() {
+  pkgdesc+=' (daemon and terminal interface)'
+  depends=('xz' 'gcc-libs' 'glibc')
+  cd "nightpost-$_tag"
+  install -Dm755 target/release/nightpost -t "$pkgdir/usr/bin/"
+  # nightpost looks for it in ../libexec/nightpost beside itself.
+  install -Dm755 "$(find "$srcdir/tor" -name lyrebird -type f | head -1)" -t "$pkgdir/usr/libexec/nightpost/"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 docs/lyrebird.txt "$pkgdir/usr/share/licenses/$pkgname/LICENSE-lyrebird"
+  install -Dm644 docs/bridges.md "$pkgdir/usr/share/doc/$pkgname/BRIDGES.md"
+}
+
+package_nightpost() {
+  pkgdesc+=' (window)'
+  depends=("nightpost-cli=$pkgver" 'webkit2gtk-4.1' 'gtk3' 'xdotool' 'libayatana-appindicator')
+  cd "nightpost-$_tag"
+  install -Dm755 target/release/nightpost-gui -t "$pkgdir/usr/bin/"
+  install -Dm644 packaging/linux/io.github.nightpost-app.Nightpost.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 icons/nightpost.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/io.github.nightpost-app.Nightpost.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
