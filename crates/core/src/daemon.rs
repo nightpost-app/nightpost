@@ -90,6 +90,8 @@ pub struct Daemon<T: Transport> {
     /// Devices to open a link to even with nothing queued: a link carries
     /// our device list, which changed.
     announce: RefCell<HashSet<Target>>,
+    /// Removed devices being told right now (see `say_goodbye`).
+    farewelling: RefCell<HashSet<u8>>,
     /// Accounts whose mailbox we are at now.
     visiting: RefCell<HashSet<Vec<u8>>>,
     /// To look in our mailbox now rather than at the next round.
@@ -193,6 +195,7 @@ impl<T: Transport + 'static> Daemon<T> {
             link_states: RefCell::default(),
             device_links: RefCell::default(),
             announce: RefCell::default(),
+            farewelling: RefCell::default(),
             visiting: RefCell::default(),
             fetch_now: Notify::new(),
         }))
@@ -980,10 +983,74 @@ impl<T: Transport + 'static> Daemon<T> {
         ensure!(old.device(id).is_some(), t!("err-no-device"));
         let list = old.devices.iter().filter(|d| d.id != id).cloned().collect();
         let signed = self.sign_next(&own, &old, list)?;
+        // In the database, not in memory: a daemon killed before the removed
+        // device heard of it still tells it on its next start.
+        let gone = old.device(id).cloned().context(t!("err-no-device"))?;
+        self.store.put("farewell", &id.to_string(), &postcard::to_stdvec(&(gone, now_secs()))?)?;
         self.store.remove("device_name", &id.to_string())?;
         self.update_devices(&mut self.own_contact(), &signed)?;
         self.announce_all()?;
+        self.wake.notify_one();
         Ok(())
+    }
+
+    /// Tells a device we removed, at its own onion (the old list still has
+    /// it), that it is off the account. Kept until it answers, or 30 days.
+    fn farewells(self: &Rc<Self>) -> Result<()> {
+        for (key, bytes) in self.store.list("farewell")? {
+            let Ok(id) = key.parse::<u8>() else { continue };
+            let Ok((gone, since)) = postcard::from_bytes::<(Device, u64)>(&bytes) else {
+                self.store.remove("farewell", &key)?;
+                continue;
+            };
+            // Listed again (never with this id, but cheap to be sure), or too old.
+            if self.devices_of(&self.own_contact())?.device(id).is_some() || now_secs().saturating_sub(since) > 30 * 24 * 3600 {
+                self.store.remove("farewell", &key)?;
+                continue;
+            }
+            let target = (self.account(), id);
+            let due = self.backoff.borrow().get(&target).is_none_or(|(_, at)| *at <= Instant::now());
+            if due && self.farewelling.borrow_mut().insert(id) {
+                spawn_local(self.clone().say_goodbye(id, gone));
+            }
+        }
+        Ok(())
+    }
+
+    async fn say_goodbye(self: Rc<Self>, id: u8, gone: Device) {
+        let told: Result<()> = async {
+            self.net.present(gone.onion, &self.discovery())?;
+            let mut stream = timeout(STEP * 2, self.net.dial(gone.onion)).await.context("dial timed out")??;
+            let myself = self.myself();
+            let me = self.me(&myself);
+            let caller = Caller::new(&me, gone.onion, None);
+            proto::send(&mut stream, caller.hello()).await?;
+            let challenge: Challenge = challenge(&mut stream).await?;
+            ensure!(challenge.device == id, "another device answered");
+            // Not held to our newest list: it no longer has this device.
+            let expected = IdentityKey::decode(&self.account())?;
+            let (proof, _) = caller.on_challenge(&me, &challenge, &expected, None).map_err(handshake)?;
+            proto::send(&mut stream, &proof).await?;
+            let list = self.own.borrow().devices.clone();
+            proto::send(&mut stream, &Frame::Devices(list)).await?;
+            hang_up(&mut stream).await;
+            Ok(())
+        }
+        .await;
+        self.farewelling.borrow_mut().remove(&id);
+        let target = (self.account(), id);
+        match told {
+            Ok(()) => {
+                self.backoff.borrow_mut().remove(&target);
+                let _ = self.store.remove("farewell", &id.to_string());
+            }
+            Err(e) => {
+                tracing::info!("a removed device not told yet: {e:#}");
+                let mut backoff = self.backoff.borrow_mut();
+                let failures = backoff.get(&target).map_or(0, |(n, _)| *n) + 1;
+                backoff.insert(target, (failures, Instant::now() + (RETRY * (1 << failures.min(6))).min(Duration::from_secs(600))));
+            }
+        }
     }
 
     /// Signs our next device list, under a number never signed before: two
@@ -1170,6 +1237,9 @@ impl<T: Transport + 'static> Daemon<T> {
                 // Off our list: nothing goes out any more.
                 Ok(_) if self.removed.get() => {}
                 Ok(mut targets) => {
+                    if let Err(e) = self.farewells() {
+                        tracing::warn!("telling removed devices: {e:#}");
+                    }
                     targets.extend(self.announce.borrow().iter().cloned());
                     for target in targets {
                         let due = self.backoff.borrow().get(&target).is_none_or(|(_, at)| *at <= Instant::now());
@@ -2680,13 +2750,43 @@ mod tests {
                 wait_for(&mut a1_events, message("bob", id, "seulement a1")).await;
                 assert!(bob.store.queued(&a1.account(), 2).unwrap().is_empty());
 
-                // It learns from the first of our devices it talks to.
-                a2.send("bob", "je suis encore là").unwrap();
+                // a1 tells it at once, without waiting for it to talk.
                 wait_for(&mut a2_events, |e| *e == Event::Removed).await;
                 assert!(a2.send("bob", "et maintenant").is_err());
                 sleep(Duration::from_millis(300)).await;
                 assert!(a2.history("bob", 10).unwrap().iter().all(|m| m.text != "seulement a1"));
-                assert!(bob.history("alice", 10).unwrap().iter().all(|m| m.text != "je suis encore là"));
+                assert!(bob.history("alice", 10).unwrap().iter().all(|m| m.text != "et maintenant"));
+            })
+            .await;
+    }
+
+    /// The removed device is told at its own address, even when it was off
+    /// at the time and the daemon that removed it has been stopped since.
+    #[tokio::test]
+    async fn a_removed_device_is_told_after_a_restart() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let [a1, a2, bob] = alice_twice(dir.path(), &net).await;
+                bob.stop().await;
+                drop(bob);
+                a2.stop().await;
+                drop(a2);
+                a1.remove_device(2).await.unwrap();
+                // Killed before it could say anything: it was written down.
+                assert_eq!(a1.store.list("farewell").unwrap().len(), 1);
+                a1.stop().await;
+                drop(a1);
+
+                let a1 = open(dir.path(), "alice", &net);
+                a1.start().await.unwrap();
+                let a2 = open(dir.path(), "alice-2", &net);
+                let mut a2_events = a2.subscribe();
+                a2.start().await.unwrap();
+                // a2 says nothing to anyone: it hears it from a1.
+                wait_for(&mut a2_events, |e| *e == Event::Removed).await;
+                until(|| a1.store.list("farewell").unwrap().is_empty(), "still to be told").await;
             })
             .await;
     }
