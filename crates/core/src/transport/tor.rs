@@ -420,6 +420,10 @@ impl super::Service for TorService {
             .reconfigure(service_config(&self.nickname, authorized)?, Reconfigure::AllOrNothing)
             .map_err(|e| TransportError(format!("updating the authorized keys: {e}")))
     }
+
+    fn reachable(&self) -> bool {
+        self.service.status().state().is_fully_reachable()
+    }
 }
 
 /// Always restricted. arti refuses a restricted config with no keys, and an

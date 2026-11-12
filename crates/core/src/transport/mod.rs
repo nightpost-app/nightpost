@@ -67,6 +67,12 @@ pub trait Service: Send {
     /// once the new descriptor is published, about a minute on Tor; already
     /// open streams are not cut.
     fn authorize(&self, authorized: &[DiscoveryKey]) -> Result<()>;
+
+    /// Whether the service is believed reachable by those who may find it.
+    /// For a transport that has no way to tell, yes.
+    fn reachable(&self) -> bool {
+        true
+    }
 }
 
 /// The address of the service published with `seed`.

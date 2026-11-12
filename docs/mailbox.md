@@ -72,3 +72,10 @@ Without systemd, run it the same way: start `nightpost daemon --mailbox` with
 `nightpost devices remove <id>` on one of your devices. Your contacts stop
 leaving messages there once they learn your new device list. Then stop the
 service and delete `/var/lib/private/nightpost-mailbox`.
+
+## When it cannot be reached
+
+If the mailbox's address has not been reachable on Tor for 20 minutes, the
+program stops with an error and the service starts it again from scratch
+(`Restart=on-failure`). `journalctl -u nightpost-mailbox` then says
+"not reachable for 20 minutes: starting over".

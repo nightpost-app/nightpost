@@ -28,6 +28,10 @@ use crate::store::Store;
 use crate::transport::{DiscoveryKey, Service as _, Transport, discovery_key, onion};
 
 /// How many one-time bundles each of our devices keeps at the mailbox.
+/// How often the service is looked at, and how long it may stay unreachable.
+const CHECK: std::time::Duration = std::time::Duration::from_secs(60);
+const UNREACHABLE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
 pub const BUNDLES: u8 = 10;
 
 pub struct Mailbox<T: Transport> {
@@ -82,15 +86,39 @@ impl<T: Transport + 'static> Mailbox<T> {
     pub async fn run(self: Rc<Self>) -> Result<()> {
         let (service, mut incoming) = self.net.serve(&Secret::new(self.keys.seed), &self.authorized()?).await?;
         *self.service.borrow_mut() = Some(service);
-        while let Some(stream) = incoming.next().await {
-            let mailbox = self.clone();
-            spawn_local(async move {
-                if let Err(e) = mailbox.answer(stream).await {
-                    tracing::info!("mailbox link: {e:#}");
+        let mut watch = std::pin::pin!(self.clone().watch());
+        loop {
+            tokio::select! {
+                Some(stream) = incoming.next() => {
+                    let mailbox = self.clone();
+                    spawn_local(async move {
+                        if let Err(e) = mailbox.answer(stream).await {
+                            tracing::info!("mailbox link: {e:#}");
+                        }
+                    });
                 }
-            });
+                result = &mut watch => return result,
+                else => return Ok(()),
+            }
         }
-        Ok(())
+    }
+
+    /// Ends with an error once the service has not been reachable for
+    /// `UNREACHABLE`: nobody can find a mailbox like that, and what the
+    /// service manager does with a stopped one (start it again, from
+    /// scratch) is what has worked.
+    async fn watch(self: Rc<Self>) -> Result<()> {
+        let mut since = None::<std::time::Instant>;
+        loop {
+            tokio::time::sleep(CHECK).await;
+            let reachable = self.service.borrow().as_ref().is_none_or(|s| s.reachable());
+            match since {
+                _ if reachable => since = None,
+                None => since = Some(std::time::Instant::now()),
+                Some(at) if at.elapsed() > UNREACHABLE => bail!("not reachable for {} minutes: starting over", UNREACHABLE.as_secs() / 60),
+                Some(_) => {}
+            }
+        }
     }
 
     fn authorized(&self) -> Result<Vec<DiscoveryKey>> {
