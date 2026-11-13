@@ -689,6 +689,8 @@ impl<T: Transport + 'static> Daemon<T> {
 
     /// What the note to ourselves is called: the language of the first start,
     /// kept so that it does not change with it, and renamed like a contact.
+    /// A device joining the account is given the name only if it was chosen
+    /// (`note_renamed`): the one made from a language is not the account's.
     fn note_name(&self) -> Result<String> {
         if let Some(name) = self.store.get("self", "note_name")? {
             return Ok(String::from_utf8(name)?);
@@ -705,7 +707,10 @@ impl<T: Transport + 'static> Daemon<T> {
     pub fn rename(&self, name: &str, to: &str) -> Result<()> {
         self.check_name(to)?;
         if self.is_note(name)? {
-            self.store.put("self", "note_name", to.as_bytes())?;
+            self.store.atomically(|| {
+                self.store.put("self", "note_name", to.as_bytes())?;
+                self.store.put("self", "note_renamed", &[1])
+            })?;
             let _ = self.events.send(Event::ContactRenamed { name: name.into(), to: to.into() });
             return Ok(());
         }
@@ -929,7 +934,12 @@ impl<T: Transport + 'static> Daemon<T> {
             }
         }
         if !mailbox {
-            for key in ["note_name", "read_receipts", "typing_indicators"] {
+            let renamed = self.store.get("self", "note_renamed")?.is_some();
+            for key in ["note_name", "note_renamed", "read_receipts", "typing_indicators"] {
+                // The note's name from the first start is that device's language.
+                if key == "note_name" && !renamed {
+                    continue;
+                }
                 if let Some(value) = self.store.get("self", key)? {
                     kv.push(("self".into(), key.into(), value));
                 }
@@ -2756,6 +2766,41 @@ mod tests {
                 sleep(Duration::from_millis(300)).await;
                 assert!(a2.history("bob", 10).unwrap().iter().all(|m| m.text != "seulement a1"));
                 assert!(bob.history("alice", 10).unwrap().iter().all(|m| m.text != "et maintenant"));
+            })
+            .await;
+    }
+
+    /// The note's name made from a language stays on its device; one chosen
+    /// by the user goes with the account.
+    #[tokio::test]
+    async fn a_new_device_names_the_note_in_its_own_language_unless_renamed() {
+        LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::tempdir().unwrap();
+                let net = Network::default();
+                let a1 = open(dir.path(), "alice", &net);
+                a1.start().await.unwrap();
+                // As if made in another language at the first start.
+                a1.store.put("self", "note_name", "Note à moi-même".as_bytes()).unwrap();
+                let join = |name: &'static str| {
+                    let (dir, net, a1) = (dir.path().to_path_buf(), net.clone(), a1.clone());
+                    async move {
+                        let device = open(&dir, name, &net);
+                        device.start().await.unwrap();
+                        let mut events = device.subscribe();
+                        let link = device.pairing_link().await.unwrap();
+                        a1.add_device(&link).await.unwrap();
+                        wait_for(&mut events, |e| *e == Event::Paired).await;
+                        device
+                    }
+                };
+                let a2 = join("alice-2").await;
+                assert_eq!(a2.note_name().unwrap(), t!("note-name"), "its own language");
+                assert_eq!(a1.note_name().unwrap(), "Note à moi-même");
+
+                a1.rename("Note à moi-même", "Mes idées").unwrap();
+                let a3 = join("alice-3").await;
+                assert_eq!(a3.note_name().unwrap(), "Mes idées", "chosen: follows the account");
             })
             .await;
     }

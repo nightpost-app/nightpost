@@ -95,7 +95,7 @@ pub struct Account {
 /// them, never keys or sessions.
 pub fn may_copy(kind: &str, key: &str) -> bool {
     matches!(kind, "contact" | "person" | "timer" | "device_name")
-        || (kind == "self" && matches!(key, "note_name" | "read_receipts" | "typing_indicators"))
+        || (kind == "self" && matches!(key, "note_name" | "note_renamed" | "read_receipts" | "typing_indicators"))
 }
 
 /// This computer's name, as the account's other devices list it.
