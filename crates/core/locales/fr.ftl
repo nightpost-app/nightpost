@@ -573,3 +573,5 @@ account-add = Ajouter un compte
 account-add-help = Un nouveau compte démarre vide : tu peux le créer de zéro ou le lier à un compte que tu as déjà.
 account-name = Nom (lettres et chiffres)
 account-added = Compte {$name} ajouté
+help-accounts = les comptes de ce Nightpost
+help-account = passer à un autre compte

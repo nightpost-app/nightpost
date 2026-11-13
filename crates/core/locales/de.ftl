@@ -573,3 +573,5 @@ account-add = Konto hinzufügen
 account-add-help = Ein neues Konto beginnt leer: Du kannst es neu anlegen oder mit einem vorhandenen Konto verknüpfen.
 account-name = Name (Buchstaben und Ziffern)
 account-added = Konto {$name} hinzugefügt
+help-accounts = die Konten in diesem Nightpost
+help-account = zu einem anderen Konto wechseln

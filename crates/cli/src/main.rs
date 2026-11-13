@@ -107,8 +107,14 @@ async fn run(args: Vec<String>) -> Result<()> {
     }
     let request = match args.as_slice() {
         [] => {
-            start_daemon(&dir, account.as_deref()).await?;
-            return tui::run(&dir).await;
+            let (mut dir, mut account) = (dir, account);
+            loop {
+                start_daemon(&dir, account.as_deref()).await?;
+                // `/account <name>` comes back with the one to open next.
+                let Some(next) = tui::run(&dir).await? else { return Ok(()) };
+                dir = accounts::dir_of(&api::root_dir()?, &next)?;
+                account = Some(next).filter(|n| n != accounts::DEFAULT);
+            }
         }
         ["daemon"] => return daemon(&dir, account.as_deref(), false, false).await,
         ["daemon", "--recovery"] => return daemon(&dir, account.as_deref(), true, false).await,

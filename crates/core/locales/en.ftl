@@ -576,3 +576,5 @@ account-add = Add an account
 account-add-help = A new account starts empty: you can create it from scratch or link it to one you already have.
 account-name = Name (letters and digits)
 account-added = Account {$name} added
+help-accounts = the accounts in this Nightpost
+help-account = switch to another account

@@ -140,6 +140,8 @@ fn commands() -> Vec<Command> {
         c("/devices", String::new(), t!("help-devices")),
         c("/adddevice", arg(t!("arg-link")), t!("help-adddevice")),
         c("/link", String::new(), t!("help-link")),
+        c("/accounts", String::new(), t!("help-accounts")),
+        c("/account", arg(t!("arg-name")), t!("help-account")),
         c("/lock", String::new(), t!("help-lock")),
         c("/quit", String::new(), t!("help-quit")),
     ]
@@ -185,6 +187,8 @@ struct App {
     read_receipts: bool,
     typing_indicators: bool,
     quit: bool,
+    /// The account `/account` asked to move to.
+    switch: Option<String>,
     /// Who is writing to us, until when. ponytail: one person at a time,
     /// the last one heard; a map if two at once ever matters here.
     typing: Option<(String, Instant)>,
@@ -201,7 +205,9 @@ struct App {
     started: Instant,
 }
 
-pub async fn run(dir: &Path) -> Result<()> {
+/// Runs the terminal interface; `Some(name)` back means the user asked
+/// for that account (`/account`): the caller opens it.
+pub async fn run(dir: &Path) -> Result<Option<String>> {
     let mut requests = Client::connect(dir)
         .await
         .with_context(|| t!("tui-no-daemon"))?;
@@ -266,7 +272,7 @@ pub async fn run(dir: &Path) -> Result<()> {
     if nightpost_core::portable() {
         let _ = requests.call(&Request::Shutdown).await;
     }
-    result
+    result.map(|()| app.switch.take())
 }
 
 impl App {
@@ -353,6 +359,7 @@ impl App {
         read_receipts: false,
         typing_indicators: false,
         quit: false,
+        switch: None,
         typing: None,
         pinged: None,
         keys_told_apart,
@@ -764,6 +771,16 @@ impl App {
             ["help"] => self.overlay = Some(Overlay::Help(0)),
             ["add"] => self.overlay = Some(Overlay::Add { selected: 0 }),
             ["quit"] => self.quit = true,
+            ["accounts"] => {
+                let root = nightpost_core::api::root_dir()?;
+                let body = nightpost_core::accounts::list(&root)?.into_iter().map(|a| a.name).collect();
+                self.overlay = Some(Overlay::Text { title: t!("accounts-title"), body });
+            }
+            ["account", name] => {
+                nightpost_core::accounts::dir_of(&nightpost_core::api::root_dir()?, name)?;
+                self.switch = Some(name.to_string());
+                self.quit = true;
+            }
             ["lock"] => self.lock(requests).await,
             ["copy"] => {
                 // What they wrote; in the note, what we did.
@@ -1278,10 +1295,10 @@ mod tests {
     #[test]
     fn the_menu_lists_what_a_command_starts_with_then_what_it_contains() {
         let names = |typed| matching(typed).iter().map(|c| c.name).collect::<Vec<_>>();
-        assert_eq!(names("/ac"), ["/accept", "/acceptcode"]);
+        assert_eq!(names("/ac"), ["/accept", "/acceptcode", "/accounts", "/account"]);
         // Starts with first, then contains.
         assert_eq!(names("/mute"), ["/mute", "/unmute"]);
-        assert_eq!(names("/co"), ["/code", "/copy", "/acceptcode"]);
+        assert_eq!(names("/co"), ["/code", "/copy", "/acceptcode", "/accounts", "/account"]);
         // Arguments being typed: the menu is gone.
         assert!(names("/invite bob").is_empty());
         assert!(names("salut").is_empty());
