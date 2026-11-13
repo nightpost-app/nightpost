@@ -16,6 +16,11 @@ jobs:
       # block 0.1.6 comes in with the window's macOS side (dioxus-desktop,
       # cocoa): nothing to do here until they move on.
       CARGO_FUTURE_INCOMPAT_REPORT_FREQUENCY: never
+      # Without debug files (huge on Windows) linking is faster and the
+      # cache lighter; nothing here is run in a debugger.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -34,6 +39,10 @@ jobs:
       # SQLCipher and its OpenSSL are compiled from source: minutes per build
       # without a cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Branches and pull requests read it, only main writes it: the
+          # repository's 10 GB of cache holds one per system, not one per push.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The saturating-time fix only matters on Windows, and its test with it.
