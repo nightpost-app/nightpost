@@ -766,7 +766,16 @@ private struct AboutPane: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .lastTextBaseline, spacing: 12) {
                 Wordmark(size: 32)
-                Text(verbatim: version).font(.ui(14)).monospacedDigit().foregroundStyle(Palette.muted)
+                // "0.1.0-alpha.1": the number, then a badge saying it is not stable yet.
+                let parts = version.split(separator: "-", maxSplits: 1).map(String.init)
+                HStack(alignment: .center, spacing: 6) {
+                    Text(verbatim: parts[0]).font(.ui(14)).monospacedDigit().foregroundStyle(Palette.muted)
+                    if parts.count > 1, let pre = parts[1].split(separator: ".").first {
+                        Text(verbatim: String(pre)).font(.ui(10).weight(.semibold)).foregroundStyle(Palette.main)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Palette.main, lineWidth: 1))
+                    }
+                }
             }
             Help(t("tagline"))
         }

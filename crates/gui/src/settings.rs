@@ -799,9 +799,9 @@ fn About() -> Element {
                 span { class: "wordmark big", "Nightpost" }
                 span { class: "reach-count",
                     {concat!(env!("CARGO_PKG_VERSION_MAJOR"), ".", env!("CARGO_PKG_VERSION_MINOR"), ".", env!("CARGO_PKG_VERSION_PATCH"))}
-                    // "alpha.1" says the version is not stable yet: it gets a mark of its own.
+                    // "alpha" (from "alpha.1") says the version is not stable yet: it gets a mark of its own.
                     if !env!("CARGO_PKG_VERSION_PRE").is_empty() {
-                        span { class: "pre-release", {env!("CARGO_PKG_VERSION_PRE").replace('.', " ")} }
+                        span { class: "pre-release", {env!("CARGO_PKG_VERSION_PRE").split('.').next().unwrap_or_default()} }
                     }
                 }
             }
