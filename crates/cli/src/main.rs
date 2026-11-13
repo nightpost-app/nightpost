@@ -60,6 +60,7 @@ usage:
   nightpost accounts rename <name> <to> | activate <name> | deactivate <name>
   nightpost accounts remove <name> --yes
                                    delete one for good
+  nightpost accounts reopen on|off open the last account without asking
   nightpost --account <name> …     any command, for that account
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
@@ -108,7 +109,18 @@ async fn run(args: Vec<String>) -> Result<()> {
     let request = match args.as_slice() {
         [] => {
             let (mut dir, mut account) = (dir, account);
+            // No account asked for: the last one if told to reopen it, or a choice.
+            if account.is_none() {
+                let root = api::root_dir()?;
+                let name = match accounts::at_launch(&root)? {
+                    Some(name) => name,
+                    None => choose_account(&root)?,
+                };
+                dir = accounts::dir_of(&root, &name)?;
+                account = Some(name).filter(|n| n != accounts::DEFAULT);
+            }
             loop {
+                accounts::remember(&api::root_dir()?, account.as_deref().unwrap_or(accounts::DEFAULT));
                 start_daemon(&dir, account.as_deref()).await?;
                 // `/account <name>` comes back with the one to open next.
                 let Some(next) = tui::run(&dir).await? else { return Ok(()) };
@@ -260,6 +272,38 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
 /// Shows the link for one of the account's devices, and waits until it was used.
 /// `nightpost accounts`: the accounts, and adding, renaming and removing.
 /// Done on files and the keychain: stop the account's daemon first.
+/// Several accounts and none asked for: a numbered list to pick from.
+/// Enter alone takes the one opened last (the first, the first time).
+fn choose_account(root: &Path) -> Result<String> {
+    let all = accounts::list(root)?;
+    let last = std::fs::read_to_string(root.join("last-account")).unwrap_or_default();
+    let first = all.iter().position(|a| a.name == last.trim()).unwrap_or(0);
+    println!("{}\n", nightpost_core::t!("choose-account"));
+    for (i, a) in all.iter().enumerate() {
+        let label = if a.name == accounts::DEFAULT { nightpost_core::t!("account-default") } else { a.name.clone() };
+        println!("  {}  {label}{}", i + 1, if i == first { "  <" } else { "" });
+    }
+    loop {
+        print!("\n[{}] ", first + 1);
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            bail!("no account chosen: nightpost --account <name>");
+        }
+        match line.trim() {
+            "" => return Ok(all[first].name.clone()),
+            n => match n.parse::<usize>() {
+                Ok(i) if (1..=all.len()).contains(&i) => return Ok(all[i - 1].name.clone()),
+                _ => {
+                    if let Some(a) = all.iter().find(|a| a.name == n) {
+                        return Ok(a.name.clone());
+                    }
+                }
+            },
+        }
+    }
+}
+
 fn accounts(args: &[&str]) -> Result<()> {
     let root = api::root_dir()?;
     match args {
@@ -275,6 +319,7 @@ fn accounts(args: &[&str]) -> Result<()> {
         ["rename", name, to] => accounts::rename(&root, name, to)?,
         ["activate", name] => accounts::set_active(&root, name, true)?,
         ["deactivate", name] => accounts::set_active(&root, name, false)?,
+        ["reopen", state @ ("on" | "off")] => accounts::set_reopens_last(&root, *state == "on"),
         ["remove", name, "--yes"] => accounts::remove(&root, name)?,
         ["remove", name] => bail!("this deletes {name}, its messages and its keys, for good: add --yes"),
         _ => println!("{USAGE}"),

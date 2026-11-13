@@ -498,3 +498,6 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .recovery li::marker { color: var(--muted, currentColor); }
 /* The note, before its first line: in the thread, at the bottom like a message would be. */
 .empty.note { margin: 0; padding: 12px 0 8px; max-width: 26rem; }
+
+.chooser { display: flex; flex-direction: column; gap: 14px; max-width: 360px; margin: 0 auto; padding: 36px 20px; }
+.chooser h2 { margin: 8px 0 0; }

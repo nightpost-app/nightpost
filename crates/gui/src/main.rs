@@ -59,15 +59,24 @@ fn main() {
     }
     // `--account <name>`: this window is for that account (one window each).
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let account = match args.first().map(String::as_str) {
+    let asked = match args.first().map(String::as_str) {
         Some("--account") if args.len() >= 2 => {
             let name = args[1].clone();
             args.drain(..2);
             Some(name)
         }
-        _ => std::env::var("NIGHTPOST_ACCOUNT").ok().filter(|n| !n.is_empty() && n != accounts::DEFAULT),
-    }
-    .filter(|n| n != accounts::DEFAULT);
+        _ => std::env::var("NIGHTPOST_ACCOUNT").ok().filter(|n| !n.is_empty()),
+    };
+    // None asked for, and several to choose from: a window to choose in.
+    let asked = match asked {
+        None if args.first().map(String::as_str) != Some("--tray") => match api::root_dir().and_then(|root| accounts::at_launch(&root)) {
+            Ok(Some(name)) => Some(name),
+            Ok(None) => return chooser(),
+            Err(_) => None,
+        },
+        other => other,
+    };
+    let account = asked.filter(|n| n != accounts::DEFAULT);
     let dir = match api::root_dir().and_then(|root| accounts::dir_of(&root, account.as_deref().unwrap_or(accounts::DEFAULT))) {
         Ok(dir) => dir,
         Err(e) => {
@@ -93,6 +102,9 @@ fn main() {
             return;
         }
         std::mem::forget(lock);
+    }
+    if let Ok(root) = api::root_dir() {
+        accounts::remember(&root, self::account().unwrap_or(accounts::DEFAULT));
     }
     // Our own frame (chrome.rs): no system title bar; macOS keeps its own
     // buttons. The page is never see-through (WebKitGTK then keeps only what
@@ -122,6 +134,14 @@ fn main() {
         config = config.with_data_directory(crate::dir().join("webview"));
     }
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
+}
+
+/// The small window that asks which account to open; the pick starts the
+/// window of that account, as `--account` does, and this one goes.
+fn chooser() {
+    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(420.0, 520.0)).with_resizable(false);
+    let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
+    dioxus::LaunchBuilder::desktop().with_cfg(config).launch(settings::Chooser);
 }
 
 fn account() -> Option<&'static str> {

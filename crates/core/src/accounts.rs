@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 /// What the default account is called.
 pub const DEFAULT: &str = "default";
 const FILE: &str = "accounts.json";
+/// The account opened last, and whether to open it again without asking.
+const LAST: &str = "last-account";
+const REOPEN: &str = "reopen-last-account";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Account {
@@ -119,6 +122,35 @@ pub fn remove(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remembers the account a window or terminal opened.
+pub fn remember(root: &Path, name: &str) {
+    let _ = std::fs::write(root.join(LAST), name);
+}
+
+/// Open the last account again at launch, without asking which?
+pub fn reopens_last(root: &Path) -> bool {
+    root.join(REOPEN).exists()
+}
+
+pub fn set_reopens_last(root: &Path, on: bool) {
+    if on {
+        let _ = std::fs::write(root.join(REOPEN), "");
+    } else {
+        let _ = std::fs::remove_file(root.join(REOPEN));
+    }
+}
+
+/// The account to open when none was asked for: `None` when there is a
+/// choice to make (several accounts, and the last is not to be reopened).
+pub fn at_launch(root: &Path) -> Result<Option<String>> {
+    let all = list(root)?;
+    if all.len() <= 1 {
+        return Ok(Some(DEFAULT.to_string()));
+    }
+    let last = std::fs::read_to_string(root.join(LAST)).unwrap_or_default();
+    Ok((reopens_last(root) && all.iter().any(|a| a.name == last.trim())).then(|| last.trim().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +178,20 @@ mod tests {
         assert!(!root.join("accounts/work").exists());
         assert_eq!(list(&root).unwrap().len(), 1);
         assert!(remove(&root, DEFAULT).is_err());
+    }
+
+    #[test]
+    fn launch_asks_only_when_there_is_a_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        assert_eq!(at_launch(&root).unwrap().as_deref(), Some(DEFAULT));
+        add(&root, "pro").unwrap();
+        assert_eq!(at_launch(&root).unwrap(), None);
+        remember(&root, "pro");
+        assert_eq!(at_launch(&root).unwrap(), None, "remembered, but not asked to reopen");
+        set_reopens_last(&root, true);
+        assert_eq!(at_launch(&root).unwrap().as_deref(), Some("pro"));
+        remove(&root, "pro").unwrap();
+        assert_eq!(at_launch(&root).unwrap().as_deref(), Some(DEFAULT), "one account left: nothing to ask");
     }
 }

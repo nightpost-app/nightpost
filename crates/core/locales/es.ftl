@@ -577,3 +577,5 @@ account-name = Nombre (letras y cifras)
 account-added = Cuenta {$name} añadida
 help-accounts = las cuentas de este Nightpost
 help-account = cambiar a otra cuenta
+choose-account = ¿Qué cuenta?
+choose-remember = La próxima vez, abrir la última sin preguntar

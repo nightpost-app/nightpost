@@ -499,6 +499,7 @@ fn Accounts() -> Element {
     let mut list = use_signal(|| nightpost_core::api::root_dir().and_then(|r| nightpost_core::accounts::list(&r)).unwrap_or_default());
     let mut name = use_signal(String::new);
     let mut error = use_signal(String::new);
+    let mut reopen = use_signal(|| nightpost_core::accounts::reopens_last(&nightpost_core::api::root_dir().unwrap_or_default()));
     let mut open = move |account: String| {
         let result = std::env::current_exe().and_then(|exe| {
             let mut command = std::process::Command::new(exe);
@@ -544,6 +545,20 @@ fn Accounts() -> Element {
                         button { class: "ghost", onclick: { let n = a.name.clone(); move |_| open(n.clone()) }, {t!("account-open")} }
                     }
                 }
+            }
+        }
+        section { class: "block",
+            button {
+                class: "toggle-row",
+                role: "switch",
+                "aria-checked": "{reopen}",
+                onclick: move |_| {
+                    let on = !*reopen.read();
+                    nightpost_core::accounts::set_reopens_last(&nightpost_core::api::root_dir().unwrap_or_default(), on);
+                    reopen.set(on);
+                },
+                span { class: "card-text", span { class: "card-title", {t!("choose-remember")} } }
+                span { class: if *reopen.read() { "switch on" } else { "switch" }, span {} }
             }
         }
         form { class: "block", onsubmit: add,
@@ -837,4 +852,50 @@ fn open_folder(path: &std::path::Path) {
 /// The terminal's command line for the tray; empty: the system's.
 fn save_terminal(line: &str) -> bool {
     nightpost_core::terminal::save(dir(), line).is_ok()
+}
+
+/// Which account to open, when there are several and none was asked for.
+#[component]
+pub fn Chooser() -> Element {
+    let root = nightpost_core::api::root_dir().unwrap_or_default();
+    let list = nightpost_core::accounts::list(&root).unwrap_or_default();
+    let mut remember = use_signal(|| false);
+    let pick = move |account: String| {
+        let root = nightpost_core::api::root_dir().unwrap_or_default();
+        nightpost_core::accounts::set_reopens_last(&root, *remember.read());
+        let _ = std::env::current_exe().and_then(|exe| {
+            let mut command = std::process::Command::new(exe);
+            command.args(["--account", &account]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            crate::as_launched(&mut command);
+            command.spawn().map(|mut child| {
+                std::thread::spawn(move || child.wait());
+            })
+        });
+        dioxus::desktop::window().close();
+    };
+    rsx! {
+        style { {crate::STYLE.as_str()} }
+        div { class: "root", "data-theme": "system", "data-platform": std::env::consts::OS,
+        main { class: "chooser",
+            span { class: "wordmark big", "Nightpost" }
+            h2 { {t!("choose-account")} }
+            for a in list {
+                button { key: "{a.name}", class: "ghost", onclick: { let n = a.name.clone(); move |_| pick(n.clone()) },
+                    {if a.name == nightpost_core::accounts::DEFAULT { t!("account-default") } else { a.name.clone() }}
+                }
+            }
+            button {
+                class: "toggle-row",
+                role: "switch",
+                "aria-checked": "{remember}",
+                onclick: move |_| {
+                    let on = !*remember.read();
+                    remember.set(on);
+                },
+                span { class: "card-text", span { class: "card-title", {t!("choose-remember")} } }
+                span { class: if *remember.read() { "switch on" } else { "switch" }, span {} }
+            }
+        }
+        }
+    }
 }
