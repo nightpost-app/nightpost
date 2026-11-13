@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context as _, Result, bail};
+use nightpost_core::accounts;
 use nightpost_core::api::{self, BridgeLines, Client, Event, Network, Reply, Request};
 use nightpost_core::daemon::Daemon;
 use nightpost_core::mailbox::Mailbox;
@@ -54,6 +55,12 @@ usage:
   nightpost devices add <link>     use the link a new device shows
   nightpost devices remove <id>    take one of your other devices off
   nightpost shutdown               stop the daemon
+  nightpost accounts [list]        the accounts in this Nightpost
+  nightpost accounts add <name>    another account, with its own contacts
+  nightpost accounts rename <name> <to> | activate <name> | deactivate <name>
+  nightpost accounts remove <name> --yes
+                                   delete one for good
+  nightpost --account <name> …     any command, for that account
 
 Data lives in NIGHTPOST_DIR if set. Without a system keychain, the database
 passphrase is read from NIGHTPOST_PASSPHRASE_FILE (or systemd credentials).
@@ -73,8 +80,23 @@ async fn main() {
 }
 
 async fn run(args: Vec<String>) -> Result<()> {
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let dir = nightpost_core::api::data_dir()?;
+    let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+    // `--account <name>` first: which of the accounts this command is for.
+    let account = match args.as_slice() {
+        ["--account", name, ..] => {
+            let name = name.to_string();
+            args.drain(..2);
+            Some(name)
+        }
+        _ => std::env::var("NIGHTPOST_ACCOUNT").ok().filter(|n| !n.is_empty()),
+    };
+    if let ["accounts", rest @ ..] = args.as_slice() {
+        return accounts(rest);
+    }
+    let dir = match &account {
+        Some(name) => accounts::dir_of(&api::root_dir()?, name)?,
+        None => nightpost_core::api::data_dir()?,
+    };
     // A daemon from another version would not understand all we ask.
     if !matches!(args.as_slice(), ["daemon" | "shutdown" | "--version" | "version"] | ["daemon", "--recovery" | "--mailbox"])
         && Client::connect(&dir).await.is_ok()
@@ -85,7 +107,7 @@ async fn run(args: Vec<String>) -> Result<()> {
     }
     let request = match args.as_slice() {
         [] => {
-            start_daemon(&dir).await?;
+            start_daemon(&dir, account.as_deref()).await?;
             return tui::run(&dir).await;
         }
         ["daemon"] => return daemon(&dir, false, false).await,
@@ -230,6 +252,30 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
 }
 
 /// Shows the link for one of the account's devices, and waits until it was used.
+/// `nightpost accounts`: the accounts, and adding, renaming and removing.
+/// Done on files and the keychain: stop the account's daemon first.
+fn accounts(args: &[&str]) -> Result<()> {
+    let root = api::root_dir()?;
+    match args {
+        [] | ["list"] => {
+            for a in accounts::list(&root)? {
+                println!("{}\t{}", a.name, if a.active { "active" } else { "inactive" });
+            }
+        }
+        ["add", name] => {
+            accounts::add(&root, name)?;
+            println!("{name} added: nightpost --account {name}");
+        }
+        ["rename", name, to] => accounts::rename(&root, name, to)?,
+        ["activate", name] => accounts::set_active(&root, name, true)?,
+        ["deactivate", name] => accounts::set_active(&root, name, false)?,
+        ["remove", name, "--yes"] => accounts::remove(&root, name)?,
+        ["remove", name] => bail!("this deletes {name}, its messages and its keys, for good: add --yes"),
+        _ => println!("{USAGE}"),
+    }
+    Ok(())
+}
+
 async fn pair(dir: &Path) -> Result<()> {
     let mut events = listen(dir).await?;
     let mut client = Client::connect(dir).await?;
@@ -477,7 +523,7 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
 /// `nightpost daemon` in the background when none answers, as the window
 /// does: the passphrase asked here goes on its stdin, its output to
 /// daemon.log, and Tor's progress shows on one line until it listens.
-async fn start_daemon(dir: &Path) -> Result<()> {
+async fn start_daemon(dir: &Path, account: Option<&str>) -> Result<()> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
     use nightpost_core::t;
@@ -492,6 +538,9 @@ async fn start_daemon(dir: &Path) -> Result<()> {
         let log_path = dir.join("daemon.log");
         let log = std::fs::File::create(&log_path)?;
         let mut command = Command::new(std::env::current_exe()?);
+        if let Some(account) = account {
+            command.args(["--account", account]);
+        }
         command.arg("daemon").stdin(if asks || recovery.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(log.try_clone()?).stderr(log);
         if recovery.is_some() {
             command.arg("--recovery");
