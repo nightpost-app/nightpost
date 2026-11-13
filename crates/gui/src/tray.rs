@@ -82,7 +82,7 @@ pub fn run() -> ! {
         match event {
             // Made once the loop runs, as macOS wants (and harmless elsewhere).
             Loop::NewEvents(StartCause::Init) => {
-                let mut builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_icon(icon()).with_tooltip("Nightpost");
+                let mut builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_icon(icon()).with_tooltip(crate::account_title());
                 if let Some(dir) = &shared {
                     builder = builder.with_temp_dir_path(dir);
                 }
@@ -107,7 +107,7 @@ pub fn run() -> ! {
                 } else if e.id == *terminal.id() {
                     let program = std::env::current_exe().map(|e| e.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX)));
                     if !program.is_ok_and(|p| open_terminal(&p)) {
-                        crate::notify("Nightpost", &t!("tray-no-terminal"), nightpost_core::prefs::Prefs::load(crate::dir()));
+                        crate::notify(&crate::account_title(), &t!("tray-no-terminal"), nightpost_core::prefs::Prefs::load(crate::dir()));
                     }
                 } else if e.id == *close_terminal.id() {
                     ask(Request::Close { interface: Interface::Terminal });

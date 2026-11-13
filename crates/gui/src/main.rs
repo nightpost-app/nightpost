@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
+use nightpost_core::accounts;
 use nightpost_core::api::{self, Client, Event, HistoryItem, Interface, LinkState, Network, Person, Reply, Request, Route};
 use nightpost_core::prefs::Prefs;
 use nightpost_core::{dbkey, i18n, t};
@@ -27,6 +28,8 @@ use person::PersonPanel;
 use settings::{BridgesEditor, Section, SettingsPage};
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
+/// The account this window is for; none is the default one.
+static ACCOUNT: OnceLock<Option<String>> = OnceLock::new();
 /// What this process changes in its own environment for WebKit, as it was:
 /// given back to what it starts, or a terminal opened from the tray would
 /// run under X11 too.
@@ -54,7 +57,18 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
-    let dir = match api::data_dir() {
+    // `--account <name>`: this window is for that account (one window each).
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let account = match args.first().map(String::as_str) {
+        Some("--account") if args.len() >= 2 => {
+            let name = args[1].clone();
+            args.drain(..2);
+            Some(name)
+        }
+        _ => std::env::var("NIGHTPOST_ACCOUNT").ok().filter(|n| !n.is_empty() && n != accounts::DEFAULT),
+    }
+    .filter(|n| n != accounts::DEFAULT);
+    let dir = match api::root_dir().and_then(|root| accounts::dir_of(&root, account.as_deref().unwrap_or(accounts::DEFAULT))) {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("nightpost-gui: {e:#}");
@@ -67,7 +81,8 @@ fn main() {
         nightpost_core::register_app_id(&dir);
     }
     DIR.set(dir).expect("set once");
-    if std::env::args().nth(1).as_deref() == Some("--tray") {
+    let _ = ACCOUNT.set(account);
+    if args.first().map(String::as_str) == Some("--tray") {
         tray::run();
     }
     // One window per data folder: a second brings the first to the front
@@ -83,7 +98,7 @@ fn main() {
     // buttons. The page is never see-through (WebKitGTK then keeps only what
     // changes); on Linux the window is, for the corners cut out of it.
     let window = WindowBuilder::new()
-        .with_title("Nightpost")
+        .with_title(account_title())
         .with_inner_size(LogicalSize::new(1040.0, 700.0))
         .with_min_inner_size(LogicalSize::new(720.0, 480.0))
         .with_decorations(cfg!(target_os = "macos"));
@@ -107,6 +122,15 @@ fn main() {
         config = config.with_data_directory(crate::dir().join("webview"));
     }
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(App);
+}
+
+fn account() -> Option<&'static str> {
+    ACCOUNT.get().and_then(|a| a.as_deref())
+}
+
+/// The window's title: with the account's name when it is not the first.
+fn account_title() -> String {
+    account().map_or_else(|| "Nightpost".into(), |a| format!("Nightpost — {a}"))
 }
 
 fn dir() -> &'static PathBuf {
@@ -316,8 +340,8 @@ impl State {
                     if prefs.notify && !muted {
                         match (prefs.show_name, prefs.show_text) {
                             (true, true) => notify(&from, &body, prefs),
-                            (true, false) => notify("Nightpost", &t!("notify-from", name = from), prefs),
-                            _ => notify("Nightpost", &t!("notify-new"), prefs),
+                            (true, false) => notify(&account_title(), &t!("notify-from", name = from), prefs),
+                            _ => notify(&account_title(), &t!("notify-new"), prefs),
                         }
                     }
                 }
@@ -389,7 +413,7 @@ impl State {
                 });
             }
             Event::Fingerprint { name, safety_number } => {
-                notify("Nightpost", &t!("notify-used-invite", name = name), *self.prefs.read());
+                notify(&account_title(), &t!("notify-used-invite", name = name), *self.prefs.read());
                 let ours = self.codes.read().contains(&name);
                 self.dialog.set(Some(if ours {
                     Dialog::Confirm { name, number: safety_number }
@@ -1427,6 +1451,9 @@ fn start_daemon(passphrase: Option<String>, recovery: Option<String>) -> Result<
     let log = std::fs::File::create(dir().join("daemon.log"))?;
     let mut command = std::process::Command::new(&exe);
     let stdin = if passphrase.is_some() || recovery.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+    if let Some(account) = account() {
+        command.args(["--account", account]);
+    }
     command.arg("daemon");
     if recovery.is_some() {
         command.arg("--recovery");

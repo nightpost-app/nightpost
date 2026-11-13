@@ -110,9 +110,9 @@ async fn run(args: Vec<String>) -> Result<()> {
             start_daemon(&dir, account.as_deref()).await?;
             return tui::run(&dir).await;
         }
-        ["daemon"] => return daemon(&dir, false, false).await,
-        ["daemon", "--recovery"] => return daemon(&dir, true, false).await,
-        ["daemon", "--mailbox"] => return daemon(&dir, false, true).await,
+        ["daemon"] => return daemon(&dir, account.as_deref(), false, false).await,
+        ["daemon", "--recovery"] => return daemon(&dir, account.as_deref(), true, false).await,
+        ["daemon", "--mailbox"] => return daemon(&dir, account.as_deref(), false, true).await,
         ["recovery"] => Request::RecoveryPhrase,
         ["--version" | "version"] => {
             println!("nightpost {} (protocol {})", env!("CARGO_PKG_VERSION"), nightpost_core::PROTOCOL_VERSION);
@@ -322,19 +322,19 @@ fn lyrebird() -> Option<std::path::PathBuf> {
 
 /// The tray icon, from the graphical interface beside this program: it
 /// shows that the daemon runs, and goes with it. Not without a desktop.
-fn tray() {
+fn tray(account: Option<&str>) {
     let Ok(exe) = std::env::current_exe() else { return };
     let gui = exe.with_file_name(format!("nightpost-gui{}", std::env::consts::EXE_SUFFIX));
     let desktop = !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
     if desktop && gui.is_file() {
         // Its errors go where the daemon's do.
-        if let Ok(mut child) = std::process::Command::new(gui).arg("--tray").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn() {
+        if let Ok(mut child) = std::process::Command::new(gui).args(account.iter().flat_map(|a| ["--account", a])).arg("--tray").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn() {
             std::thread::spawn(move || child.wait());
         }
     }
 }
 
-async fn daemon(dir: &Path, recover: bool, mailbox: bool) -> Result<()> {
+async fn daemon(dir: &Path, account: Option<&str>, recover: bool, mailbox: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         // Plain text when stderr is a file (the graphical interface's daemon.log).
@@ -389,7 +389,7 @@ async fn daemon(dir: &Path, recover: bool, mailbox: bool) -> Result<()> {
             };
 
             if !mailbox {
-                tray();
+                tray(account);
             }
             eprintln!("Tor: starting (minutes the first time)");
             let lyrebird = lyrebird();
@@ -446,7 +446,7 @@ async fn daemon(dir: &Path, recover: bool, mailbox: bool) -> Result<()> {
                 nightpost_core::register_app_id(dir);
             }
             #[cfg(not(target_os = "macos"))]
-            tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf()));
+            tokio::task::spawn_local(notify_unwatched(daemon.clone(), dir.to_path_buf(), account.map(String::from)));
             // The daemon answers; Tor may still be connecting, and messages wait for it.
             if !tor_up {
                 eprintln!("ready (Tor is still connecting: messages wait)");
@@ -466,7 +466,8 @@ async fn daemon(dir: &Path, recover: bool, mailbox: bool) -> Result<()> {
 /// graphical interface's notification settings say (its file in the data
 /// folder). On macOS the app stays open for that.
 #[cfg(not(target_os = "macos"))]
-async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::PathBuf) {
+async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::PathBuf, account: Option<String>) {
+    let app = account.map_or_else(|| "Nightpost".to_string(), |a| format!("Nightpost — {a}"));
     use tokio::sync::broadcast::error::RecvError;
     let mut events = daemon.subscribe();
     loop {
@@ -492,11 +493,11 @@ async fn notify_unwatched(daemon: Rc<Daemon<TorTransport>>, dir: std::path::Path
                 }
                 match (prefs.show_name, prefs.show_text) {
                     (true, true) => (from, nightpost_core::text::notification(&text)),
-                    (true, false) => ("Nightpost".to_string(), format!("Message from {from}")),
-                    _ => ("Nightpost".to_string(), "New message".to_string()),
+                    (true, false) => (app.clone(), format!("Message from {from}")),
+                    _ => (app.clone(), "New message".to_string()),
                 }
             }
-            Event::Fingerprint { name, .. } => ("Nightpost".to_string(), format!("{name} used your invitation")),
+            Event::Fingerprint { name, .. } => (app.clone(), format!("{name} used your invitation")),
             _ => continue,
         };
         // Kept in the system's history only if asked (a hint of freedesktop servers).

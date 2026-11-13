@@ -12,16 +12,18 @@ pub enum Section {
     Appearance,
     Network,
     Devices,
+    Accounts,
     Notifications,
     Security,
     About,
 }
 
-fn sections() -> [(Section, String); 6] {
+fn sections() -> [(Section, String); 7] {
     [
         (Section::Appearance, t!("appearance")),
         (Section::Network, t!("network")),
         (Section::Devices, t!("devices-title")),
+        (Section::Accounts, t!("accounts-title")),
         (Section::Notifications, t!("notifications")),
         (Section::Security, t!("security")),
         (Section::About, t!("about")),
@@ -36,6 +38,7 @@ fn icon(section: Section) -> Element {
                 Section::Appearance => rsx! { circle { cx: "12", cy: "12", r: "8.5" } path { d: "M12 3.5a8.5 8.5 0 0 1 0 17z", fill: "currentColor" } },
                 Section::Network => rsx! { path { d: "M4 20v-3M9 20v-7M14 20v-11M19 20V5" } },
                 Section::Devices => rsx! { rect { x: "3", y: "5", width: "13", height: "10", rx: "1.5" } path { d: "M2 19h15" } rect { x: "17.5", y: "9", width: "4.5", height: "10", rx: "1" } },
+                Section::Accounts => rsx! { circle { cx: "9", cy: "8", r: "3.5" } path { d: "M2.5 20a6.5 6.5 0 0 1 13 0" } circle { cx: "17.5", cy: "9.5", r: "2.5" } path { d: "M17 14.5a5 5 0 0 1 4.5 5" } },
                 Section::Notifications => rsx! { path { d: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" } path { d: "M10.3 21a1.94 1.94 0 0 0 3.4 0" } },
                 Section::Security => rsx! { rect { x: "4.5", y: "11", width: "15", height: "10", rx: "2" } path { d: "M8 11V7.5a4 4 0 0 1 8 0V11" } },
                 Section::About => rsx! { path { d: "M12 11v6M12 7.5v.01" } },
@@ -78,6 +81,7 @@ pub fn SettingsPage(section: Section) -> Element {
                             Section::Appearance => rsx! { Appearance {} },
                             Section::Network => rsx! { NetworkSection {} },
                             Section::Devices => rsx! { Devices {} },
+                            Section::Accounts => rsx! { Accounts {} },
                             Section::Notifications => rsx! { Notifications {} },
                             Section::Security => rsx! { Security {} },
                             Section::About => rsx! { About {} },
@@ -483,6 +487,71 @@ fn Devices() -> Element {
                     div { class: "row", button { class: "ghost", onclick: show_link, {t!("pair-show")} } }
                 }
             }
+        }
+    }
+}
+
+/// The accounts of this Nightpost. Each has its own window (and daemon):
+/// opening one starts it, or brings its window forward.
+#[component]
+fn Accounts() -> Element {
+    let mut state = use_context::<State>();
+    let mut list = use_signal(|| nightpost_core::api::root_dir().and_then(|r| nightpost_core::accounts::list(&r)).unwrap_or_default());
+    let mut name = use_signal(String::new);
+    let mut error = use_signal(String::new);
+    let mut open = move |account: String| {
+        let result = std::env::current_exe().and_then(|exe| {
+            let mut command = std::process::Command::new(exe);
+            command.args(["--account", &account]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            as_launched(&mut command);
+            command.spawn().map(|mut child| {
+                std::thread::spawn(move || child.wait());
+            })
+        });
+        if let Err(e) = result {
+            error.set(e.to_string());
+        }
+    };
+    let add = move |e: FormEvent| {
+        e.prevent_default();
+        let label = name.read().trim().to_string();
+        if label.is_empty() {
+            return;
+        }
+        match nightpost_core::api::root_dir().and_then(|r| nightpost_core::accounts::add(&r, &label).map(|_| r)) {
+            Ok(root) => {
+                name.set(String::new());
+                error.set(String::new());
+                list.set(nightpost_core::accounts::list(&root).unwrap_or_default());
+                state.status.set(t!("account-added", name = label.clone()));
+                open(label);
+            }
+            Err(e) => error.set(format!("{e:#}")),
+        }
+    };
+    let this = crate::account().unwrap_or(nightpost_core::accounts::DEFAULT).to_string();
+    rsx! {
+        section { class: "block",
+            h2 { {t!("accounts-title")} }
+            p { class: "help", {t!("accounts-help")} }
+            for a in list.read().clone() {
+                div { key: "{a.name}", class: "card",
+                    span { class: "card-text",
+                        span { class: "card-title", {if a.name == nightpost_core::accounts::DEFAULT { t!("account-default") } else { a.name.clone() }} }
+                        if a.name == this { span { class: "help", {t!("account-this")} } }
+                    }
+                    if a.name != this {
+                        button { class: "ghost", onclick: { let n = a.name.clone(); move |_| open(n.clone()) }, {t!("account-open")} }
+                    }
+                }
+            }
+        }
+        form { class: "block", onsubmit: add,
+            h2 { {t!("account-add")} }
+            p { class: "help", {t!("account-add-help")} }
+            input { class: "name-field", placeholder: t!("account-name"), "aria-label": t!("account-add"), value: "{name}", oninput: move |e| name.set(e.value()) }
+            if !error.read().is_empty() { p { class: "warning", "{error}" } }
+            div { class: "row", button { class: "primary", r#type: "submit", {t!("account-add")} } }
         }
     }
 }
