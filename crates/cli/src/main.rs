@@ -271,39 +271,71 @@ async fn accept_code(dir: &Path, code: &str, name: &str) -> Result<()> {
 
 /// Shows the link for one of the account's devices, and waits until it was used.
 /// `nightpost accounts`: the accounts, and adding, renaming and removing.
-/// Done on files and the keychain: stop the account's daemon first.
-/// Several accounts and none asked for: a numbered list to pick from.
-/// Enter alone takes the one opened last (the first, the first time).
+/// Several accounts and none asked for: pick one with the arrows (or its
+/// number), Enter opens it. The one opened last is the one selected.
 fn choose_account(root: &Path) -> Result<String> {
+    use crossterm::cursor::{Hide, MoveToColumn, MoveUp, Show};
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
+    use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+    use crossterm::{execute, queue};
+    use std::io::{IsTerminal as _, Write as _};
+
     let all = accounts::list(root)?;
+    let names: Vec<String> = all.iter().map(|a| if a.name == accounts::DEFAULT { nightpost_core::t!("account-default") } else { a.name.clone() }).collect();
     let last = std::fs::read_to_string(root.join("last-account")).unwrap_or_default();
-    let first = all.iter().position(|a| a.name == last.trim()).unwrap_or(0);
-    println!("{}\n", nightpost_core::t!("choose-account"));
-    for (i, a) in all.iter().enumerate() {
-        let label = if a.name == accounts::DEFAULT { nightpost_core::t!("account-default") } else { a.name.clone() };
-        println!("  {}  {label}{}", i + 1, if i == first { "  <" } else { "" });
+    let mut at = all.iter().position(|a| a.name == last.trim()).unwrap_or(0);
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("no account chosen: nightpost --account <name>");
     }
-    loop {
-        print!("\n[{}] ", first + 1);
-        std::io::Write::flush(&mut std::io::stdout())?;
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line)? == 0 {
-            bail!("no account chosen: nightpost --account <name>");
+    let mut out = std::io::stdout();
+    let draw = |out: &mut std::io::Stdout, at: usize, first: bool| -> Result<()> {
+        if !first {
+            queue!(out, MoveUp(names.len() as u16 + 2), MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
         }
-        match line.trim() {
-            "" => return Ok(all[first].name.clone()),
-            n => match n.parse::<usize>() {
-                Ok(i) if (1..=all.len()).contains(&i) => return Ok(all[i - 1].name.clone()),
-                _ => {
-                    if let Some(a) = all.iter().find(|a| a.name == n) {
-                        return Ok(a.name.clone());
-                    }
-                }
-            },
+        queue!(out, Print(format!("{}\r\n", nightpost_core::t!("choose-account"))))?;
+        for (i, name) in names.iter().enumerate() {
+            if i == at {
+                queue!(out, SetForegroundColor(Color::Cyan), Print("▌ "), SetAttribute(Attribute::Bold), Print(name), SetAttribute(Attribute::Reset), ResetColor, Print("\r\n"))?;
+            } else {
+                queue!(out, Print(format!("  {name}\r\n")))?;
+            }
         }
+        queue!(out, SetForegroundColor(Color::DarkGrey), Print(nightpost_core::t!("choose-hint")), ResetColor, Print("\r\n"))?;
+        out.flush()?;
+        Ok(())
+    };
+    enable_raw_mode()?;
+    execute!(out, Hide)?;
+    let picked = (|| -> Result<Option<usize>> {
+        draw(&mut out, at, true)?;
+        loop {
+            let Event::Key(key) = crossterm::event::read()? else { continue };
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => at = (at + names.len() - 1) % names.len(),
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => at = (at + 1) % names.len(),
+                KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < names.len() => return Ok(Some(c as usize - '1' as usize)),
+                KeyCode::Enter => return Ok(Some(at)),
+                KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+                _ => continue,
+            }
+            draw(&mut out, at, false)?;
+        }
+    })();
+    execute!(out, Show)?;
+    disable_raw_mode()?;
+    println!();
+    match picked? {
+        Some(i) => Ok(all[i].name.clone()),
+        None => std::process::exit(130),
     }
 }
 
+/// Done on files and the keychain: stop the account's daemon first.
 fn accounts(args: &[&str]) -> Result<()> {
     let root = api::root_dir()?;
     match args {

@@ -582,3 +582,4 @@ help-accounts = las cuentas de este Nightpost
 help-account = cambiar a otra cuenta
 choose-account = ¿Qué cuenta?
 choose-remember = La próxima vez, abrir la última sin preguntar
+choose-hint = ↑ ↓ para elegir, Intro para abrir
