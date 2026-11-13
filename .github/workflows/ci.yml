@@ -7,10 +7,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # OpenSSL is linked statically without its debug files: thousands of
+      # LNK4099 lines on Windows, none of them about our code.
+      RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C link-arg=/IGNORE:4099' || '' }}
+      # block 0.1.6 comes in with the window's macOS side (dioxus-desktop,
+      # cocoa): nothing to do here until they move on.
+      CARGO_FUTURE_INCOMPAT_REPORT_FREQUENCY: never
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -33,9 +40,9 @@ jobs:
       - if: runner.os == 'Windows'
         run: cargo test --manifest-path patches/saturating-time/Cargo.toml
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev libxdo-dev
         # A mirror that stops answering kept apt retrying for 2 hours.
         timeout-minutes: 10
