@@ -346,6 +346,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .swatch span { flex: 1; }
 .card { display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 .card-icon { flex: none; color: var(--main); }
+.card.centred { align-items: center; }
 .card-text { display: flex; flex-direction: column; gap: 3px; text-align: left; flex: 1; min-width: 0; }
 .card-title { font-weight: 600; color: var(--strong); }
 .choices { display: flex; flex-direction: column; gap: 8px; }

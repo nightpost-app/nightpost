@@ -536,7 +536,7 @@ fn Accounts() -> Element {
             h2 { {t!("accounts-title")} }
             p { class: "help", {t!("accounts-help")} }
             for a in list.read().clone() {
-                div { key: "{a.name}", class: "card",
+                div { key: "{a.name}", class: "card centred",
                     span { class: "card-text",
                         span { class: "card-title", {if a.name == nightpost_core::accounts::DEFAULT { t!("account-default") } else { a.name.clone() }} }
                         if a.name == this { span { class: "help", {t!("account-this")} } }
