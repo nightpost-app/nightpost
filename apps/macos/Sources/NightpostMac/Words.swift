@@ -9,7 +9,7 @@ enum Words {
     nonisolated(unsafe) private(set) static var language = wanted()
     nonisolated(unsafe) fileprivate static var chosenTable = table(language)
     fileprivate static let english = table("en")
-    private static var file: URL { Daemon.dir.appending(path: "language") }
+    private static var file: URL { Daemon.root.appending(path: "language") }
 
     private static func wanted() -> String {
         let set = ProcessInfo.processInfo.environment["NIGHTPOST_LANG"].flatMap { $0.isEmpty ? nil : $0 }

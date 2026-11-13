@@ -24,12 +24,36 @@ enum ClientError: LocalizedError {
 enum Daemon {
     /// `NIGHTPOST_DIR` if set (tests run several), else where the daemon
     /// puts it on macOS.
-    static let dir: URL = {
+    static let root: URL = {
         if let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"] {
             return URL(fileURLWithPath: dir)
         }
         return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Nightpost")
     }()
+
+    /// `NIGHTPOST_ACCOUNT`: which account this app instance is for (one
+    /// each, as on other systems); none is the main one. Only a name the
+    /// daemon would accept, since it becomes a folder.
+    static let account: String? = {
+        guard let name = ProcessInfo.processInfo.environment["NIGHTPOST_ACCOUNT"], !name.isEmpty, name != "default",
+              name.count <= 32, name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
+        else { return nil }
+        return name
+    }()
+
+    /// The data directory of that account: the root for the main one.
+    static let dir: URL = account.map { root.appending(path: "accounts").appending(path: $0) } ?? root
+
+    /// The window's title: with the account's name when it is not the main one.
+    static var title: String { account.map { "Nightpost — \($0)" } ?? "Nightpost" }
+
+    /// The accounts of this Nightpost, the main one first (accounts.json).
+    static func accounts() -> [String] {
+        struct Entry: Decodable { let name: String }
+        let others = (try? Data(contentsOf: root.appending(path: "accounts.json")))
+            .flatMap { try? JSONDecoder().decode([Entry].self, from: $0) }?.map(\.name) ?? []
+        return ["default"] + others.filter { $0 != "default" }
+    }
 
     /// Run from a key (`NIGHTPOST_PORTABLE=1`, set by its launcher): the
     /// Mac is borrowed. The passphrase alone opens the database, and
@@ -131,7 +155,7 @@ enum Daemon {
         guard let binary else { throw ClientError.noDaemon("nightpost is missing from the app") }
         let process = Process()
         process.executableURL = binary
-        process.arguments = recovery == nil ? ["daemon"] : ["daemon", "--recovery"]
+        process.arguments = (account.map { ["--account", $0] } ?? []) + (recovery == nil ? ["daemon"] : ["daemon", "--recovery"])
         process.standardOutput = output
         process.standardError = output
         let input = Pipe()

@@ -17,7 +17,7 @@ struct NightpostApp: App {
     }
 
     var body: some Scene {
-        Window("Nightpost", id: "main") {
+        Window(Daemon.title, id: "main") {
             RootView()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 480)
@@ -110,7 +110,8 @@ struct MenuBarMenu: View {
         let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"].map { "NIGHTPOST_DIR=\(quote($0)) " } ?? ""
         let script = FileManager.default.temporaryDirectory.appending(path: "Nightpost.command")
         do {
-            try "#!/bin/sh\n\(dir)exec \(quote(cli))\n".write(to: script, atomically: true, encoding: .utf8)
+            let account = Daemon.account.map { " --account \(quote($0))" } ?? ""
+            try "#!/bin/sh\n\(dir)exec \(quote(cli))\(account)\n".write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
             Terminal.open(script)
         } catch {

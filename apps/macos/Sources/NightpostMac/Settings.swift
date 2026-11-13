@@ -26,6 +26,7 @@ struct SettingsView: View {
             Tab(t("appearance"), systemImage: "circle.lefthalf.filled", value: "appearance") { Pane { AppearancePane() } }
             Tab(t("network"), systemImage: "chart.bar", value: "network") { Pane { NetworkPane() } }
             Tab(t("devices-title"), systemImage: "laptopcomputer.and.iphone", value: "devices") { Pane { DevicesPane() } }
+            Tab(t("accounts-title"), systemImage: "person.2", value: "accounts") { Pane { AccountsPane() } }
             Tab(t("notifications"), systemImage: "bell", value: "notifications") { Pane { NotificationsPane() } }
             Tab(t("security"), systemImage: "lock", value: "security") { Pane { SecurityPane() } }
             Tab(t("about"), systemImage: "info.circle", value: "about") { Pane { AboutPane() } }
@@ -404,6 +405,80 @@ private struct NotificationsPane: View {
 
 /// This account's devices: list, add, remove; and, on a new device, the
 /// link for one of them to use.
+/// The accounts of this Nightpost, each with its own app instance (and
+/// daemon): opening one starts it, or brings it forward.
+private struct AccountsPane: View {
+    @Environment(AppModel.self) private var model
+    @State private var accounts = Daemon.accounts()
+    @State private var name = ""
+    @State private var error = ""
+
+    private func open(_ account: String) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        var environment = ["NIGHTPOST_ACCOUNT": account]
+        if let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"] { environment["NIGHTPOST_DIR"] = dir }
+        configuration.environment = environment
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+    }
+
+    private func add() {
+        let label = name.trimmingCharacters(in: .whitespaces)
+        guard !label.isEmpty, let binary = Bundle.main.url(forAuxiliaryExecutable: "nightpost") else { return }
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = ["accounts", "add", label]
+        process.environment = ProcessInfo.processInfo.environment.filter { $0.key != "NIGHTPOST_ACCOUNT" }
+        let output = Pipe()
+        process.standardError = output
+        process.standardOutput = FileHandle.nullDevice
+        do { try process.run() } catch { self.error = error.localizedDescription; return }
+        process.waitUntilExit()
+        if process.terminationStatus == 0 {
+            name = ""
+            error = ""
+            accounts = Daemon.accounts()
+            model.status = t("account-added", ["name": label])
+            open(label)
+        } else {
+            error = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    var body: some View {
+        Block(title: t("accounts-title")) {
+            Help(t("accounts-help"))
+            ForEach(accounts, id: \.self) { account in
+                let this = account == (Daemon.account ?? "default")
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: account == "default" ? t("account-default") : account).font(.ui(15, .semibold)).foregroundStyle(Palette.strong)
+                        if this { Help(t("account-this")) }
+                    }
+                    Spacer(minLength: 0)
+                    if !this { Button(t("account-open")) { open(account) }.buttonStyle(SecondaryButton()) }
+                }
+                .padding(16)
+                .background(Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
+            }
+        }
+        Block(title: t("account-add")) {
+            Help(t("account-add-help"))
+            TextField("", text: $name, prompt: Text(verbatim: t("account-name")).foregroundStyle(Palette.muted))
+                .textFieldStyle(.plain)
+                .font(.ui(15))
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(Palette.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Palette.line2))
+                .onSubmit(add)
+            if !error.isEmpty { Text(verbatim: error).font(.ui(14, .semibold)).foregroundStyle(Palette.fail) }
+            Button(t("account-add"), action: add).buttonStyle(PrimaryButton(height: 40, radius: 8))
+        }
+    }
+}
+
 private struct DevicesPane: View {
     @Environment(AppModel.self) private var model
     @State private var devices: [DeviceInfo] = []
