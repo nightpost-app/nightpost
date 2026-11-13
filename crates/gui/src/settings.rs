@@ -857,6 +857,7 @@ fn save_terminal(line: &str) -> bool {
 /// Which account to open, when there are several and none was asked for.
 #[component]
 pub fn Chooser() -> Element {
+    use_hook(crate::chrome::cut_corners);
     let root = nightpost_core::api::root_dir().unwrap_or_default();
     let list = nightpost_core::accounts::list(&root).unwrap_or_default();
     let mut remember = use_signal(|| false);
@@ -875,7 +876,15 @@ pub fn Chooser() -> Element {
     };
     rsx! {
         style { {crate::STYLE.as_str()} }
-        div { class: "root", "data-theme": "system", "data-maximized": "true", "data-platform": std::env::consts::OS,
+        div { class: "root", "data-theme": "system", "data-platform": std::env::consts::OS,
+        div { class: "drag-strip", onmousedown: crate::chrome::drag }
+        div { class: "window-controls",
+            button { class: "quit", title: t!("close"), "aria-label": t!("close"), onclick: move |_| dioxus::desktop::window().close(),
+                svg { width: "16", height: "16", view_box: "0 0 16 16", fill: "none", stroke: "currentColor", stroke_width: "1.6", stroke_linecap: "round", "aria-hidden": "true",
+                    path { d: "M4.5 4.5l7 7M11.5 4.5l-7 7" }
+                }
+            }
+        }
         main { class: "chooser",
             span { class: "wordmark big", "Nightpost" }
             h2 { {t!("choose-account")} }
