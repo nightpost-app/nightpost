@@ -16,20 +16,27 @@ use nightpost_core::api::{self, Client, Interface, Reply, Request};
 use nightpost_core::accounts;
 use nightpost_core::{t, terminal};
 
-/// What a menu line does.
+/// What a menu line does. Opening and closing share a line: which it is
+/// depends on whether the window (or terminal) is open when it is pressed.
 enum Action {
-    Open(String),
+    Window(String),
     Terminal(String),
-    CloseWindows,
-    CloseTerminals,
     Stop,
+}
+
+/// One running account, as the poll sees it.
+struct Live {
+    name: String,
+    /// How Tor stands.
+    line: String,
+    window: bool,
+    terminal: bool,
 }
 
 enum Wake {
     Menu(MenuEvent),
-    /// The accounts whose daemon answers, each with how Tor stands for it;
-    /// empty: every daemon is gone.
-    Status(Vec<(String, String)>),
+    /// The accounts whose daemon answers; empty: every daemon is gone.
+    Status(Vec<Live>),
 }
 
 /// The name an account goes by in the menu.
@@ -37,50 +44,81 @@ fn label(name: &str) -> String {
     if name == accounts::DEFAULT { t!("account-default") } else { name.to_string() }
 }
 
+/// Is a window (`gui.lock`) or a terminal (`tui.lock`) of this account open?
+/// Both hold a lock on their file as long as they run.
+fn held(dir: &Path, file: &str) -> bool {
+    std::fs::File::open(dir.join(file)).is_ok_and(|f| matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+}
+
+/// One account's lines.
+struct Row {
+    name: String,
+    status: MenuItem,
+    window: MenuItem,
+    terminal: Option<MenuItem>,
+}
+
 /// The menu for these accounts: with one, what it always was; with several,
 /// a line each, so that one icon serves them all.
 struct Built {
     menu: Menu,
-    status: Vec<(String, MenuItem)>,
+    rows: Vec<Row>,
     actions: HashMap<MenuId, Action>,
 }
 
 fn build(names: &[String]) -> Built {
-    let several = names.len() > 1;
     let menu = Menu::new();
     let mut actions = HashMap::new();
-    let mut status = Vec::new();
-    for name in names {
-        let item = MenuItem::new(t!("starting"), false, None);
-        menu.append(&item).expect("a menu");
-        status.push((name.clone(), item));
+    let mut rows: Vec<Row> = names
+        .iter()
+        .map(|name| Row { name: name.clone(), status: MenuItem::new(t!("starting"), false, None), window: MenuItem::new("", true, None), terminal: None })
+        .collect();
+    for row in &rows {
+        menu.append(&row.status).expect("a menu");
     }
     menu.append(&PredefinedMenuItem::separator()).expect("a menu");
-    for name in names {
-        let text = if several { t!("tray-open-account", name = label(name)) } else { t!("tray-open-window") };
-        let item = MenuItem::new(text, true, None);
-        menu.append(&item).expect("a menu");
-        actions.insert(item.id().clone(), Action::Open(name.clone()));
+    for row in &rows {
+        menu.append(&row.window).expect("a menu");
+        actions.insert(row.window.id().clone(), Action::Window(row.name.clone()));
     }
-    let close = MenuItem::new(t!("tray-close-window"), true, None);
-    menu.append_items(&[&close, &PredefinedMenuItem::separator()]).expect("a menu");
-    actions.insert(close.id().clone(), Action::CloseWindows);
     // A Flatpak cannot start a terminal on the host: there, `flatpak run --command=nightpost …`.
     if std::env::var_os("FLATPAK_ID").is_none() {
-        for name in names {
-            let text = if several { t!("tray-terminal-account", name = label(name)) } else { t!("tray-open-terminal") };
-            let item = MenuItem::new(text, true, None);
+        menu.append(&PredefinedMenuItem::separator()).expect("a menu");
+        for row in &mut rows {
+            let item = MenuItem::new("", true, None);
             menu.append(&item).expect("a menu");
-            actions.insert(item.id().clone(), Action::Terminal(name.clone()));
+            actions.insert(item.id().clone(), Action::Terminal(row.name.clone()));
+            row.terminal = Some(item);
         }
-        let close = MenuItem::new(t!("tray-close-terminal"), true, None);
-        menu.append_items(&[&close, &PredefinedMenuItem::separator()]).expect("a menu");
-        actions.insert(close.id().clone(), Action::CloseTerminals);
     }
+    menu.append(&PredefinedMenuItem::separator()).expect("a menu");
     let stop = MenuItem::new(t!("tray-stop"), true, None);
     menu.append(&stop).expect("a menu");
     actions.insert(stop.id().clone(), Action::Stop);
-    Built { menu, status, actions }
+    Built { menu, rows, actions }
+}
+
+/// The texts of the lines, from what is open.
+fn refresh(built: &Built, live: &[Live]) {
+    let several = live.len() > 1;
+    for (account, row) in live.iter().zip(&built.rows) {
+        row.status.set_text(if several { format!("{}: {}", label(&account.name), account.line) } else { account.line.clone() });
+        let name = label(&account.name);
+        row.window.set_text(match (account.window, several) {
+            (false, false) => t!("tray-open-window"),
+            (true, false) => t!("tray-close-window"),
+            (false, true) => t!("tray-open-account", name = name.clone()),
+            (true, true) => t!("tray-close-account", name = name.clone()),
+        });
+        if let Some(item) = &row.terminal {
+            item.set_text(match (account.terminal, several) {
+                (false, false) => t!("tray-open-terminal"),
+                (true, false) => t!("tray-close-terminal"),
+                (false, true) => t!("tray-terminal-account", name = name),
+                (true, true) => t!("tray-close-terminal-account", name = name),
+            });
+        }
+    }
 }
 
 pub fn run() -> ! {
@@ -121,7 +159,7 @@ pub fn run() -> ! {
                         }
                     });
                     if let Ok(line) = line {
-                        live.push((account.name, line));
+                        live.push(Live { window: held(&dir, "gui.lock"), terminal: held(&dir, "tui.lock"), name: account.name, line });
                     }
                 }
                 misses = if live.is_empty() { misses + 1 } else { 0 };
@@ -168,34 +206,36 @@ pub fn run() -> ! {
                     }
                 } else {
                     misses = 0;
-                    let names: Vec<String> = live.iter().map(|(n, _)| n.clone()).collect();
-                    if built.status.iter().map(|(n, _)| n).ne(names.iter()) {
-                        built = build(&names);
+                    if built.rows.iter().map(|r| &r.name).ne(live.iter().map(|l| &l.name)) {
+                        built = build(&live.iter().map(|l| l.name.clone()).collect::<Vec<_>>());
                         if let Some(tray) = &tray {
                             tray.set_menu(Some(Box::new(built.menu.clone())));
                         }
                     }
-                    let several = live.len() > 1;
-                    for ((name, line), (_, item)) in live.iter().zip(&built.status) {
-                        item.set_text(if several { format!("{}: {line}", label(name)) } else { line.clone() });
-                    }
+                    refresh(&built, &live);
                 }
             }
             Loop::UserEvent(Wake::Menu(e)) => match built.actions.get(&e.id) {
-                Some(Action::Open(name)) => {
-                    // A second window for the same account brings the first to the front and goes.
-                    if let Ok(exe) = std::env::current_exe() {
+                Some(Action::Window(name)) => {
+                    let dir = api::root_dir().and_then(|root| accounts::dir_of(&root, name));
+                    if dir.as_ref().is_ok_and(|dir| held(dir, "gui.lock")) {
+                        ask(name.clone(), Request::Close { interface: Interface::Window });
+                    } else if let Ok(exe) = std::env::current_exe() {
+                        // A second window for the same account brings the first to the front and goes.
                         reap(Command::new(exe).args(["--account", name]).stdin(Stdio::null()).spawn());
                     }
                 }
                 Some(Action::Terminal(name)) => {
-                    let program = std::env::current_exe().map(|e| e.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX)));
-                    if !program.is_ok_and(|p| open_terminal(&p, &["--account", name])) {
-                        crate::notify("Nightpost", &t!("tray-no-terminal"), nightpost_core::prefs::Prefs::load(crate::dir()));
+                    let dir = api::root_dir().and_then(|root| accounts::dir_of(&root, name));
+                    if dir.as_ref().is_ok_and(|dir| held(dir, "tui.lock")) {
+                        ask(name.clone(), Request::Close { interface: Interface::Terminal });
+                    } else {
+                        let program = std::env::current_exe().map(|e| e.with_file_name(format!("nightpost{}", std::env::consts::EXE_SUFFIX)));
+                        if !program.is_ok_and(|p| open_terminal(&p, &["--account", name])) {
+                            crate::notify("Nightpost", &t!("tray-no-terminal"), nightpost_core::prefs::Prefs::load(crate::dir()));
+                        }
                     }
                 }
-                Some(Action::CloseWindows) => ask_all(Request::Close { interface: Interface::Window }),
-                Some(Action::CloseTerminals) => ask_all(Request::Close { interface: Interface::Terminal }),
                 // The icon goes once the daemons have.
                 Some(Action::Stop) => ask_all(Request::Shutdown),
                 None => {}
@@ -218,6 +258,15 @@ fn reap(child: std::io::Result<std::process::Child>) -> bool {
     let Ok(mut child) = child else { return false };
     std::thread::spawn(move || child.wait());
     true
+}
+
+/// Sends `request` to one account's daemon without waiting for the answer.
+fn ask(account: String, request: Request) {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+        let dir = accounts::dir_of(&api::root_dir().ok()?, &account).ok()?;
+        runtime.block_on(async { Client::connect(&dir).await?.call(&request).await }).ok()
+    });
 }
 
 /// Sends `request` to every account's daemon without waiting for the answers.
@@ -290,7 +339,24 @@ fn open_terminal(program: &Path, args: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::words;
+    use super::{held, words};
+
+    #[test]
+    fn an_open_window_or_terminal_shows_by_its_lock() {
+        let dir = std::env::temp_dir().join(format!("np-held-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!held(&dir, "gui.lock"), "no file: nothing open");
+        let file = std::fs::File::create(dir.join("gui.lock")).unwrap();
+        assert!(!held(&dir, "gui.lock"), "file, no lock: nothing open");
+        file.try_lock().unwrap();
+        assert!(held(&dir, "gui.lock"), "a window holds it");
+        drop(file);
+        assert!(!held(&dir, "gui.lock"), "closed: released");
+        let terminal = std::fs::File::create(dir.join("tui.lock")).unwrap();
+        terminal.try_lock_shared().unwrap();
+        assert!(held(&dir, "tui.lock"), "a terminal holds it shared");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_command_line_splits_as_a_shell_would() {

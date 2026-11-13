@@ -208,6 +208,9 @@ struct App {
 /// Runs the terminal interface; `Some(name)` back means the user asked
 /// for that account (`/account`): the caller opens it.
 pub async fn run(dir: &Path) -> Result<Option<String>> {
+    // Shared: any number of terminals. The tray icon tries the exclusive lock
+    // to know whether one is open (its menu then says Close).
+    let _open = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("tui.lock")).ok().filter(|f| f.try_lock_shared().is_ok());
     let mut requests = Client::connect(dir)
         .await
         .with_context(|| t!("tui-no-daemon"))?;
