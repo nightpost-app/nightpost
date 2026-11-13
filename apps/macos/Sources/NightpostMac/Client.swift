@@ -1,6 +1,7 @@
 // Talking to the daemon: its Unix socket in the data directory, the token
 // from api.token as the first line, then one JSON line per request.
 
+import AppKit
 import CryptoKit
 import Darwin
 import Foundation
@@ -31,15 +32,56 @@ enum Daemon {
         return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Nightpost")
     }()
 
-    /// `NIGHTPOST_ACCOUNT`: which account this app instance is for (one
-    /// each, as on other systems); none is the main one. Only a name the
-    /// daemon would accept, since it becomes a folder.
+    /// `NIGHTPOST_ACCOUNT` if set: which account this app instance is for.
+    static let asked: String? = ProcessInfo.processInfo.environment["NIGHTPOST_ACCOUNT"].flatMap { $0.isEmpty ? nil : $0 }
+
+    /// Open the last account again at launch, without asking (a file in the root, as for the other interfaces).
+    static var reopensLast: Bool {
+        get { FileManager.default.fileExists(atPath: root.appending(path: "reopen-last-account").path) }
+        set {
+            let file = root.appending(path: "reopen-last-account")
+            if newValue {
+                try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                try? Data().write(to: file)
+            } else { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
+    /// The account opened last, if it still exists.
+    static var last: String? {
+        let name = (try? String(contentsOf: root.appending(path: "last-account"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.flatMap { accounts().contains($0) ? $0 : nil }
+    }
+
+    /// Several accounts, none asked for, and the last not to be reopened:
+    /// the window asks which first.
+    static let needsChoice: Bool = asked == nil && accounts().count > 1 && !(reopensLast && last != nil)
+
+    /// Which account this app instance is for (one each, as on other
+    /// systems); none is the main one. Only a name the daemon would accept,
+    /// since it becomes a folder.
     static let account: String? = {
-        guard let name = ProcessInfo.processInfo.environment["NIGHTPOST_ACCOUNT"], !name.isEmpty, name != "default",
-              name.count <= 32, name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
+        let name = asked ?? (reopensLast ? last : nil)
+        guard let name, name != "default", name.count <= 32, name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
         else { return nil }
         return name
     }()
+
+    /// Starts (or brings forward) the app instance of `account`.
+    static func open(_ account: String) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        var environment = ["NIGHTPOST_ACCOUNT": account]
+        if let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"] { environment["NIGHTPOST_DIR"] = dir }
+        configuration.environment = environment
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+    }
+
+    /// Remembers the account this instance opened.
+    static func rememberThis() {
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? (account ?? "default").write(to: root.appending(path: "last-account"), atomically: true, encoding: .utf8)
+    }
 
     /// The data directory of that account: the root for the main one.
     static let dir: URL = account.map { root.appending(path: "accounts").appending(path: $0) } ?? root

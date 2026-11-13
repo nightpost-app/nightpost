@@ -115,7 +115,7 @@ private struct ToggleRow: View {
         Toggle(isOn: $on) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: title).font(.ui(15, .semibold)).foregroundStyle(Palette.strong)
-                Help(help)
+                if !help.isEmpty { Help(help) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -410,17 +410,11 @@ private struct NotificationsPane: View {
 private struct AccountsPane: View {
     @Environment(AppModel.self) private var model
     @State private var accounts = Daemon.accounts()
+    @State private var reopen = Daemon.reopensLast
     @State private var name = ""
     @State private var error = ""
 
-    private func open(_ account: String) {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        var environment = ["NIGHTPOST_ACCOUNT": account]
-        if let dir = ProcessInfo.processInfo.environment["NIGHTPOST_DIR"] { environment["NIGHTPOST_DIR"] = dir }
-        configuration.environment = environment
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
-    }
+    private func open(_ account: String) { Daemon.open(account) }
 
     private func add() {
         let label = name.trimmingCharacters(in: .whitespaces)
@@ -463,6 +457,8 @@ private struct AccountsPane: View {
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line))
             }
         }
+        ToggleRow(title: t("choose-remember"), help: "", on: $reopen)
+            .onChange(of: reopen) { Daemon.reopensLast = reopen }
         Block(title: t("account-add")) {
             Help(t("account-add-help"))
             TextField("", text: $name, prompt: Text(verbatim: t("account-name")).foregroundStyle(Palette.muted))
@@ -810,5 +806,35 @@ private struct AboutPane: View {
             Text(verbatim: key).font(.ui(14)).foregroundStyle(Palette.muted).frame(width: 150, alignment: .leading)
             Text(verbatim: value).font(.ui(14)).foregroundStyle(Palette.text).textSelection(.enabled)
         }
+    }
+}
+
+
+/// Which account to open, when there are several and none was asked for:
+/// the pick starts that account's instance of the app, and this one goes.
+struct ChooserView: View {
+    @State private var reopen = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Wordmark(size: 32)
+            Text(verbatim: t("choose-account")).font(.ui(20, .semibold)).foregroundStyle(Palette.strong)
+            ForEach(Daemon.accounts(), id: \.self) { account in
+                Button {
+                    Daemon.reopensLast = reopen
+                    Daemon.open(account)
+                    NSApp.terminate(nil)
+                } label: {
+                    Text(verbatim: account == "default" ? t("account-default") : account).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButton())
+            }
+            ToggleRow(title: t("choose-remember"), help: "", on: $reopen)
+            Spacer(minLength: 0)
+        }
+        .padding(28)
+        .frame(maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
+        .background(Palette.ground)
     }
 }

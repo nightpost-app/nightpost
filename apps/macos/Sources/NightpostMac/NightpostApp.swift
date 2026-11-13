@@ -18,12 +18,17 @@ struct NightpostApp: App {
 
     var body: some Scene {
         Window(Daemon.title, id: "main") {
-            RootView()
-                .environment(model)
-                .frame(minWidth: 720, minHeight: 480)
-                .task { await model.run() }
-                .task { await ShellCommand.offer() }
-                .task { await Snapshot.run() }
+            if Daemon.needsChoice {
+                ChooserView().frame(minWidth: 420, minHeight: 420)
+            } else {
+                RootView()
+                    .environment(model)
+                    .frame(minWidth: 720, minHeight: 480)
+                    .task { Daemon.rememberThis() }
+                    .task { await model.run() }
+                    .task { await ShellCommand.offer() }
+                    .task { await Snapshot.run() }
+            }
         }
         .defaultSize(width: 1040, height: 700)
         // The page reaches the top edge, as on other systems; macOS keeps
