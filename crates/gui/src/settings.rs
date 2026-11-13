@@ -875,7 +875,7 @@ pub fn Chooser() -> Element {
     };
     rsx! {
         style { {crate::STYLE.as_str()} }
-        div { class: "root", "data-theme": "system", "data-platform": std::env::consts::OS,
+        div { class: "root", "data-theme": "system", "data-maximized": "true", "data-platform": std::env::consts::OS,
         main { class: "chooser",
             span { class: "wordmark big", "Nightpost" }
             h2 { {t!("choose-account")} }

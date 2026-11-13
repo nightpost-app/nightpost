@@ -139,7 +139,7 @@ fn main() {
 /// The small window that asks which account to open; the pick starts the
 /// window of that account, as `--account` does, and this one goes.
 fn chooser() {
-    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(420.0, 520.0)).with_resizable(false);
+    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(420.0, 400.0)).with_resizable(false);
     let config = Config::new().with_window(window).with_menu(None).with_background_color((15, 21, 34, 255));
     dioxus::LaunchBuilder::desktop().with_cfg(config).launch(settings::Chooser);
 }
