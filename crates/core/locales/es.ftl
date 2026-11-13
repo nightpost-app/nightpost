@@ -189,6 +189,8 @@ tray-open-terminal = Abrir en una terminal
 tray-close-terminal = Cerrar la terminal
 tray-stop = Detener Nightpost
 tray-no-terminal = No se ha encontrado ninguna terminal: ejecuta `nightpost` en la tuya.
+tray-open-account = Abrir { $name }
+tray-terminal-account = Terminal: { $name }
 
 ## La conversación
 
