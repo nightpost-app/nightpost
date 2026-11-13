@@ -817,7 +817,7 @@ struct ChooserView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Wordmark(size: 32)
+            Wordmark(size: 32).frame(maxWidth: .infinity, alignment: .center)
             Text(verbatim: t("choose-account")).font(.ui(20, .semibold)).foregroundStyle(Palette.strong)
             ForEach(Daemon.accounts(), id: \.self) { account in
                 Button {

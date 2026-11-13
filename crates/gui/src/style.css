@@ -501,3 +501,4 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 
 .chooser { display: flex; flex-direction: column; justify-content: center; gap: 14px; max-width: 360px; min-height: 100vh; box-sizing: border-box; margin: 0 auto; padding: 24px 20px; }
 .chooser h2 { margin: 8px 0 0; }
+.chooser .wordmark { align-self: center; }
