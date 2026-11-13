@@ -857,6 +857,7 @@ fn save_terminal(line: &str) -> bool {
 /// Which account to open, when there are several and none was asked for.
 #[component]
 pub fn Chooser() -> Element {
+    #[cfg(target_os = "linux")]
     use_hook(crate::chrome::cut_corners);
     let root = nightpost_core::api::root_dir().unwrap_or_default();
     let list = nightpost_core::accounts::list(&root).unwrap_or_default();
