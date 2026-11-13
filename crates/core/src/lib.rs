@@ -1,6 +1,7 @@
 //! Nightpost engine. Both interfaces (terminal and graphical) only call into
 //! this crate; nothing about identity, encryption or the network lives in them.
 
+pub mod accounts;
 pub mod api;
 pub mod daemon;
 pub mod dbkey;

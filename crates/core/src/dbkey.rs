@@ -125,6 +125,15 @@ pub fn store_keychain_secret(label: &str, secret: &Secret) -> keyring::Result<()
     keyring::Entry::new("nightpost", label)?.set_secret(&secret[..])
 }
 
+/// Removes this keychain entry (an account deleted). Already gone is fine.
+pub fn delete_keychain_secret(label: &str) -> keyring::Result<()> {
+    keychain()?;
+    match keyring::Entry::new("nightpost", label)?.delete_credential() {
+        Err(keyring::Error::NoEntry) => Ok(()),
+        other => other,
+    }
+}
+
 /// The secret as 24 words (BIP-39, English): to write down once, and to
 /// type when the keychain does not have it (another desktop, a new
 /// computer). The last word carries a checksum.

@@ -356,21 +356,36 @@ pub struct Person {
 /// A photo's data URI, at most this long: 256 × 256 PNG with room to spare.
 pub const MAX_PHOTO: usize = 512 * 1024;
 
-/// The data directory: `NIGHTPOST_DIR` if set (tests run several), else
-/// the platform's. Created owner-only, and returned absolute so the socket
-/// and the keychain entry do not depend on where a command runs from.
-pub fn data_dir() -> Result<PathBuf> {
+/// The folder all accounts live in: `NIGHTPOST_DIR` if set (tests run
+/// several), else the platform's. Created owner-only, absolute.
+pub fn root_dir() -> Result<PathBuf> {
     let dir = match std::env::var_os("NIGHTPOST_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => directories::ProjectDirs::from("", "", "Nightpost").context("no home directory")?.data_dir().to_path_buf(),
     };
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    private_dir(&dir)
+}
+
+pub(crate) fn private_dir(dir: &std::path::Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    Ok(std::fs::canonicalize(&dir)?)
+    Ok(std::fs::canonicalize(dir)?)
+}
+
+/// The data directory of the account this process works on:
+/// `NIGHTPOST_ACCOUNT` names one (see `accounts`), else the default, which
+/// is the root itself. It carries the database, the socket and the
+/// keychain entry, so each account is a separate daemon.
+pub fn data_dir() -> Result<PathBuf> {
+    let root = root_dir()?;
+    match std::env::var("NIGHTPOST_ACCOUNT") {
+        Ok(name) if !name.is_empty() => crate::accounts::dir_of(&root, &name),
+        _ => Ok(root),
+    }
 }
 
 /// The daemon's socket, opened before Tor is up.
