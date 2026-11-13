@@ -194,6 +194,7 @@ tray-stop = Stop Nightpost
 tray-no-terminal = No terminal found: run `nightpost` in yours.
 tray-open-account = Open { $name }
 tray-terminal-account = Terminal: { $name }
+tray-stopped = Not running
 tray-close-account = Close { $name }
 tray-close-terminal-account = Close terminal: { $name }
 

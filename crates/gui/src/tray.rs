@@ -27,7 +27,9 @@ enum Action {
 /// One running account, as the poll sees it.
 struct Live {
     name: String,
-    /// How Tor stands.
+    /// Its daemon answers.
+    running: bool,
+    /// How Tor stands, or that it does not run.
     line: String,
     window: bool,
     terminal: bool,
@@ -35,7 +37,7 @@ struct Live {
 
 enum Wake {
     Menu(MenuEvent),
-    /// The accounts whose daemon answers; empty: every daemon is gone.
+    /// Every account; none running: the daemons are gone.
     Status(Vec<Live>),
 }
 
@@ -158,13 +160,17 @@ pub fn run() -> ! {
                             _ => Ok(t!("starting")),
                         }
                     });
-                    if let Ok(line) = line {
-                        live.push(Live { window: held(&dir, "gui.lock"), terminal: held(&dir, "tui.lock"), name: account.name, line });
-                    }
+                    live.push(Live {
+                        window: held(&dir, "gui.lock"),
+                        terminal: held(&dir, "tui.lock"),
+                        name: account.name,
+                        running: line.is_ok(),
+                        line: line.unwrap_or_else(|_| t!("tray-stopped")),
+                    });
                 }
-                misses = if live.is_empty() { misses + 1 } else { 0 };
+                misses = if live.iter().any(|l| l.running) { 0 } else { misses + 1 };
                 // Three misses in a row: every daemon is gone.
-                if proxy.send_event(Wake::Status(if misses == 3 || !live.is_empty() { live } else { Vec::new() })).is_err() || misses == 3 {
+                if proxy.send_event(Wake::Status(live)).is_err() || misses == 3 {
                     return;
                 }
                 std::thread::sleep(Duration::from_secs(2));
@@ -198,7 +204,7 @@ pub fn run() -> ! {
                 }
             }
             Loop::UserEvent(Wake::Status(live)) => {
-                if live.is_empty() {
+                if !live.iter().any(|l| l.running) {
                     // The first answers can be a daemon still binding its socket.
                     misses += 1;
                     if misses >= 3 {
