@@ -192,6 +192,7 @@ tray-no-terminal = No se ha encontrado ninguna terminal: ejecuta `nightpost` en 
 tray-open-account = Abrir { $name }
 tray-terminal-account = Terminal: { $name }
 tray-stopped = Detenida
+tray-account-status = { $name }: { $line }
 tray-close-account = Cerrar { $name }
 tray-close-terminal-account = Cerrar la terminal: { $name }
 

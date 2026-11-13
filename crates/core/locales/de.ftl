@@ -192,6 +192,7 @@ tray-no-terminal = Kein Terminal gefunden: starte `nightpost` in deinem.
 tray-open-account = { $name } öffnen
 tray-terminal-account = Terminal: { $name }
 tray-stopped = Nicht gestartet
+tray-account-status = { $name }: { $line }
 tray-close-account = { $name } schließen
 tray-close-terminal-account = Terminal schließen: { $name }
 

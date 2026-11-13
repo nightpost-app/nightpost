@@ -104,7 +104,7 @@ fn build(names: &[String]) -> Built {
 fn refresh(built: &Built, live: &[Live]) {
     let several = live.len() > 1;
     for (account, row) in live.iter().zip(&built.rows) {
-        row.status.set_text(if several { format!("{}: {}", label(&account.name), account.line) } else { account.line.clone() });
+        row.status.set_text(if several { t!("tray-account-status", name = label(&account.name), line = account.line.clone()) } else { account.line.clone() });
         let name = label(&account.name);
         row.window.set_text(match (account.window, several) {
             (false, false) => t!("tray-open-window"),
