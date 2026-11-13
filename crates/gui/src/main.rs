@@ -140,7 +140,7 @@ fn main() {
 /// window of that account, as `--account` does, and this one goes.
 fn chooser() {
     // The same frame as the main window (chrome.rs), without its resizing.
-    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(420.0, 400.0)).with_resizable(false).with_decorations(cfg!(target_os = "macos"));
+    let window = WindowBuilder::new().with_title("Nightpost").with_inner_size(LogicalSize::new(420.0, 360.0)).with_resizable(false).with_decorations(cfg!(target_os = "macos"));
     #[cfg(target_os = "linux")]
     let window = {
         use dioxus::desktop::tao::platform::unix::WindowBuilderExtUnix as _;
