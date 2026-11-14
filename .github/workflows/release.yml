@@ -96,6 +96,17 @@ jobs:
         run: |
           mkdir fp && cp lyrebird packaging/linux/flatpak/*.yml fp/
           git clone --depth 1 https://github.com/flathub/shared-modules.git fp/shared-modules
+          # The runtime's cmake now installs these to lib64, where pkg-config does not look.
+          python3 - <<'PY'
+          import json
+          f = "fp/shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json"
+          m = json.load(open(f))
+          for sub in m["modules"]:
+              if isinstance(sub, dict) and sub["name"] in ("ayatana-ido", "libayatana-indicator"):
+                  sub.setdefault("config-opts", []).append("-DCMAKE_INSTALL_LIBDIR=lib")
+          m.setdefault("config-opts", []).append("-DCMAKE_INSTALL_LIBDIR=lib")
+          json.dump(m, open(f, "w"), indent=2)
+          PY
           rsync -a --exclude .git --exclude target ./ fp/src/
           (cd fp/src && mkdir .cargo && cargo vendor --locked vendor > .cargo/config.toml)
       - name: Build
