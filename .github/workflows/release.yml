@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A dry run of every build, from the Actions tab: nothing is published.
+  workflow_dispatch:
 permissions:
   contents: read
 env:
@@ -158,6 +160,7 @@ jobs:
         with: { name: macos, path: out/* }
 
   publish:
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [linux, flatpak, windows, macos]
     runs-on: ubuntu-24.04
     permissions:

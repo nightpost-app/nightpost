@@ -534,6 +534,11 @@ impl App {
                 let lines = answers(&add_answers(), *selected);
                 popup(frame, &t!("add-title"), lines, Some(answer_keys()));
             }
+            Some(Overlay::Welcome { selected }) => {
+                let mut lines = vec![Line::from(t!("welcome-help")), Line::default()];
+                lines.extend(answers(&[(t!("welcome-new"), Style::new()), (t!("pair-have-account"), Style::new())], *selected));
+                popup(frame, &t!("welcome-title"), lines, Some(answer_keys()));
+            }
             Some(Overlay::Devices { devices, selected }) => {
                 let mut lines: Vec<Line> = devices
                     .iter()

@@ -82,6 +82,8 @@ enum Overlay {
     Verify { name: String, number: String, selected: usize },
     /// Add someone: four ways in, each one leaves its command in the box.
     Add { selected: usize },
+    /// A fresh start: begin here, or join the account of another device.
+    Welcome { selected: usize },
     /// Remove them, maybe with the conversation.
     Remove { name: String, selected: usize },
     /// What we know of them, and what can be done about them.
@@ -249,6 +251,9 @@ pub async fn run(dir: &Path) -> Result<Option<String>> {
     }
     // The note is first; on starting, the first person, if there is one.
     app.select(usize::from(app.conversations.len() > 1), &mut requests).await;
+    if app.conversations.iter().all(|c| c.note && c.messages.is_empty()) {
+        app.overlay = Some(Overlay::Welcome { selected: 0 });
+    }
 
     let mut terminal = ratatui::init();
     // The tab says Nightpost, not the program's path; the terminal's own
@@ -558,6 +563,15 @@ impl App {
                 self.focus = Focus::Input;
                 self.status = hint;
             }
+            Some(Overlay::Welcome { selected }) => {
+                let Some(answer) = panel::pick(key.code, selected, 2) else { return };
+                self.overlay = None;
+                if answer == 1
+                    && let Err(e) = self.show_pairing(requests).await
+                {
+                    self.status = format!("{e:#}");
+                }
+            }
             Some(Overlay::Devices { devices, selected }) => {
                 let others: Vec<(u8, String)> = devices.iter().filter(|d| !d.this).map(|d| (d.id, d.name.clone())).collect();
                 let Some(answer) = panel::pick(key.code, selected, others.len() + 2) else { return };
@@ -768,6 +782,18 @@ impl App {
         }
     }
 
+    /// The link a new device shows, to be used from one that has the account.
+    async fn show_pairing(&mut self, requests: &mut Client) -> Result<()> {
+        let link = match requests.call(&Request::PairingLink).await? {
+            Reply::Invite { link } => link,
+            Reply::Error { message } => bail!("{message}"),
+            other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
+        };
+        let qr = qr(&link.to_ascii_uppercase());
+        self.overlay = Some(Overlay::Invite { title: t!("pair-title"), help: t!("tui-pair-help"), link, qr });
+        Ok(())
+    }
+
     async fn command(&mut self, command: &str, requests: &mut Client, updates: &mpsc::UnboundedSender<Update>) -> Result<()> {
         let words: Vec<&str> = command.split_whitespace().collect();
         match words.as_slice() {
@@ -811,15 +837,7 @@ impl App {
                 let qr = qr(&link.to_ascii_uppercase());
                 self.overlay = Some(Overlay::Invite { title: t!("invite-title", name = name), help: t!("tui-invite-help", name = name), link, qr });
             }
-            ["link"] => {
-                let link = match requests.call(&Request::PairingLink).await? {
-                    Reply::Invite { link } => link,
-                    Reply::Error { message } => bail!("{message}"),
-                    other => bail!(t!("err-unexpected", reply = format!("{other:?}"))),
-                };
-                let qr = qr(&link.to_ascii_uppercase());
-                self.overlay = Some(Overlay::Invite { title: t!("pair-title"), help: t!("tui-pair-help"), link, qr });
-            }
+            ["link"] => self.show_pairing(requests).await?,
             ["devices"] => {
                 let devices = match requests.call(&Request::Devices).await? {
                     Reply::Devices { devices } => devices,

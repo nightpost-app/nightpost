@@ -584,3 +584,6 @@ help-account = cambiar a otra cuenta
 choose-account = ¿Qué cuenta?
 choose-remember = La próxima vez, abrir la última sin preguntar
 choose-hint = ↑ ↓ para elegir, Intro para abrir
+welcome-title = Te damos la bienvenida a Nightpost
+welcome-help = Empieza con una cuenta nueva o únete a la que ya usas en otro dispositivo.
+welcome-new = Empezar una cuenta nueva
